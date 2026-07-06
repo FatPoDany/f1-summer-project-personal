@@ -1,5 +1,5 @@
 # schema_version: 1
-# synthetic flying lap from scripts/make_sample_lap.py — not real sim data
+# synthetic lap from scripts/make_sample_session.py — not real sim data
 t,dist,speed,throttle,brake,steer,gear,sector
 0.0,0.0,78.172,1.0,0.0,0.0,7,1
 0.02,1.56,78.241,1.0,0.0,0.0,7,1

@@ -1,34 +1,89 @@
-"""Window smoke tests — these run offscreen on Mac/Linux CI (QT_QPA_PLATFORM=offscreen)."""
+"""Shell smoke tests — run offscreen on Mac/Linux CI (QT_QPA_PLATFORM=offscreen)."""
 
 import pytest
 
 from apex.main_window import MainWindow
-from f1coach_core import load_sample_lap
+from f1coach_core import ensure_sample_session, load_sample_session
+
+CANONICAL = (
+    "t,speed,throttle,brake,steer,gear\n"
+    "0.0,10.0,1,0,0,3\n1.0,20.0,1,0,0,3\n2.0,20.0,0.5,0,0,4\n"
+)
 
 
-def test_window_shows_sample_lap(qtbot):
-    lap = load_sample_lap()
-    window = MainWindow(lap)
+@pytest.fixture(autouse=True)
+def workspace(tmp_path, monkeypatch):
+    monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "ws"))
+
+
+def test_window_starts_in_the_garage(qtbot):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+    assert window._stacked.currentWidget() is window._garage
+    assert not window._analysis_action.isEnabled()
+
+
+def test_garage_lists_sample_session_and_opens_laps(qtbot):
+    ensure_sample_session()
+    window = MainWindow()
     qtbot.addWidget(window)
     window.show()
 
-    assert "sample_lap.csv" in window.windowTitle()
-    assert window._trace.lap is lap
-    x, y = window._trace._curve.getData()  # display data (may be peak-downsampled)
-    assert len(x) > 100
-    assert max(y) == pytest.approx(lap.top_speed_kmh, abs=0.5)
-    assert "km/h" in window.statusBar().currentMessage()
+    garage = window._garage
+    assert garage.session is not None and len(garage.session.laps) == 3
+    assert garage._table.rowCount() == 3
+    assert garage._table.item(1, 3).text() == "BEST"  # lap_02
+
+    with qtbot.waitSignal(garage.lapOpened):
+        garage._open_row(1)
+    assert window._stacked.currentWidget() is window._analysis
+    assert window._analysis.lap is garage.session.laps[1]
 
 
-def test_load_path_replaces_trace(qtbot, tmp_path):
-    csv = tmp_path / "two_points.csv"
-    csv.write_text("t,speed,throttle,brake,steer,gear\n0.0,10.0,1,0,0,3\n1.0,20.0,1,0,0,3\n")
-
-    window = MainWindow(load_sample_lap())
+def test_analysis_defaults_reference_to_next_best_for_the_best_lap(qtbot):
+    session = load_sample_session()
+    best = session.best_lap
+    window = MainWindow()
     qtbot.addWidget(window)
-    window.load_path(csv)
+    window.show_analysis(best, session)
 
-    assert "two_points.csv" in window.windowTitle()
-    x, _ = window._trace._curve.getData()
-    assert len(x) == 2
+    view = window._analysis
+    assert view._ref_combo.count() == 3  # "No reference" + two other laps
+    reference = view._ref_combo.currentData()
+    assert reference is not None and reference.source.stem == "lap_01"  # next-best
+
+    stack = view._stack
+    values = stack.values_at(2000.0)
+    assert values is not None
+    assert values["speed_kmh"] > 0
+    assert {"dist", "speed_kmh", "throttle_pct", "brake_pct", "gear"} <= set(values)
+    x_ref, _ = stack._ref_curves[0].getData()
+    assert x_ref is not None and len(x_ref) > 100  # reference overlay drawn
+
+
+def test_open_path_shows_lap_without_session(qtbot, tmp_path):
+    csv = tmp_path / "two_points.csv"
+    csv.write_text(CANONICAL)
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.open_path(csv)
+
+    assert window._stacked.currentWidget() is window._analysis
+    assert window._analysis._ref_combo.count() == 1  # only "No reference"
     assert "dist derived" in window.statusBar().currentMessage()
+
+
+def test_open_path_imports_torcs_runs_into_garage(qtbot, tmp_path):
+    from test_torcs import make_run
+
+    run = make_run(tmp_path / "quali.csv")
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.open_path(run)
+
+    assert window._stacked.currentWidget() is window._garage
+    session = window._garage.session
+    assert session is not None and session.name == "quali"
+    assert len(session.laps) == 3
+    assert "3 laps" in window.statusBar().currentMessage()

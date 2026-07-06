@@ -1,11 +1,44 @@
-"""f1coach-core — pure-Python telemetry loading, features, analysis, coaching (lanes M2-M5).
+"""f1coach-core — pure-Python telemetry loading, features, analysis, coaching.
 
 No Qt in here, ever: the desktop app, CLI, and notebooks all import this package
 and render what it returns.
 """
 
+from f1coach_core.analysis import sector_spans, sector_times
 from f1coach_core.lap import Lap
 from f1coach_core.loader import TelemetrySchemaError, load_telemetry_csv
-from f1coach_core.sample import load_sample_lap
+from f1coach_core.sample import load_sample_lap, load_sample_session
+from f1coach_core.session import Session, load_session
+from f1coach_core.torcs import is_torcs_export, split_torcs_run
+from f1coach_core.workspace import (
+    SAMPLE_SESSION_NAME,
+    create_session,
+    ensure_sample_session,
+    import_lap,
+    import_telemetry,
+    list_sessions,
+    sessions_root,
+    workspace_root,
+)
 
-__all__ = ["Lap", "TelemetrySchemaError", "load_sample_lap", "load_telemetry_csv"]
+__all__ = [
+    "SAMPLE_SESSION_NAME",
+    "Lap",
+    "Session",
+    "TelemetrySchemaError",
+    "create_session",
+    "ensure_sample_session",
+    "import_lap",
+    "import_telemetry",
+    "is_torcs_export",
+    "list_sessions",
+    "load_sample_lap",
+    "load_sample_session",
+    "load_session",
+    "load_telemetry_csv",
+    "sector_spans",
+    "sector_times",
+    "sessions_root",
+    "split_torcs_run",
+    "workspace_root",
+]

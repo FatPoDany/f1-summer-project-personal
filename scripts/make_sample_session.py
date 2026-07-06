@@ -1,14 +1,17 @@
-"""Generate the bundled sample lap: a synthetic but plausible ~4.3 km flying lap.
+"""Generate the bundled sample session: three synthetic laps of one ~4.3 km circuit.
+
+    lap_01  banker  — tidy but conservative: earlier braking, careful corner speed
+    lap_02  best    — the reference pace
+    lap_03  ragged  — overslowed T1 and T6, less commitment everywhere
 
 Speed profile = the classic two-pass method on a 1 m distance grid (accelerate
 forward under a traction/power/drag envelope, brake backward at a fixed limit),
 run over two consecutive laps so the flying start matches the finish, then
-resampled to 50 Hz time samples. Not physics — just honest-looking enough that
-every chart in the app has real shapes to show without credentials, network,
-or a sim install.
+resampled to 50 Hz. Not physics — just honest-looking enough that the Garage
+has deltas and coaching has a story, without credentials, network, or a sim.
 
-Usage: python scripts/make_sample_lap.py
-Deterministic; rewrites src/f1coach_core/data/sample_lap.csv in place.
+Usage: python scripts/make_sample_session.py
+Deterministic; rewrites src/f1coach_core/data/sample_session/*.csv in place.
 """
 
 from pathlib import Path
@@ -16,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-OUT = Path(__file__).resolve().parents[1] / "src" / "f1coach_core" / "data" / "sample_lap.csv"
+OUT_DIR = Path(__file__).resolve().parents[1] / "src" / "f1coach_core" / "data" / "sample_session"
 
 RATE_HZ = 50
 DS = 1.0  # distance grid step (m)
@@ -43,24 +46,34 @@ SEGMENTS = [
     (320, None, 0),  # run to the line
 ]
 
+# name -> (global corner-speed scale, braking limit m/s^2, per-segment cap overrides)
+LAPS: dict[str, tuple[float, float, dict[int, float]]] = {
+    "lap_01.csv": (0.97, 30.0, {}),  # banker
+    "lap_02.csv": (1.00, 34.0, {}),  # best
+    "lap_03.csv": (0.94, 30.5, {1: 0.84, 8: 0.86}),  # ragged: overslowed T1 + T6
+}
+
 
 def engine_envelope(v: float) -> float:
     """Achievable forward acceleration at speed v: traction, then power, minus drag."""
     return min(A_TRACTION, POWER / max(v, 10.0)) - K_DRAG * v**2
 
 
-def speed_profile() -> tuple[np.ndarray, np.ndarray]:
+def speed_profile(
+    corner_scale: float, a_brake: float, overrides: dict[int, float]
+) -> tuple[np.ndarray, np.ndarray]:
     """Return (v, steer_shape) on the 1 m distance grid for one lap."""
     n = int(sum(seg[0] for seg in SEGMENTS) / DS)
     s = np.arange(n) * DS
     cap = np.full(n, V_TOP)
     steer_shape = np.zeros(n)
     edge = 0.0
-    for length, v_cap, direction in SEGMENTS:
+    for index, (length, v_cap, direction) in enumerate(SEGMENTS):
         if v_cap is not None:
+            scaled = v_cap * corner_scale * overrides.get(index, 1.0)
             sel = (s >= edge) & (s < edge + length)
-            cap[sel] = v_cap
-            steer_shape[sel] = direction * (1.0 - v_cap / V_TOP)  # tighter corner, more lock
+            cap[sel] = scaled
+            steer_shape[sel] = direction * (1.0 - scaled / V_TOP)  # tighter corner, more lock
         edge += length
 
     cap2 = np.tile(cap, 2)  # two laps: lap 2 starts at lap 1's finishing speed
@@ -70,11 +83,11 @@ def speed_profile() -> tuple[np.ndarray, np.ndarray]:
         a = max(engine_envelope(float(v[i - 1])), 0.0)
         v[i] = min(cap2[i], np.sqrt(v[i - 1] ** 2 + 2 * a * DS))
     for i in range(v.size - 2, -1, -1):  # backward pass: brake in time for each cap
-        v[i] = min(v[i], np.sqrt(v[i + 1] ** 2 + 2 * A_BRAKE * DS))
+        v[i] = min(v[i], np.sqrt(v[i + 1] ** 2 + 2 * a_brake * DS))
     return v[n:], steer_shape
 
 
-def resample(v: np.ndarray, steer_shape: np.ndarray) -> pd.DataFrame:
+def resample(v: np.ndarray, steer_shape: np.ndarray, a_brake: float) -> pd.DataFrame:
     """Distance grid -> 50 Hz time samples with driver-input channels."""
     n = v.size
     s = np.arange(n) * DS
@@ -91,7 +104,7 @@ def resample(v: np.ndarray, steer_shape: np.ndarray) -> pd.DataFrame:
     demand = accel + K_DRAG * speed**2  # what engine (or brakes) must supply
     envelope = np.maximum(np.minimum(A_TRACTION, POWER / np.maximum(speed, 10.0)), 1.0)
     throttle = np.clip(demand / envelope, 0.0, 1.0)
-    brake = np.clip(-demand / A_BRAKE, 0.0, 1.0)
+    brake = np.clip(-demand / a_brake, 0.0, 1.0)
 
     shift_points = np.array([25.0, 35.0, 45.0, 55.0, 65.0, 74.0, 83.0])  # m/s
     gear = 1 + np.digitize(speed, shift_points)
@@ -114,18 +127,21 @@ def resample(v: np.ndarray, steer_shape: np.ndarray) -> pd.DataFrame:
 
 
 def main() -> None:
-    v, steer_shape = speed_profile()
-    df = resample(v, steer_shape)
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    with open(OUT, "w", encoding="utf-8", newline="") as fh:
-        fh.write("# schema_version: 1\n")
-        fh.write("# synthetic flying lap from scripts/make_sample_lap.py — not real sim data\n")
-        df.to_csv(fh, index=False)
-    print(
-        f"wrote {OUT}: {len(df)} samples @ {RATE_HZ} Hz · "
-        f"lap {df['t'].iloc[-1]:.3f} s · {df['dist'].iloc[-1] / 1000:.3f} km · "
-        f"top {df['speed'].max() * 3.6:.0f} km/h"
-    )
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    for stale in OUT_DIR.glob("*.csv"):
+        stale.unlink()
+    for name, (corner_scale, a_brake, overrides) in LAPS.items():
+        v, steer_shape = speed_profile(corner_scale, a_brake, overrides)
+        df = resample(v, steer_shape, a_brake)
+        with open(OUT_DIR / name, "w", encoding="utf-8", newline="") as fh:
+            fh.write("# schema_version: 1\n")
+            fh.write("# synthetic lap from scripts/make_sample_session.py — not real sim data\n")
+            df.to_csv(fh, index=False)
+        print(
+            f"wrote {name}: {len(df)} samples @ {RATE_HZ} Hz · "
+            f"lap {df['t'].iloc[-1]:.3f} s · {df['dist'].iloc[-1] / 1000:.3f} km · "
+            f"top {df['speed'].max() * 3.6:.0f} km/h"
+        )
 
 
 if __name__ == "__main__":

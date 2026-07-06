@@ -14,6 +14,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       QT_QPA_PLATFORM: offscreen
+      APEX_WORKSPACE: ${{ runner.temp }}/apex-workspace
     steps:
       - uses: actions/checkout@v4
 
@@ -39,10 +40,10 @@ jobs:
       - name: Tests (offscreen window + loader contract)
         run: pytest -v
 
-      - name: Render window screenshot
-        run: python scripts/screenshot.py apex-${{ matrix.os }}.png
+      - name: Render Garage + Analysis screenshots
+        run: python scripts/screenshot.py shots
 
       - uses: actions/upload-artifact@v4
         with:
-          name: screenshot-${{ matrix.os }}
-          path: apex-*.png
+          name: screenshots-${{ matrix.os }}
+          path: shots/*.png

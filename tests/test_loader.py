@@ -15,7 +15,8 @@ def write(tmp_path, text, name="lap.csv"):
 
 
 def test_sample_lap_loads_and_is_plausible():
-    lap = load_sample_lap()
+    lap = load_sample_lap()  # the sample session's best lap
+    assert lap.source.stem == "lap_02"
     assert lap.schema_version == 1
     assert not lap.dist_derived
     assert list(lap.df.columns) == CANONICAL
