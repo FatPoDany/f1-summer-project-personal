@@ -1,11 +1,19 @@
-"""Lap Analysis screen: reference picker + sector ribbon + synced strips.
+"""Lap Analysis screen: reference picker + sector ribbon + synced strips,
+with the AI Race Engineer panel docked on the right ("◈ show" zooms the
+strips onto a finding's evidence zone)."""
 
-A2 adds the AI Race Engineer panel on the right of the strip stack.
-"""
-
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QComboBox,
+    QHBoxLayout,
+    QLabel,
+    QSplitter,
+    QVBoxLayout,
+    QWidget,
+)
 
 from apex import theme
+from apex.coach_panel import CoachPanel
 from apex.widgets.strip_stack import StripStack
 from f1coach_core import Lap, Session, sector_times
 
@@ -35,10 +43,22 @@ class AnalysisView(QWidget):
         self._stack = StripStack(self)
         self._stack.cursorMoved.connect(self._update_readout)
 
+        self._panel = CoachPanel(self)
+        self._panel.setMinimumWidth(300)
+        self._panel.evidenceRequested.connect(self._show_evidence)
+        self._panel.viewResetRequested.connect(self._stack.reset_view)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.addWidget(self._stack)
+        splitter.addWidget(self._panel)
+        splitter.setStretchFactor(0, 4)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([920, 340])
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 4)
         layout.addLayout(header)
-        layout.addWidget(self._stack, stretch=1)
+        layout.addWidget(splitter, stretch=1)
 
     @property
     def lap(self) -> Lap | None:
@@ -83,6 +103,11 @@ class AnalysisView(QWidget):
         reference = self._ref_combo.currentData()
         self._stack.set_lap(self._lap, self._sector_colors(reference))
         self._stack.set_reference(reference)
+        self._panel.set_context(self._lap, reference)
+
+    def _show_evidence(self, d0: float, d1: float) -> None:
+        self._stack.highlight_span(d0, d1)
+        self._stack.zoom_to_span(d0, d1)
 
     def _sector_colors(self, reference: Lap | None) -> dict[int, str]:
         """Timing-screen colours: purple = session-best sector, green = faster

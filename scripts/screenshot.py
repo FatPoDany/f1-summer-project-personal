@@ -11,7 +11,12 @@ from pathlib import Path
 
 from apex.app import create_app
 from apex.main_window import MainWindow
-from f1coach_core import ensure_sample_session, load_sample_session
+from f1coach_core import (
+    build_evidence_summary,
+    ensure_sample_session,
+    get_provider,
+    load_sample_session,
+)
 
 
 def main() -> int:
@@ -34,8 +39,14 @@ def main() -> int:
 
     session = load_sample_session()
     best = session.best_lap
+    ragged = session.laps[2]
     assert best is not None
-    window.show_analysis(best, session)
+    window.show_analysis(ragged, session)  # reference defaults to the session best
+    report = get_provider("mock").generate(build_evidence_summary(ragged, best))
+    view = window._analysis
+    view._panel.show_report(report)
+    if report.findings:  # shade the worst finding's evidence zone, keep full-lap zoom
+        view._stack.highlight_span(*report.findings[0].evidence[0].span)
     settle()
     ok &= window.grab().save(str(out_dir / "apex-analysis.png"))
 

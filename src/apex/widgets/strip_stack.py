@@ -35,6 +35,7 @@ class StripStack(pg.GraphicsLayoutWidget):
         self.reference: Lap | None = None
         self._dist = np.empty(0)
         self._series: dict[str, np.ndarray] = {}
+        self._highlights: list[tuple[pg.PlotItem, pg.LinearRegionItem]] = []
 
         self._ribbon = self.addPlot(row=0, col=0)
         self._ribbon.setYRange(0, 1, padding=0)
@@ -94,6 +95,7 @@ class StripStack(pg.GraphicsLayoutWidget):
 
     def set_lap(self, lap: Lap, sector_colors: dict[int, str] | None = None) -> None:
         self.lap = lap
+        self.clear_highlight()
         self._dist = lap.df["dist"].to_numpy(dtype=float)
         self._series = {col: _channel_series(lap, col) for col, _, _ in CHANNELS}
         for curve, (col, _, _) in zip(self._curves, CHANNELS, strict=True):
@@ -127,6 +129,35 @@ class StripStack(pg.GraphicsLayoutWidget):
         if "gear" in self.lap.df.columns:
             values["gear"] = int(self.lap.df["gear"].iloc[idx])
         return values
+
+    # -- evidence-zoom ------------------------------------------------------
+
+    def highlight_span(self, d0: float, d1: float) -> None:
+        """Shade an evidence zone across every strip (the "◈ show" target)."""
+        self.clear_highlight()
+        for strip in self._strips:
+            region = pg.LinearRegionItem(
+                values=(d0, d1),
+                movable=False,
+                brush=pg.mkBrush(theme.BLUE + "26"),
+                pen=pg.mkPen(theme.BLUE + "66"),
+            )
+            region.setZValue(-10)
+            strip.addItem(region)
+            self._highlights.append((strip, region))
+
+    def clear_highlight(self) -> None:
+        for strip, region in self._highlights:
+            strip.removeItem(region)
+        self._highlights.clear()
+
+    def zoom_to_span(self, d0: float, d1: float, margin: float = 60.0) -> None:
+        self._strips[0].setXRange(d0 - margin, d1 + margin, padding=0)
+
+    def reset_view(self) -> None:
+        self.clear_highlight()
+        for strip in self._strips:
+            strip.enableAutoRange()
 
     # -- internals ---------------------------------------------------------
 
