@@ -50,7 +50,14 @@ def main() -> int:
     settle()
     ok &= window.grab().save(str(out_dir / "apex-analysis.png"))
 
-    print(f"{'wrote' if ok else 'FAILED to write'} apex-garage.png, apex-analysis.png in {out_dir}")
+    window._stacked.setCurrentWidget(window._compare)
+    settle()
+    ok &= window.grab().save(str(out_dir / "apex-compare.png"))
+
+    print(
+        f"{'wrote' if ok else 'FAILED to write'} apex-garage.png, apex-analysis.png, "
+        f"apex-compare.png in {out_dir}"
+    )
     return 0 if ok else 1
 
 

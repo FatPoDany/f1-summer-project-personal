@@ -2,6 +2,8 @@
 with the AI Race Engineer panel docked on the right ("◈ show" zooms the
 strips onto a finding's evidence zone)."""
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
@@ -15,7 +17,7 @@ from PySide6.QtWidgets import (
 from apex import theme
 from apex.coach_panel import CoachPanel
 from apex.widgets.strip_stack import StripStack
-from f1coach_core import Lap, Session, sector_times
+from f1coach_core import Lap, Session, render_html_report, sector_times
 
 
 class AnalysisView(QWidget):
@@ -108,6 +110,21 @@ class AnalysisView(QWidget):
     def _show_evidence(self, d0: float, d1: float) -> None:
         self._stack.highlight_span(d0, d1)
         self._stack.zoom_to_span(d0, d1)
+
+    # -- report export ----------------------------------------------------
+
+    def export_report(self, path: str | Path) -> Path:
+        """Write the current analysis (lap, reference, findings) as one HTML file."""
+        assert self._lap is not None, "no lap on screen to export"
+        document = render_html_report(
+            self._lap,
+            self._ref_combo.currentData(),
+            self._panel.report,
+            session_name=self._session.name if self._session else None,
+        )
+        path = Path(path)
+        path.write_text(document, encoding="utf-8")
+        return path
 
     def _sector_colors(self, reference: Lap | None) -> dict[int, str]:
         """Timing-screen colours: purple = session-best sector, green = faster

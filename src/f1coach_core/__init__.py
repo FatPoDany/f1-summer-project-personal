@@ -12,12 +12,14 @@ from f1coach_core.coach import (
     Evidence,
     Finding,
     MockCoach,
+    available_providers,
     coaching_report_from_dict,
     get_provider,
 )
-from f1coach_core.features import build_evidence_summary, detect_corners
+from f1coach_core.features import build_evidence_summary, detect_corners, time_delta
 from f1coach_core.lap import Lap
 from f1coach_core.loader import TelemetrySchemaError, load_telemetry_csv
+from f1coach_core.report import render_html_report
 from f1coach_core.sample import load_sample_lap, load_sample_session
 from f1coach_core.session import Session, load_session
 from f1coach_core.torcs import is_torcs_export, split_torcs_run
@@ -43,6 +45,7 @@ __all__ = [
     "MockCoach",
     "Session",
     "TelemetrySchemaError",
+    "available_providers",
     "build_evidence_summary",
     "coaching_report_from_dict",
     "create_session",
@@ -57,9 +60,11 @@ __all__ = [
     "load_sample_session",
     "load_session",
     "load_telemetry_csv",
+    "render_html_report",
     "sector_spans",
     "sector_times",
     "sessions_root",
     "split_torcs_run",
+    "time_delta",
     "workspace_root",
 ]

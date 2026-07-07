@@ -11,6 +11,7 @@ from PySide6.QtGui import QAction, QActionGroup, QDragEnterEvent, QDropEvent, QK
 from PySide6.QtWidgets import QFileDialog, QMainWindow, QMessageBox, QStackedWidget
 
 from apex.analysis_view import AnalysisView
+from apex.compare_view import CompareView
 from apex.garage_view import GarageView
 from f1coach_core import (
     Lap,
@@ -32,9 +33,11 @@ class MainWindow(QMainWindow):
 
         self._garage = GarageView(self)
         self._analysis = AnalysisView(self)
+        self._compare = CompareView(self)
         self._stacked = QStackedWidget(self)
         self._stacked.addWidget(self._garage)
         self._stacked.addWidget(self._analysis)
+        self._stacked.addWidget(self._compare)
         self.setCentralWidget(self._stacked)
 
         self._garage.lapOpened.connect(self.show_analysis)
@@ -52,6 +55,10 @@ class MainWindow(QMainWindow):
     def show_analysis(self, lap: Lap, session: Session | None = None) -> None:
         self._analysis.set_context(lap, session)
         self._analysis_action.setEnabled(True)
+        self._export_action.setEnabled(True)
+        if session is not None and len(session.laps) >= 2:
+            self._compare.set_session(session, lap_a=lap)
+            self._compare_action.setEnabled(True)
         self._stacked.setCurrentWidget(self._analysis)
         self._analysis_action.setChecked(True)
         summary = (
@@ -95,6 +102,12 @@ class MainWindow(QMainWindow):
         open_action.triggered.connect(self._pick_file)
         file_menu.addAction(open_action)
 
+        self._export_action = QAction("&Export Analysis Report…", self)
+        self._export_action.setShortcut(QKeySequence.StandardKey.Save)
+        self._export_action.setEnabled(False)  # until a lap is on the analysis screen
+        self._export_action.triggered.connect(self._export_report)
+        file_menu.addAction(self._export_action)
+
         file_menu.addSeparator()
         quit_action = QAction("&Quit", self)
         quit_action.setShortcut(QKeySequence.StandardKey.Quit)
@@ -113,9 +126,26 @@ class MainWindow(QMainWindow):
         self._analysis_action.triggered.connect(
             lambda: self._stacked.setCurrentWidget(self._analysis)
         )
-        for action in (self._garage_action, self._analysis_action):
+        self._compare_action = QAction("Compare", self, checkable=True)
+        self._compare_action.setEnabled(False)  # until a session with 2+ laps is opened
+        self._compare_action.triggered.connect(
+            lambda: self._stacked.setCurrentWidget(self._compare)
+        )
+        for action in (self._garage_action, self._analysis_action, self._compare_action):
             group.addAction(action)
             toolbar.addAction(action)
+        self._stacked.currentChanged.connect(self._sync_view_actions)
+
+    def _sync_view_actions(self, index: int) -> None:
+        """Keep the toolbar checks honest however the view was switched."""
+        widget = self._stacked.widget(index)
+        for view, action in (
+            (self._garage, self._garage_action),
+            (self._analysis, self._analysis_action),
+            (self._compare, self._compare_action),
+        ):
+            if widget is view:
+                action.setChecked(True)
 
     def _pick_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -123,6 +153,18 @@ class MainWindow(QMainWindow):
         )
         if path:
             self.open_path(path)
+
+    def _export_report(self) -> None:
+        lap = self._analysis.lap
+        if lap is None:
+            return
+        suggested = str(Path.home() / f"apex-report-{lap.source.stem}.html")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export analysis report", suggested, "HTML report (*.html)"
+        )
+        if path:
+            written = self._analysis.export_report(path)
+            self.statusBar().showMessage(f"Report written to {written}")
 
     # -- drag and drop -----------------------------------------------------------
 

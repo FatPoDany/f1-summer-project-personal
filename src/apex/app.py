@@ -5,9 +5,10 @@ into the workspace on first run). A canonical lap CSV argument opens straight
 in Lap Analysis; a TORCS run export is split into a session.
 """
 
+import os
 import sys
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication
 
@@ -66,6 +67,8 @@ def main() -> int:
     args = app.arguments()[1:]  # Qt's own flags already stripped
     if args:
         window.open_path(args[0])
+    if os.environ.get("APEX_SMOKE_TEST"):  # packaged-build check: paint, then exit 0
+        QTimer.singleShot(1500, app.quit)
     return app.exec()
 
 

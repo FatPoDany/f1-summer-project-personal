@@ -21,6 +21,7 @@ same interface (plus streaming).
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 
 
@@ -164,14 +165,21 @@ def coaching_report_from_dict(data: dict) -> CoachingReport:
 
 
 class CoachProvider(ABC):
-    """One interface, three backends (watsonx / Ollama / mock — A3 adds the
-    first two, plus streaming)."""
+    """One interface, three backends: watsonx / Ollama / mock."""
 
     name: str
 
     @abstractmethod
-    def generate(self, evidence_summary: dict) -> CoachingReport:
-        """Turn an evidence summary (features.build_evidence_summary) into a report."""
+    def generate(
+        self,
+        evidence_summary: dict,
+        on_progress: Callable[[str], None] | None = None,
+    ) -> CoachingReport:
+        """Turn an evidence summary (features.build_evidence_summary) into a report.
+
+        `on_progress` receives the accumulated raw model text as it streams,
+        for live display; the validated report only exists at the end.
+        """
 
 
 class MockCoach(CoachProvider):
@@ -185,7 +193,11 @@ class MockCoach(CoachProvider):
     MAX_FINDINGS = 3
     MIN_TIME_LOST = 0.05  # seconds — below this a corner isn't worth a finding
 
-    def generate(self, evidence_summary: dict) -> CoachingReport:
+    def generate(
+        self,
+        evidence_summary: dict,
+        on_progress: Callable[[str], None] | None = None,
+    ) -> CoachingReport:
         corners = sorted(
             evidence_summary.get("corners", []),
             key=lambda c: c["time_lost_s"],
@@ -196,9 +208,12 @@ class MockCoach(CoachProvider):
             for corner in corners[: self.MAX_FINDINGS]
             if corner["time_lost_s"] >= self.MIN_TIME_LOST
         ]
-        return coaching_report_from_dict(
-            {"findings": findings, "model": "mock", "prompt_version": "mock-1"}
-        )
+        payload = {"findings": findings, "model": "mock", "prompt_version": "mock-1"}
+        if on_progress is not None:  # exercise the same streaming path as real providers
+            import json
+
+            on_progress(json.dumps(payload, indent=2))
+        return coaching_report_from_dict(payload)
 
     def _finding_for(self, corner: dict) -> dict:
         label, span = corner["corner"], corner["span_m"]
@@ -269,14 +284,24 @@ class MockCoach(CoachProvider):
         }
 
 
-_PROVIDERS: dict[str, type[CoachProvider]] = {"mock": MockCoach}
+PROVIDER_NAMES = ("mock", "ollama", "watsonx")
+
+
+def available_providers() -> tuple[str, ...]:
+    return PROVIDER_NAMES
 
 
 def get_provider(name: str = "mock") -> CoachProvider:
-    if name not in _PROVIDERS:
-        available = ", ".join(sorted(_PROVIDERS))
-        raise ValueError(
-            f"Unknown coach provider '{name}'; available: {available} "
-            "(watsonx and ollama arrive at milestone A3)"
-        )
-    return _PROVIDERS[name]()
+    if name == "mock":
+        return MockCoach()
+    if name == "ollama":  # imported lazily: providers pull in transport machinery
+        from f1coach_core.ollama_coach import OllamaCoach
+
+        return OllamaCoach()
+    if name == "watsonx":
+        from f1coach_core.watsonx_coach import WatsonxCoach
+
+        return WatsonxCoach()
+    raise ValueError(
+        f"Unknown coach provider '{name}'; available: {', '.join(PROVIDER_NAMES)}"
+    )

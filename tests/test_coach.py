@@ -89,5 +89,5 @@ def test_mock_coach_stays_quiet_on_a_matching_lap():
 
 
 def test_unknown_provider_is_a_readable_error():
-    with pytest.raises(ValueError, match="watsonx and ollama arrive"):
-        get_provider("watsonx")
+    with pytest.raises(ValueError, match="available: mock, ollama, watsonx"):
+        get_provider("granite-cloud")

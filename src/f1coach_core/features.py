@@ -113,15 +113,23 @@ def detect_corners(reference: Lap) -> list[dict]:
     return corners
 
 
-def build_evidence_summary(lap: Lap, reference: Lap) -> dict:
-    """Everything a coach provider is allowed to know, as one JSON-ready dict."""
+def time_delta(lap: Lap, reference: Lap) -> tuple[np.ndarray, np.ndarray]:
+    """Cumulative time delta over distance (positive = lap behind reference).
+
+    The Compare view's trace, and the basis of every per-zone time_lost_s.
+    """
     end = min(float(lap.df["dist"].iloc[-1]), float(reference.df["dist"].iloc[-1]))
     if end < 20 * GRID_STEP:
         raise ValueError("laps are too short to compare")
     grid = np.arange(0.0, end, GRID_STEP)
+    return grid, _on_grid(lap, grid)["t"] - _on_grid(reference, grid)["t"]
+
+
+def build_evidence_summary(lap: Lap, reference: Lap) -> dict:
+    """Everything a coach provider is allowed to know, as one JSON-ready dict."""
+    grid, delta = time_delta(lap, reference)
     mine = _on_grid(lap, grid)
     ref = _on_grid(reference, grid)
-    delta = mine["t"] - ref["t"]  # positive = this lap is behind the reference
 
     corners = []
     for zone in detect_corners(reference):

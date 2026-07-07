@@ -26,8 +26,12 @@ plan survive as module boundaries.
       provider grounded in real evidence, AI Race Engineer panel with
       "◈ show" evidence-zoom. Done 7 Jul — gate cleared 4 weeks early, so
       the Dash parachute stays packed.
-- [ ] **A3 · Full flow** (18 Aug) — watsonx streaming + Ollama fallback,
-      Compare view, report export, packaged builds.
+- [x] **A3 · Full flow** (18 Aug) — watsonx.ai + local Ollama Granite
+      providers with live streaming and a provider picker, Compare view
+      (cumulative time delta), self-contained HTML report export,
+      PyInstaller `Apex.app` (152 MB, smoke-tested). Done 7 Jul — the
+      watsonx path is validated against an injected fake; first real
+      credentialled call still pending.
 - [ ] **A4 · Hardening** (1 Sep) · **A5 · Ship** (9 Sep)
 - [ ] CI green on ubuntu + macos (lights up once pushed to GitHub)
 
@@ -35,12 +39,12 @@ plan survive as module boundaries.
 
 ```sh
 python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e ".[dev,watsonx]"
 apex                          # Garage opens on the bundled sample session
 apex path/to/lap.csv          # canonical lap -> straight into Lap Analysis
 apex path/to/torcs_run.csv    # TORCS run -> split into laps, lands in Garage
-pytest                        # 27 tests, headless-safe
-python scripts/screenshot.py  # Garage + Analysis PNGs for blog/status forms
+pytest                        # 65 tests, headless-safe
+python scripts/screenshot.py  # Garage/Analysis/Compare PNGs for blog posts
 ```
 
 Python ≥ 3.11. On headless boxes run Qt things with `QT_QPA_PLATFORM=offscreen`.
@@ -54,8 +58,12 @@ src/f1coach_core/        pure Python, no Qt — loaders/analysis/coaching
   loader.py                CSV -> validated Lap; readable errors by design
   lap.py · session.py      the objects every front end renders
   analysis.py              sector spans/times
-  features.py              corner detection + lap-vs-reference evidence summary
+  features.py              corner detection, evidence summary, time-delta trace
   coach.py                 coaching contract v1, validator, provider registry, mock
+  llm.py                   versioned coach prompt + JSON extraction (shared)
+  watsonx_coach.py         watsonx.ai Granite, streaming, keychain credentials
+  ollama_coach.py          local Ollama Granite (offline demo insurance)
+  report.py                self-contained HTML report (inline SVG charts)
   torcs.py                 Lin's high-freq TORCS exports -> canonical laps
   workspace.py             ~/Apex/sessions store, import, watched-folder logic
   sample.py + data/        bundled 3-lap synthetic session (no network needed)
@@ -63,8 +71,9 @@ src/apex/                desktop shell, Qt lives here only
   app.py                   entry point, dark Fusion + Carbon palette
   main_window.py           toolbar nav, menu, drag-and-drop routing
   garage_view.py           session library · lap table · import · watch folder
-  analysis_view.py         reference picker · readout · timing colours
-  coach_panel.py           AI Race Engineer: finding cards, ◈ show, worker thread
+  analysis_view.py         reference picker · readout · timing colours · export
+  coach_panel.py           AI Race Engineer: provider picker, streaming, ◈ show
+  compare_view.py          two-lap cumulative time-delta (before/after coaching)
   widgets/strip_stack.py   ribbon + synced strips + crosshair + evidence-zoom
 scripts/                 sample-session generator · screenshot renderer
 tests/                   pytest (loader, analysis, session, workspace, torcs, shell)
@@ -116,9 +125,37 @@ experience requirement, not a nice-to-have). `span_m` anchors the ◈ show
 evidence-zoom. Corner labels are detection-ordered (T1…Tn along the lap),
 not official track names.
 
-## Next: A3 — full flow (18 Aug)
+## Coach providers
 
-watsonx.ai Granite provider with streaming (keys via OS keychain) + local
-Ollama granite fallback · provider picker · Compare view (cumulative time
-delta, before/after coaching) · HTML report export · PyInstaller builds for
-macOS and Linux.
+Pick in the AI Race Engineer panel (persisted). All three stream their raw
+output live, and every response goes through the same validator.
+
+* **mock** — offline, deterministic, grounded in the real evidence summary.
+  What CI, tests, and no-network demos use.
+* **ollama** — local Granite: `ollama serve` + `ollama pull granite3.3:8b`.
+  Override with `APEX_OLLAMA_MODEL` / `APEX_OLLAMA_URL`.
+* **watsonx** — IBM watsonx.ai Granite (`ibm/granite-3-3-8b-instruct`;
+  override `APEX_WATSONX_MODEL`). Credentials, in resolution order:
+  1. env: `WATSONX_APIKEY`, `WATSONX_PROJECT_ID`, `WATSONX_URL` (optional,
+     defaults to eu-gb)
+  2. OS keychain: `python -m keyring set apex-watsonx api_key` and
+     `python -m keyring set apex-watsonx project_id`
+
+Demo insurance ladder (rehearse in this order): mock → ollama → watsonx.
+
+## Packaged builds
+
+```sh
+pip install -e ".[package]"
+pyinstaller apex.spec        # macOS: dist/Apex.app · Linux: dist/Apex/
+APEX_SMOKE_TEST=1 ./dist/Apex.app/Contents/MacOS/Apex   # paints, exits 0
+```
+
+Unsigned: first launch on another Mac needs right-click → Open. The bundle
+excludes the watsonx SDK (offline demo device — mock + Ollama); remove the
+exclude in `apex.spec` to ship it. AppImage wrapping happens on a Linux box.
+
+## Next: A4 — hardening (1 Sep)
+
+Usability pass · graceful failure states everywhere · audit affordances
+(reliability log surfaced) · first real watsonx call with project credentials.

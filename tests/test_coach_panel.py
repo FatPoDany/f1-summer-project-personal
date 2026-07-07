@@ -18,6 +18,8 @@ def analysis(qtbot):
     window = MainWindow()
     qtbot.addWidget(window)
     window.show_analysis(session.laps[2], session)  # ragged lap, ref defaults to best
+    # pin the provider: the picker persists the user's last choice via QSettings
+    window._analysis._panel._provider_combo.setCurrentText("mock")
     return window._analysis
 
 
@@ -50,6 +52,17 @@ def test_evidence_zoom_targets_the_span(qtbot, analysis):
 
     stack.reset_view()
     assert stack._highlights == []
+
+
+def test_export_report_roundtrip(qtbot, analysis, tmp_path):
+    panel = analysis._panel
+    with qtbot.waitSignal(panel.reportReady, timeout=5000):
+        panel._run()
+
+    out = analysis.export_report(tmp_path / "report.html")
+    html = out.read_text(encoding="utf-8")
+    assert panel.report.findings[0].issue in html
+    assert "lap_03" in html and "lap_02" in html
 
 
 def test_panel_requires_a_reference(qtbot, tmp_path):

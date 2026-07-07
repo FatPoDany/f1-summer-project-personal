@@ -13,6 +13,7 @@ dependencies = [
     "pyqtgraph>=0.13.7",
     "pandas>=2.1",
     "numpy>=1.26",
+    "keyring>=25",
 ]
 
 [project.optional-dependencies]
@@ -20,6 +21,12 @@ dev = [
     "pytest>=8",
     "pytest-qt>=4.4",
     "ruff>=0.6",
+]
+watsonx = [
+    "ibm-watsonx-ai>=1.1",
+]
+package = [
+    "pyinstaller>=6.11",
 ]
 
 [project.scripts]

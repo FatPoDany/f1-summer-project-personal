@@ -2,8 +2,9 @@
 contract, each with "◈ show" evidence-zoom. Providers run on QThreadPool so
 the UI never blocks — the same path A3's streaming watsonx client will use."""
 
-from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
+from PySide6.QtCore import QObject, QRunnable, QSettings, Qt, QThreadPool, Signal
 from PySide6.QtWidgets import (
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -19,6 +20,7 @@ from f1coach_core import (
     CoachProvider,
     Finding,
     Lap,
+    available_providers,
     build_evidence_summary,
     get_provider,
 )
@@ -36,6 +38,7 @@ CHIP_STYLE = (
 class _CoachSignals(QObject):
     finished = Signal(object)  # CoachingReport
     failed = Signal(str)
+    progress = Signal(str)  # accumulated raw model text while streaming
 
 
 class _CoachTask(QRunnable):
@@ -49,7 +52,7 @@ class _CoachTask(QRunnable):
     def run(self) -> None:
         try:
             summary = build_evidence_summary(self._lap, self._reference)
-            report = self._provider.generate(summary)
+            report = self._provider.generate(summary, on_progress=self.signals.progress.emit)
         except Exception as exc:  # any failure must land as readable text, not a crash
             self.signals.failed.emit(str(exc))
         else:
@@ -124,18 +127,25 @@ class CoachPanel(QWidget):
         super().__init__(parent)
         self._lap: Lap | None = None
         self._reference: Lap | None = None
-        self._provider = get_provider("mock")
         self._task: _CoachTask | None = None
         self.report: CoachingReport | None = None
+        self._settings = QSettings("BristolIBMF1", "Apex")
 
         title = QLabel("AI Race Engineer")
         title.setStyleSheet("font-weight: 600;")
-        self._chip = QLabel(self._provider.name)
+        self._chip = QLabel("")
         self._chip.setStyleSheet(CHIP_STYLE)
+        self._provider_combo = QComboBox()
+        self._provider_combo.addItems(list(available_providers()))
+        saved = str(self._settings.value("coach/provider", "mock"))
+        if saved in available_providers():
+            self._provider_combo.setCurrentText(saved)
+        self._provider_combo.currentTextChanged.connect(self._provider_changed)
         header = QHBoxLayout()
         header.addWidget(title)
         header.addWidget(self._chip)
         header.addStretch(1)
+        header.addWidget(self._provider_combo)
 
         self._coach_button = QPushButton("Coach me")
         self._coach_button.clicked.connect(self._run)
@@ -169,12 +179,20 @@ class CoachPanel(QWidget):
 
     # -- context -----------------------------------------------------------
 
+    @property
+    def provider_name(self) -> str:
+        return self._provider_combo.currentText()
+
+    def _provider_changed(self, name: str) -> None:
+        self._settings.setValue("coach/provider", name)
+        self._chip.setText(name)
+
     def set_context(self, lap: Lap | None, reference: Lap | None) -> None:
         """New lap/reference invalidates any findings on screen."""
         self._lap, self._reference = lap, reference
         self.report = None
         self._clear_cards()
-        self._chip.setText(self._provider.name)
+        self._chip.setText(self.provider_name)
         ready = lap is not None and reference is not None
         self._coach_button.setEnabled(ready)
         if ready:
@@ -192,15 +210,26 @@ class CoachPanel(QWidget):
     def _run(self) -> None:
         if self._lap is None or self._reference is None:
             return
+        try:
+            provider = get_provider(self.provider_name)
+        except ValueError as exc:
+            self._placeholder.setText(str(exc))
+            return
         self._coach_button.setEnabled(False)
         self._coach_button.setText("Analyzing…")
         self._clear_cards()
-        self._placeholder.setText("Reading the telemetry…")
-        task = _CoachTask(self._provider, self._lap, self._reference)
+        self._placeholder.setText(f"Asking {provider.name}…")
+        task = _CoachTask(provider, self._lap, self._reference)
         task.signals.finished.connect(self.show_report)
         task.signals.failed.connect(self._failed)
+        task.signals.progress.connect(self._on_progress)
         self._task = task  # keep signals alive while the pool owns the runnable
         QThreadPool.globalInstance().start(task)
+
+    def _on_progress(self, text: str) -> None:
+        """Live tail of the model's raw output while it streams."""
+        tail = text[-500:]
+        self._placeholder.setText(f"…{tail}" if len(text) > 500 else tail)
 
     def show_report(self, report: CoachingReport) -> None:
         self.report = report
