@@ -96,9 +96,11 @@ def split_torcs_run(path: str | Path) -> list[TorcsLap]:
         seg = df.iloc[bounds[i] : bounds[i + 1]]
         if len(seg) < MIN_LAP_SAMPLES:
             continue
-        starts_at_line = float(seg["dist_from_start_m"].iloc[0]) < 0.02 * track_length
-        ends_at_line = i < len(bounds) - 2  # a following reset closed this segment
         canonical = _to_canonical(seg, speed_col, track_length)
+        if len(canonical) < MIN_LAP_SAMPLES:  # corrupt rows got dropped in conversion
+            continue
+        starts_at_line = float(canonical["dist"].iloc[0]) < 0.02 * track_length
+        ends_at_line = i < len(bounds) - 2  # a following reset closed this segment
         if "race_lap" in seg.columns:
             lap_label = int(seg["race_lap"].iloc[len(seg) // 2])
         else:
@@ -130,18 +132,30 @@ def write_canonical_lap(lap: TorcsLap, dest: str | Path, source_name: str) -> No
 
 
 def _to_canonical(seg: pd.DataFrame, speed_col: str, track_length: float) -> pd.DataFrame:
-    t = pd.to_numeric(seg["sim_time_s"], errors="coerce")
-    dist = pd.to_numeric(seg["dist_from_start_m"], errors="coerce")
-    sector = 1 + np.minimum((dist / (track_length / 3.0)).astype(int), 2)
+    sources = {
+        "t": seg["sim_time_s"],
+        "dist": seg["dist_from_start_m"],
+        "speed": seg[speed_col],
+        "throttle": seg["accel_cmd"],
+        "brake": seg["brake_cmd"],
+        "steer": seg["steer_cmd"],
+        "gear": seg["gear"],
+    }
+    frame = pd.DataFrame(
+        {name: pd.to_numeric(column, errors="coerce") for name, column in sources.items()}
+    ).dropna()  # one corrupt row must not poison the whole lap
+    if frame.empty:
+        return frame.reindex(columns=[*frame.columns, "sector"])
+    sector = 1 + np.minimum((frame["dist"] / (track_length / 3.0)).astype(int), 2)
     return pd.DataFrame(
         {
-            "t": (t - t.iloc[0]).round(4).to_numpy(),
-            "dist": dist.round(3).to_numpy(),
-            "speed": pd.to_numeric(seg[speed_col], errors="coerce").round(4).to_numpy(),
-            "throttle": pd.to_numeric(seg["accel_cmd"], errors="coerce").round(4).to_numpy(),
-            "brake": pd.to_numeric(seg["brake_cmd"], errors="coerce").round(4).to_numpy(),
-            "steer": pd.to_numeric(seg["steer_cmd"], errors="coerce").round(4).to_numpy(),
-            "gear": pd.to_numeric(seg["gear"], errors="coerce").to_numpy(),
+            "t": (frame["t"] - frame["t"].iloc[0]).round(4).to_numpy(),
+            "dist": frame["dist"].round(3).to_numpy(),
+            "speed": frame["speed"].round(4).to_numpy(),
+            "throttle": frame["throttle"].round(4).to_numpy(),
+            "brake": frame["brake"].round(4).to_numpy(),
+            "steer": frame["steer"].round(4).to_numpy(),
+            "gear": frame["gear"].to_numpy(),
             "sector": sector.to_numpy(),
         }
     )

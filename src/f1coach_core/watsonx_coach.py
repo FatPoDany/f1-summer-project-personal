@@ -65,7 +65,9 @@ def _sdk_stream(credentials: WatsonxCredentials, model_id: str, prompt: str):
         from ibm_watsonx_ai.foundation_models import ModelInference
     except ImportError as exc:
         raise RuntimeError(
-            "the ibm-watsonx-ai SDK is not installed — pip install 'apex-f1coach[watsonx]'"
+            "the ibm-watsonx-ai SDK is not installed — run from source after "
+            "pip install 'apex-f1coach[watsonx]' (packaged builds exclude the SDK "
+            "by design; use the mock or ollama provider there)"
         ) from exc
     model = ModelInference(
         model_id=model_id,
@@ -97,8 +99,16 @@ class WatsonxCoach(CoachProvider):
         credentials = self._resolve()
         prompt = build_coach_prompt(evidence_summary)
         text = ""
-        for chunk in self._stream_factory(credentials, self.model_id, prompt):
-            text += chunk
-            if on_progress is not None and text:
-                on_progress(text)
+        try:
+            for chunk in self._stream_factory(credentials, self.model_id, prompt):
+                text += chunk
+                if on_progress is not None and text:
+                    on_progress(text)
+        except RuntimeError:
+            raise  # already a readable sentence (missing SDK, credentials help, ...)
+        except Exception as exc:  # SDK/network errors are cryptic; demos need a sentence
+            raise RuntimeError(
+                f"watsonx call failed: {exc}. Check the API key and project id, "
+                f"the endpoint ({credentials.url}), and that this machine is online."
+            ) from exc
         return report_from_llm_text(text, model=self.model_id)

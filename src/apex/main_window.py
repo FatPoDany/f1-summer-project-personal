@@ -78,7 +78,7 @@ class MainWindow(QMainWindow):
         if is_torcs_export(path):
             try:
                 summary = import_telemetry(path, session_name=path.stem)
-            except TelemetrySchemaError as exc:
+            except (TelemetrySchemaError, OSError) as exc:
                 QMessageBox.critical(self, "Can't import TORCS run", str(exc))
                 return
             self._garage.refresh_sessions(select=path.stem)
@@ -87,7 +87,7 @@ class MainWindow(QMainWindow):
             return
         try:
             lap = load_telemetry_csv(path)
-        except TelemetrySchemaError as exc:
+        except (TelemetrySchemaError, OSError) as exc:
             QMessageBox.critical(self, "Can't load lap", str(exc))
         else:
             self.show_analysis(lap, None)
@@ -163,7 +163,11 @@ class MainWindow(QMainWindow):
             self, "Export analysis report", suggested, "HTML report (*.html)"
         )
         if path:
-            written = self._analysis.export_report(path)
+            try:
+                written = self._analysis.export_report(path)
+            except OSError as exc:
+                QMessageBox.critical(self, "Can't export report", str(exc))
+                return
             self.statusBar().showMessage(f"Report written to {written}")
 
     # -- drag and drop -----------------------------------------------------------

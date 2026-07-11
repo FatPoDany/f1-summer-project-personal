@@ -42,6 +42,6 @@ def load_session(path: str | Path) -> Session:
     for csv in sorted(path.glob("*.csv")):
         try:
             laps.append(load_telemetry_csv(csv))
-        except TelemetrySchemaError as exc:
+        except (TelemetrySchemaError, OSError) as exc:
             problems.append((csv.name, str(exc)))
     return Session(name=path.name, path=path, laps=tuple(laps), problems=tuple(problems))

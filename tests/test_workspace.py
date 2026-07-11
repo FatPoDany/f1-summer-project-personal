@@ -51,6 +51,13 @@ def test_import_telemetry_copies_canonical_files(tmp_path):
     assert len(session.laps) == 1
 
 
+def test_create_session_rejects_unusable_names():
+    for bad in ("", "   ", ".", "..", "a/b", "a\\b"):
+        with pytest.raises(ValueError, match="folder name"):
+            create_session(bad)
+    assert list_sessions() == []
+
+
 def test_ensure_sample_session_is_idempotent():
     target = ensure_sample_session()
     assert target.name == SAMPLE_SESSION_NAME

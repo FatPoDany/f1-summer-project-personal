@@ -35,3 +35,25 @@ def test_ahead_wording(qtbot):
     # A is the best lap, so B defaults to the next-best and A runs ahead
     assert view._combo_b.currentData().source.stem == "lap_01"
     assert "ahead" in view._verdict.text()
+
+
+def test_too_short_laps_read_as_cant_compare(qtbot, tmp_path):
+    from f1coach_core import Session, load_telemetry_csv
+
+    stub = (
+        "t,dist,speed,throttle,brake,steer,gear,sector\n"
+        "0.0,0,20,1,0,0,3,1\n1.0,20,20,1,0,0,3,2\n2.0,40,20,1,0,0,3,3\n"
+    )
+    for name in ("a.csv", "b.csv"):
+        (tmp_path / name).write_text(stub)
+    laps = tuple(load_telemetry_csv(tmp_path / name) for name in ("a.csv", "b.csv"))
+    session = Session(name="tiny", path=tmp_path, laps=laps, problems=())
+
+    view = CompareView()
+    qtbot.addWidget(view)
+    view.show()
+    view.set_session(session)  # 40 m laps can't share a usable distance grid
+
+    assert "Can't compare" in view._verdict.text()
+    x, _y = view._delta_curve.getData()
+    assert x is None or len(x) == 0

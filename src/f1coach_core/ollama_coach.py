@@ -18,6 +18,22 @@ DEFAULT_URL = "http://localhost:11434"
 DEFAULT_MODEL = "granite3.3:8b"
 
 
+def _http_error_message(exc: urllib.error.HTTPError, model: str) -> str:
+    """The server answered but refused — usually a model that was never pulled."""
+    detail = ""
+    try:
+        body = json.loads(exc.read().decode("utf-8", errors="replace"))
+        detail = str(body.get("error", ""))
+    except Exception:  # a body is optional; the status line alone still reads fine
+        pass
+    if exc.code == 404 or "not found" in detail:
+        return (
+            f"Ollama is running but can't serve '{model}' ({detail or exc}). "
+            f"Pull it once: `ollama pull {model}`."
+        )
+    return f"Ollama request failed ({exc}{': ' + detail if detail else ''})."
+
+
 def _http_stream(url: str, payload: dict, timeout: float) -> Iterator[dict]:
     """POST JSON, yield the JSONL chunks Ollama streams back."""
     request = urllib.request.Request(
@@ -70,9 +86,16 @@ class OllamaCoach(CoachProvider):
                     on_progress(text)
                 if chunk.get("done"):
                     break
+        except urllib.error.HTTPError as exc:  # before URLError: HTTPError is a subclass
+            raise RuntimeError(_http_error_message(exc, self.model)) from exc
         except (urllib.error.URLError, ConnectionError, TimeoutError) as exc:
             raise RuntimeError(
                 f"Ollama isn't reachable at {self.base_url} ({exc}). Start it with "
                 f"`ollama serve` and pull the model once: `ollama pull {self.model}`."
+            ) from exc
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"Ollama sent a line that isn't JSON ({exc}) — is something else "
+                f"listening on {self.base_url}?"
             ) from exc
         return report_from_llm_text(text, model=f"ollama/{self.model}")

@@ -32,7 +32,14 @@ plan survive as module boundaries.
       PyInstaller `Apex.app` (152 MB, smoke-tested). Done 7 Jul — the
       watsonx path is validated against an injected fake; first real
       credentialled call still pending.
-- [ ] **A4 · Hardening** (1 Sep) · **A5 · Ship** (9 Sep)
+- [x] **A4 · Hardening** (1 Sep) — graceful failure states across providers,
+      import, export, and startup (crash-dialog excepthook; every failure is a
+      readable, actionable sentence); per-run coaching audit trail (evidence +
+      exact prompt + raw response + verdict, as JSON beside the session, with
+      an **Audit…** viewer in the panel); M7 usability pass. Done 11 Jul —
+      live watsonx/Ollama validation still pending (needs credentials / a
+      local Ollama install).
+- [ ] **A5 · Ship** (9 Sep)
 - [ ] CI green on ubuntu + macos (lights up once pushed to GitHub)
 
 ## Quickstart
@@ -43,8 +50,8 @@ pip install -e ".[dev,watsonx]"
 apex                          # Garage opens on the bundled sample session
 apex path/to/lap.csv          # canonical lap -> straight into Lap Analysis
 apex path/to/torcs_run.csv    # TORCS run -> split into laps, lands in Garage
-pytest                        # 65 tests, headless-safe
-python scripts/screenshot.py  # Garage/Analysis/Compare PNGs for blog posts
+pytest                        # 76 tests, headless-safe
+python scripts/screenshot.py  # Garage/Analysis/Compare/audit PNGs for blog posts
 ```
 
 Python ≥ 3.11. On headless boxes run Qt things with `QT_QPA_PLATFORM=offscreen`.
@@ -61,6 +68,7 @@ src/f1coach_core/        pure Python, no Qt — loaders/analysis/coaching
   features.py              corner detection, evidence summary, time-delta trace
   coach.py                 coaching contract v1, validator, provider registry, mock
   llm.py                   versioned coach prompt + JSON extraction (shared)
+  audit.py                 per-run audit records: prompt, raw response, verdict
   watsonx_coach.py         watsonx.ai Granite, streaming, keychain credentials
   ollama_coach.py          local Ollama Granite (offline demo insurance)
   report.py                self-contained HTML report (inline SVG charts)
@@ -128,7 +136,11 @@ not official track names.
 ## Coach providers
 
 Pick in the AI Race Engineer panel (persisted). All three stream their raw
-output live, and every response goes through the same validator.
+output live, and every response goes through the same validator. Every run —
+success or failure, mock included — writes an audit record beside the session
+(`…/<session>/coaching/*.json`: evidence summary, the exact prompt, the raw
+response, and the validated report or the error Apex refused with); the
+panel's **Audit…** button opens the latest one.
 
 * **mock** — offline, deterministic, grounded in the real evidence summary.
   What CI, tests, and no-network demos use.
@@ -155,7 +167,8 @@ Unsigned: first launch on another Mac needs right-click → Open. The bundle
 excludes the watsonx SDK (offline demo device — mock + Ollama); remove the
 exclude in `apex.spec` to ship it. AppImage wrapping happens on a Linux box.
 
-## Next: A4 — hardening (1 Sep)
+## Next: A5 — ship (9 Sep)
 
-Usability pass · graceful failure states everywhere · audit affordances
-(reliability log surfaced) · first real watsonx call with project credentials.
+Final builds · quickstart polish · walkthrough chapter · video assets. Carried
+over from A3/A4: the first real credentialled watsonx call and a real local
+Ollama run (everything is validated against injected fakes so far).

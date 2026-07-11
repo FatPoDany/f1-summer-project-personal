@@ -1,13 +1,23 @@
 """The AI Race Engineer panel: findings rendered from the fixed coaching
 contract, each with "◈ show" evidence-zoom. Providers run on QThreadPool so
-the UI never blocks — the same path A3's streaming watsonx client will use."""
+the UI never blocks — the same path A3's streaming watsonx client will use.
+
+Every run — success or failure, mock included — writes an audit record next
+to the session (see f1coach_core.audit); the Audit… button opens the latest
+one so a claim can always be traced to the exact prompt and raw response."""
+
+import sys
+from pathlib import Path
 
 from PySide6.QtCore import QObject, QRunnable, QSettings, Qt, QThreadPool, Signal
+from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -21,8 +31,10 @@ from f1coach_core import (
     Finding,
     Lap,
     available_providers,
+    build_coach_prompt,
     build_evidence_summary,
     get_provider,
+    write_coaching_audit,
 )
 
 CARD_STYLE = (
@@ -39,6 +51,7 @@ class _CoachSignals(QObject):
     finished = Signal(object)  # CoachingReport
     failed = Signal(str)
     progress = Signal(str)  # accumulated raw model text while streaming
+    audited = Signal(str)  # path of the run's audit record ("" if it couldn't be written)
 
 
 class _CoachTask(QRunnable):
@@ -50,13 +63,46 @@ class _CoachTask(QRunnable):
         self._provider, self._lap, self._reference = provider, lap, reference
 
     def run(self) -> None:
+        raw = {"text": ""}
+
+        def progress(text: str) -> None:
+            raw["text"] = text
+            self.signals.progress.emit(text)
+
+        summary: dict | None = None
+        prompt: str | None = None
+        report: CoachingReport | None = None
+        error: str | None = None
         try:
             summary = build_evidence_summary(self._lap, self._reference)
-            report = self._provider.generate(summary, on_progress=self.signals.progress.emit)
+            prompt = build_coach_prompt(summary)
+            report = self._provider.generate(summary, on_progress=progress)
         except Exception as exc:  # any failure must land as readable text, not a crash
-            self.signals.failed.emit(str(exc))
+            error = str(exc)
+        self.signals.audited.emit(self._write_audit(summary, prompt, raw["text"], report, error))
+        if error is not None:
+            self.signals.failed.emit(error)
         else:
             self.signals.finished.emit(report)
+
+    def _write_audit(self, summary, prompt, raw_text, report, error) -> str:
+        try:
+            return str(
+                write_coaching_audit(
+                    lap_source=self._lap.source,
+                    provider=self._provider.name,
+                    lap_name=self._lap.source.stem,
+                    reference_name=self._reference.source.stem,
+                    evidence_summary=summary,
+                    prompt=prompt,
+                    raw_response=raw_text,
+                    report=report,
+                    error=error,
+                )
+            )
+        except OSError as exc:  # auditing must not break the run it audits
+            print(f"apex: couldn't write the coaching audit record: {exc}", file=sys.stderr)
+            return ""
 
 
 class FindingCard(QFrame):
@@ -118,6 +164,28 @@ class FindingCard(QFrame):
         return chip
 
 
+class AuditDialog(QDialog):
+    """The raw record of one coaching run: prompt, response, verdict — verbatim."""
+
+    def __init__(self, path: Path, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(f"Coaching audit — {path.name}")
+        self.resize(760, 540)
+        location = QLabel(str(path))
+        location.setStyleSheet(f"color: {theme.TEXT_DIM}; font-size: 11px;")
+        location.setWordWrap(True)
+        text = QPlainTextEdit()
+        text.setReadOnly(True)
+        text.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
+        try:
+            text.setPlainText(path.read_text(encoding="utf-8"))
+        except OSError as exc:
+            text.setPlainText(f"Can't read the audit record: {exc}")
+        layout = QVBoxLayout(self)
+        layout.addWidget(location)
+        layout.addWidget(text, stretch=1)
+
+
 class CoachPanel(QWidget):
     evidenceRequested = Signal(float, float)
     viewResetRequested = Signal()
@@ -129,6 +197,7 @@ class CoachPanel(QWidget):
         self._reference: Lap | None = None
         self._task: _CoachTask | None = None
         self.report: CoachingReport | None = None
+        self.audit_path: Path | None = None
         self._settings = QSettings("BristolIBMF1", "Apex")
 
         title = QLabel("AI Race Engineer")
@@ -151,9 +220,16 @@ class CoachPanel(QWidget):
         self._coach_button.clicked.connect(self._run)
         reset_button = QPushButton("Reset view")
         reset_button.clicked.connect(self.viewResetRequested.emit)
+        self._audit_button = QPushButton("Audit…")
+        self._audit_button.setEnabled(False)
+        self._audit_button.setToolTip(
+            "The raw record of the last run: prompt, response, and what Apex did with it"
+        )
+        self._audit_button.clicked.connect(self._show_audit)
         buttons = QHBoxLayout()
         buttons.addWidget(self._coach_button, stretch=1)
         buttons.addWidget(reset_button)
+        buttons.addWidget(self._audit_button)
 
         self._cards_host = QWidget()
         self._cards = QVBoxLayout(self._cards_host)
@@ -165,17 +241,17 @@ class CoachPanel(QWidget):
         self._cards.addWidget(self._placeholder)
         self._cards.addStretch(1)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setWidget(self._cards_host)
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll.setWidget(self._cards_host)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 4)
         layout.setSpacing(6)
         layout.addLayout(header)
         layout.addLayout(buttons)
-        layout.addWidget(scroll, stretch=1)
+        layout.addWidget(self._scroll, stretch=1)
 
     # -- context -----------------------------------------------------------
 
@@ -223,8 +299,17 @@ class CoachPanel(QWidget):
         task.signals.finished.connect(self.show_report)
         task.signals.failed.connect(self._failed)
         task.signals.progress.connect(self._on_progress)
+        task.signals.audited.connect(self._on_audited)
         self._task = task  # keep signals alive while the pool owns the runnable
         QThreadPool.globalInstance().start(task)
+
+    def _on_audited(self, path: str) -> None:
+        self.audit_path = Path(path) if path else None
+        self._audit_button.setEnabled(self.audit_path is not None)
+
+    def _show_audit(self) -> None:
+        if self.audit_path is not None:
+            AuditDialog(self.audit_path, self).exec()
 
     def _on_progress(self, text: str) -> None:
         """Live tail of the model's raw output while it streams."""
@@ -236,6 +321,7 @@ class CoachPanel(QWidget):
         self._task = None
         self._coach_button.setEnabled(True)
         self._coach_button.setText("Coach me")
+        self._scroll.verticalScrollBar().setValue(0)  # outcome reads from the top
         self._chip.setText(f"{report.model} · {report.prompt_version}")
         self._clear_cards()
         if not report.findings:
@@ -252,11 +338,16 @@ class CoachPanel(QWidget):
         self._task = None
         self._coach_button.setEnabled(True)
         self._coach_button.setText("Coach me")
-        self._placeholder.setText(f"Coaching failed: {message}")
+        self._scroll.verticalScrollBar().setValue(0)  # outcome reads from the top
+        text = f"Coaching failed: {message}"
+        if self.audit_path is not None:  # audited arrives first, so this is current
+            text += "\n\nThe full run record (prompt and raw response) is under Audit…"
+        self._placeholder.setText(text)
 
     def _clear_cards(self) -> None:
         for i in reversed(range(self._cards.count())):
             widget = self._cards.itemAt(i).widget()
             if isinstance(widget, FindingCard):
                 self._cards.takeAt(i)
+                widget.hide()  # stop painting now — deleteLater waits for the loop
                 widget.deleteLater()

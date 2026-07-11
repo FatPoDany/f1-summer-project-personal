@@ -29,7 +29,10 @@ def load_telemetry_csv(path: str | Path) -> Lap:
     if not path.is_file():
         raise TelemetrySchemaError(f"No such telemetry file: {path}")
 
-    version = _read_schema_version(path)
+    try:
+        version = _read_schema_version(path)
+    except OSError as exc:
+        raise TelemetrySchemaError(f"{path.name} can't be read: {exc}") from exc
     if version not in SUPPORTED_VERSIONS:
         supported = ", ".join(str(v) for v in SUPPORTED_VERSIONS)
         raise TelemetrySchemaError(

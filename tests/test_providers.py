@@ -1,5 +1,7 @@
 """Ollama and watsonx providers, exercised through injected transports."""
 
+import io
+import json
 import urllib.error
 
 import pytest
@@ -65,6 +67,29 @@ def test_ollama_unreachable_is_actionable(summary):
         OllamaCoach(transport=transport).generate(summary)
 
 
+def test_ollama_model_not_pulled_is_actionable(summary):
+    body = b'{"error": "model \'granite3.3:8b\' not found, try pulling it first"}'
+
+    def transport(url, payload, timeout):
+        raise urllib.error.HTTPError(url, 404, "Not Found", None, io.BytesIO(body))
+        yield  # pragma: no cover — makes this a generator like the real transport
+
+    # "running but can't serve" — NOT the server-down hint, which would send the
+    # user to restart a server that is answering fine
+    with pytest.raises(RuntimeError, match="running but can't serve") as caught:
+        OllamaCoach(transport=transport).generate(summary)
+    assert "ollama pull granite3.3:8b" in str(caught.value)
+
+
+def test_ollama_non_json_stream_is_readable(summary):
+    def transport(url, payload, timeout):
+        raise json.JSONDecodeError("Expecting value", "<html>proxy page</html>", 0)
+        yield  # pragma: no cover — makes this a generator like the real transport
+
+    with pytest.raises(RuntimeError, match="isn't JSON"):
+        OllamaCoach(transport=transport).generate(summary)
+
+
 # -- watsonx ------------------------------------------------------------------
 
 
@@ -107,6 +132,20 @@ def test_watsonx_env_credentials_win(monkeypatch):
     monkeypatch.setattr(wx.keyring, "get_password", lambda service, entry: None)
     creds = resolve_credentials()
     assert creds == WatsonxCredentials("env-key", "env-project", wx.DEFAULT_URL)
+
+
+def test_watsonx_sdk_errors_become_readable(summary):
+    def exploding_stream(credentials, model_id, prompt):
+        raise ValueError("Response 401: {'errorCode': 'BXNIM0415E'}")
+        yield  # pragma: no cover — makes this a generator like the real stream
+
+    coach = WatsonxCoach(
+        stream_factory=exploding_stream,
+        credentials_resolver=lambda: WatsonxCredentials("k", "p", "https://example"),
+    )
+    with pytest.raises(RuntimeError, match="Check the API key") as caught:
+        coach.generate(summary)
+    assert "401" in str(caught.value)  # the original failure stays visible
 
 
 # -- registry -----------------------------------------------------------------

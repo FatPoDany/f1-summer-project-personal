@@ -1,4 +1,5 @@
-"""Render the Garage and Lap Analysis screens to PNGs — headless-safe.
+"""Render the Garage, Lap Analysis, Compare, and audit screens to PNGs —
+headless-safe.
 
 Feeds the weekly blog post and IBM status forms with real pixels; CI uploads
 them per OS as build artifacts.
@@ -10,12 +11,15 @@ import sys
 from pathlib import Path
 
 from apex.app import create_app
+from apex.coach_panel import AuditDialog
 from apex.main_window import MainWindow
 from f1coach_core import (
+    build_coach_prompt,
     build_evidence_summary,
     ensure_sample_session,
     get_provider,
     load_sample_session,
+    write_coaching_audit,
 )
 
 
@@ -42,7 +46,9 @@ def main() -> int:
     ragged = session.laps[2]
     assert best is not None
     window.show_analysis(ragged, session)  # reference defaults to the session best
-    report = get_provider("mock").generate(build_evidence_summary(ragged, best))
+    summary = build_evidence_summary(ragged, best)
+    raw: list[str] = []
+    report = get_provider("mock").generate(summary, on_progress=lambda text: raw.append(text))
     view = window._analysis
     view._panel.show_report(report)
     if report.findings:  # shade the worst finding's evidence zone, keep full-lap zoom
@@ -54,9 +60,27 @@ def main() -> int:
     settle()
     ok &= window.grab().save(str(out_dir / "apex-compare.png"))
 
+    # the audit affordance: the same record a real run writes, opened in its dialog
+    audit_path = write_coaching_audit(
+        lap_source=ragged.source,
+        provider="mock",
+        lap_name=ragged.source.stem,
+        reference_name=best.source.stem,
+        evidence_summary=summary,
+        prompt=build_coach_prompt(summary),
+        raw_response=raw[-1] if raw else "",
+        report=report,
+    )
+    dialog = AuditDialog(audit_path, window)
+    dialog.resize(760, 560)
+    dialog.show()
+    settle()
+    ok &= dialog.grab().save(str(out_dir / "apex-audit.png"))
+    dialog.close()
+
     print(
         f"{'wrote' if ok else 'FAILED to write'} apex-garage.png, apex-analysis.png, "
-        f"apex-compare.png in {out_dir}"
+        f"apex-compare.png, apex-audit.png in {out_dir}"
     )
     return 0 if ok else 1
 

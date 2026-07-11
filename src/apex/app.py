@@ -7,10 +7,11 @@ in Lap Analysis; a TORCS run export is split into a session.
 
 import os
 import sys
+import traceback
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QPalette
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from apex import theme
 from apex.main_window import MainWindow
@@ -58,12 +59,38 @@ def create_app(argv: list[str] | None = None) -> QApplication:
     return app
 
 
+def show_crash_dialog(exc_type, exc, tb) -> None:
+    """Last-resort excepthook. PySide6 routes unhandled slot exceptions here and
+    keeps the event loop running — but a packaged .app has no visible stderr, so
+    without a dialog a stray bug ends the demo with nothing on screen."""
+    sys.__excepthook__(exc_type, exc, tb)  # keep the full trace in any terminal/log
+    if QApplication.instance() is None:
+        return
+    try:
+        box = QMessageBox()
+        box.setIcon(QMessageBox.Icon.Critical)
+        box.setWindowTitle("Apex — unexpected error")
+        box.setText("Apex hit an unexpected error and will try to carry on.")
+        box.setInformativeText(str(exc))
+        box.setDetailedText("".join(traceback.format_exception(exc_type, exc, tb)))
+        box.exec()
+    except Exception:  # the hook itself must never raise
+        pass
+
+
 def main() -> int:
     app = create_app()
-    ensure_sample_session()
+    sys.excepthook = show_crash_dialog
+    sample_problem: str | None = None
+    try:
+        ensure_sample_session()
+    except OSError as exc:  # the app works without the sample; say so and carry on
+        sample_problem = f"Sample session unavailable — {exc}"
 
     window = MainWindow()
     window.show()
+    if sample_problem:
+        window.statusBar().showMessage(sample_problem)
     args = app.arguments()[1:]  # Qt's own flags already stripped
     if args:
         window.open_path(args[0])

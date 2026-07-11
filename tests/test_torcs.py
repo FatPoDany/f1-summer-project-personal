@@ -80,6 +80,24 @@ def test_complete_laps_map_to_canonical_schema(tmp_path):
     assert lap.lap_time == pytest.approx(df["t"].iloc[-1])
 
 
+def test_corrupt_rows_are_dropped_not_fatal(tmp_path):
+    run = make_run(tmp_path / "bt_3.csv")
+    lines = run.read_text().splitlines()
+    parts = lines[40].split(",")  # mid-lap-1 row: unparseable distance
+    parts[1] = "garbage"
+    lines[40] = ",".join(parts)
+    parts = lines[70].split(",")  # another: empty speed cell
+    parts[2] = ""
+    lines[70] = ",".join(parts)
+    run.write_text("\n".join(lines) + "\n")
+
+    laps = split_torcs_run(run)
+
+    assert [lap.complete for lap in laps] == [False, True, True, True, False]
+    for lap in laps:
+        assert not lap.df.isna().any().any()  # poisoned rows dropped, not written
+
+
 def test_import_telemetry_splits_runs_into_sessions(tmp_path, monkeypatch):
     monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "ws"))
     run = make_run(tmp_path / "bt_3.csv")

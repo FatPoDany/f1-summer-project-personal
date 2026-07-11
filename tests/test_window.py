@@ -87,3 +87,43 @@ def test_open_path_imports_torcs_runs_into_garage(qtbot, tmp_path):
     assert session is not None and session.name == "quali"
     assert len(session.laps) == 3
     assert "3 laps" in window.statusBar().currentMessage()
+
+
+def test_report_export_failure_is_a_dialog_not_a_crash(qtbot, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show_analysis(load_sample_session().best_lap, None)
+
+    target = tmp_path / "no-such-dir" / "report.html"  # missing parent -> OSError
+    monkeypatch.setattr(
+        QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: (str(target), ""))
+    )
+    dialogs: list[tuple] = []
+    monkeypatch.setattr(
+        QMessageBox, "critical", staticmethod(lambda *a: dialogs.append(a))
+    )
+
+    window._export_report()
+
+    assert dialogs and dialogs[0][1] == "Can't export report"
+    assert "report" not in window.statusBar().currentMessage().lower()
+
+
+def test_crash_hook_shows_a_dialog_and_never_raises(qtbot, monkeypatch):
+    import sys
+    from unittest.mock import MagicMock
+
+    from apex import app as app_module
+
+    box = MagicMock()
+    monkeypatch.setattr(app_module, "QMessageBox", MagicMock(return_value=box))
+    try:
+        raise RuntimeError("boom in a slot")
+    except RuntimeError:
+        app_module.show_crash_dialog(*sys.exc_info())
+
+    assert "boom in a slot" in box.setInformativeText.call_args[0][0]
+    assert "RuntimeError" in box.setDetailedText.call_args[0][0]
+    box.exec.assert_called_once()

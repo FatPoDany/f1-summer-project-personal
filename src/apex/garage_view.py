@@ -117,9 +117,11 @@ class GarageView(QWidget):
         item = self._session_list.currentItem()
         if item is None:
             return
-        self._session = load_session(next(
-            path for path in list_sessions() if path.name == item.text()
-        ))
+        match = next((p for p in list_sessions() if p.name == item.text()), None)
+        if match is None:  # deleted outside the app since the last refresh
+            self.refresh_sessions()
+            return
+        self._session = load_session(match)
         self._populate_table()
 
     def _populate_table(self) -> None:
@@ -163,7 +165,11 @@ class GarageView(QWidget):
         name, ok = QInputDialog.getText(self, "New session", "Session name:")
         name = name.strip()
         if ok and name:
-            create_session(name)
+            try:
+                create_session(name)
+            except (ValueError, OSError) as exc:
+                QMessageBox.warning(self, "Can't create session", str(exc))
+                return
             self.refresh_sessions(select=name)
 
     def _import_files(self) -> None:
@@ -183,7 +189,7 @@ class GarageView(QWidget):
         assert self._session is not None
         try:
             summary = import_telemetry(path, self._session.name)
-        except TelemetrySchemaError as exc:
+        except (TelemetrySchemaError, OSError) as exc:
             QMessageBox.critical(self, "Can't import telemetry", str(exc))
         else:
             self.status.emit(summary)

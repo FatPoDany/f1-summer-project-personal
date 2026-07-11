@@ -32,6 +32,21 @@ def test_load_session_mixes_laps_and_problems(tmp_path):
     assert session.delta_to_best(best) == 0.0
 
 
+def test_unreadable_file_is_a_problem_not_a_crash(tmp_path):
+    (tmp_path / "a_fast.csv").write_text(GOOD_FAST)
+    locked = tmp_path / "locked.csv"
+    locked.write_text(GOOD_SLOW)
+    locked.chmod(0)
+    try:
+        session = load_session(tmp_path)
+    finally:
+        locked.chmod(0o644)  # let pytest clean tmp_path up
+
+    assert [lap.source.stem for lap in session.laps] == ["a_fast"]
+    assert session.problems[0][0] == "locked.csv"
+    assert "can't be read" in session.problems[0][1]
+
+
 def test_best_sector_times_take_the_min_per_sector(tmp_path):
     (tmp_path / "a.csv").write_text(GOOD_FAST)  # sectors: 1.0, 1.0
     (tmp_path / "b.csv").write_text(GOOD_SLOW)  # sectors: 1.5, 1.5

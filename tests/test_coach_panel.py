@@ -1,10 +1,14 @@
-"""AI Race Engineer panel: worker round-trip, cards, and evidence-zoom."""
+"""AI Race Engineer panel: worker round-trip, cards, evidence-zoom, and the
+per-run audit trail."""
+
+import json
+from pathlib import Path
 
 import pytest
 
-from apex.coach_panel import FindingCard
+from apex.coach_panel import FindingCard, _CoachTask
 from apex.main_window import MainWindow
-from f1coach_core import load_sample_session
+from f1coach_core import CoachProvider, load_sample_session, workspace_root
 
 
 @pytest.fixture(autouse=True)
@@ -63,6 +67,52 @@ def test_export_report_roundtrip(qtbot, analysis, tmp_path):
     html = out.read_text(encoding="utf-8")
     assert panel.report.findings[0].issue in html
     assert "lap_03" in html and "lap_02" in html
+
+
+def test_every_run_writes_an_audit_record(qtbot, analysis):
+    panel = analysis._panel
+    with qtbot.waitSignal(panel.reportReady, timeout=5000):
+        panel._run()
+
+    assert panel.audit_path is not None and panel.audit_path.is_file()
+    assert panel._audit_button.isEnabled()
+    # sample laps live in package data, so the record falls back to <workspace>/coaching
+    assert panel.audit_path.parent == workspace_root() / "coaching"
+
+    record = json.loads(panel.audit_path.read_text(encoding="utf-8"))
+    assert record["ok"] is True and record["error"] is None
+    assert record["provider"] == "mock" and record["model"] == "mock"
+    assert record["lap"] == "lap_03" and record["reference"] == "lap_02"
+    assert "never invent values" in record["prompt"]  # the exact prompt, verbatim
+    assert record["raw_response"].lstrip().startswith("{")  # the raw stream, verbatim
+    assert len(record["report"]["findings"]) == len(panel.report.findings)
+
+
+class ExplodingCoach(CoachProvider):
+    name = "boom"
+
+    def generate(self, evidence_summary, on_progress=None):
+        if on_progress is not None:
+            on_progress('{"partial')  # died mid-stream
+        raise RuntimeError("watsonx call failed: 401 Unauthorized")
+
+
+def test_failed_runs_are_audited_too(qtbot, analysis):
+    panel = analysis._panel
+    task = _CoachTask(ExplodingCoach(), panel._lap, panel._reference)
+    audits: list[str] = []
+    failures: list[str] = []
+    task.signals.audited.connect(audits.append)
+    task.signals.failed.connect(failures.append)
+
+    task.run()  # QRunnable.run is a plain method — run it synchronously
+
+    assert failures == ["watsonx call failed: 401 Unauthorized"]
+    record = json.loads(Path(audits[0]).read_text(encoding="utf-8"))
+    assert record["ok"] is False and "401" in record["error"]
+    assert record["provider"] == "boom"
+    assert record["raw_response"] == '{"partial'  # what arrived before the failure
+    assert record["model"] is None and record["report"] is None
 
 
 def test_panel_requires_a_reference(qtbot, tmp_path):

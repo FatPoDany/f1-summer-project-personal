@@ -96,7 +96,12 @@ class CompareView(QWidget):
             return
         self._speed_a.setData(lap_a.df["dist"].to_numpy(dtype=float), lap_a.speed_kmh.to_numpy())
         self._speed_b.setData(lap_b.df["dist"].to_numpy(dtype=float), lap_b.speed_kmh.to_numpy())
-        grid, delta = time_delta(lap_a, lap_b)
+        try:
+            grid, delta = time_delta(lap_a, lap_b)
+        except ValueError as exc:  # e.g. laps too short to share a distance grid
+            self._delta_curve.setData([], [])
+            self._verdict.setText(f"Can't compare: {exc}")
+            return
         self._delta_curve.setData(grid, delta)
         behind = float(delta[-1])
         verdict = "behind" if behind >= 0 else "ahead of"

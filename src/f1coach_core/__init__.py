@@ -5,6 +5,7 @@ and render what it returns.
 """
 
 from f1coach_core.analysis import sector_spans, sector_times
+from f1coach_core.audit import coaching_audit_dir, write_coaching_audit
 from f1coach_core.coach import (
     CoachingReport,
     CoachingSchemaError,
@@ -18,6 +19,7 @@ from f1coach_core.coach import (
 )
 from f1coach_core.features import build_evidence_summary, detect_corners, time_delta
 from f1coach_core.lap import Lap
+from f1coach_core.llm import build_coach_prompt
 from f1coach_core.loader import TelemetrySchemaError, load_telemetry_csv
 from f1coach_core.report import render_html_report
 from f1coach_core.sample import load_sample_lap, load_sample_session
@@ -46,7 +48,9 @@ __all__ = [
     "Session",
     "TelemetrySchemaError",
     "available_providers",
+    "build_coach_prompt",
     "build_evidence_summary",
+    "coaching_audit_dir",
     "coaching_report_from_dict",
     "create_session",
     "detect_corners",
@@ -67,4 +71,5 @@ __all__ = [
     "split_torcs_run",
     "time_delta",
     "workspace_root",
+    "write_coaching_audit",
 ]

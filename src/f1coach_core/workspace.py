@@ -27,6 +27,12 @@ def list_sessions() -> list[Path]:
 
 
 def create_session(name: str) -> Path:
+    name = name.strip()
+    if not name or not name.strip(".") or "/" in name or "\\" in name or "\x00" in name:
+        raise ValueError(
+            f"Session name {name!r} won't work as a folder name — use letters, "
+            "numbers, spaces, dashes or underscores."
+        )
     path = sessions_root() / name
     path.mkdir(parents=True, exist_ok=True)
     return path
