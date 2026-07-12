@@ -67,6 +67,9 @@ contain and how they were verified):
 racecoach import path/to/run.csv   # -> <workspace>/runs/<run_id>/{telemetry.csv,meta.json}
 racecoach list                     # stored runs with laps/cadence/cars
 racecoach analyze <run_id>         # rule-based metrics -> runs/<run_id>/metrics.json
+racecoach coach <run_id> [--provider mock|ollama|watsonx] [--bob]
+                                   # five-section feedback -> feedback.json (+ audit)
+racecoach report --run <run_id>    # everything as one HTML file -> report.html
 ```
 
 `analyze` detects, per lap and with distance spans: off-track excursions
@@ -75,8 +78,16 @@ steering jerks, and wheel lock-ups — each detector skips with a readable note
 when its columns are missing. Sections (T1/S1…) come from the exporter's
 `track_seg_type` ground truth, with per-lap speed envelopes and braking
 points. The metrics JSON is the only evidence the LLM feedback stage is
-allowed to cite. `racecoach run` (live Python-controlled capture over SCR)
-lands once the simulator environment exists.
+allowed to cite.
+
+`coach` returns the fixed five sections (overall · highlights · issues ·
+code recommendations · next experiment); the validator refuses any issue
+whose evidence doesn't name a real event id, section, or lap from the
+metrics, and every run — success or failure — leaves a verbatim audit record
+in `runs/<id>/coaching/`. `--bob` grounds the "why" with the newest archived
+IBM Bob code analysis (the manual-export evidence flow is documented in
+`docs/bob/README.md`). `racecoach run` (live Python-controlled capture over
+SCR) lands once the simulator environment exists.
 
 ## Layout
 
@@ -104,11 +115,15 @@ src/apex/                desktop shell, Qt lives here only
   coach_panel.py           AI Race Engineer: provider picker, streaming, ◈ show
   compare_view.py          two-lap cumulative time-delta (before/after coaching)
   widgets/strip_stack.py   ribbon + synced strips + crosshair + evidence-zoom
-src/racecoach/           post-race pipeline CLI (run store, events, metrics)
+src/racecoach/           post-race pipeline CLI (run store, events, metrics, feedback)
   telemetry/run_store.py   <workspace>/runs/<id>/ — raw run + meta, offline-reproducible
   analysis/events.py       off-track, collision, pedal overlap, steer jerk, lock-up
   analysis/sections.py     straight/corner sections from track_seg_type ground truth
   analysis/metrics.py      the run metrics JSON (sole LLM evidence source)
+  feedback/contract.py     five-section feedback contract; evidence refs must exist
+  feedback/engine.py       prompt + providers + per-run audit; mock is metrics-grounded
+  ibm/bob.py               archived IBM Bob exports -> the prompt's code summary
+  report/run_report.py     one self-contained HTML per run (charts + events + feedback)
 scripts/                 sample-session generator · screenshot renderer
 tests/                   pytest (loader, analysis, session, workspace, torcs, shell, racecoach)
 ```

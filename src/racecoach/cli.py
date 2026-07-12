@@ -16,6 +16,7 @@ from pathlib import Path
 from racecoach.analysis.metrics import analyze_run
 from racecoach.feedback.contract import FeedbackSchemaError
 from racecoach.feedback.engine import PROVIDER_NAMES, coach_run
+from racecoach.ibm.bob import BobExportError, load_export, newest_export
 from racecoach.telemetry.run_store import RunImportError, import_run, list_runs, runs_root
 
 
@@ -34,9 +35,14 @@ def main(argv: list[str] | None = None) -> int:
     coach_cmd = commands.add_parser("coach", help="LLM feedback for a stored run")
     coach_cmd.add_argument("run_id")
     coach_cmd.add_argument("--provider", default="mock", choices=PROVIDER_NAMES)
-    coach_cmd.add_argument(
+    summary_source = coach_cmd.add_mutually_exclusive_group()
+    summary_source.add_argument(
         "--code-summary", dest="code_summary", default=None,
         help="path to a code overview (e.g. an IBM Bob export) to ground the why",
+    )
+    summary_source.add_argument(
+        "--bob", action="store_true",
+        help="use the newest archived IBM Bob export (docs/bob/README.md)",
     )
 
     run_cmd = commands.add_parser("run", help="drive the car and capture telemetry (Path B)")
@@ -47,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return _dispatch(args)
-    except (RunImportError, FeedbackSchemaError, RuntimeError, OSError) as exc:
+    except (RunImportError, FeedbackSchemaError, BobExportError, RuntimeError, OSError) as exc:
         print(f"racecoach: {exc}", file=sys.stderr)
         return 2
 
@@ -85,8 +91,12 @@ def _dispatch(args: argparse.Namespace) -> int:
         return 0
     if args.command == "coach":
         summary_text = None
-        if args.code_summary:
-            summary_text = Path(args.code_summary).read_text(encoding="utf-8")
+        if args.bob:
+            source = newest_export()
+            summary_text = load_export(source)
+            print(f"Grounding feedback with Bob export {source.name}")
+        elif args.code_summary:
+            summary_text = load_export(Path(args.code_summary))
         destination = coach_run(args.run_id, provider=args.provider, code_summary=summary_text)
         feedback = json.loads(destination.read_text("utf-8"))
         print(f"Feedback written to {destination}  ({feedback['model']}"
