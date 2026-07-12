@@ -76,7 +76,8 @@ def test_cli_import_analyze_report_flow(run_csv, capsys):
 
     assert main(["run"]) == 2  # Path B pending: readable, non-zero, not a crash
     assert "SCR" in capsys.readouterr().err
-    assert main(["report", "--run", run_id]) == 2
+    assert main(["report", "--run", run_id]) == 0
+    assert (runs_root() / run_id / "report.html").is_file()
 
     assert main(["import", str(run_csv / "missing.csv")]) == 2
     assert "racecoach:" in capsys.readouterr().err

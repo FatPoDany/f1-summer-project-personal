@@ -111,12 +111,11 @@ def _dispatch(args: argparse.Namespace) -> int:
         )
         return 2
     if args.command == "report":
-        print(
-            f"The report stage isn't built yet; for --run {args.run_id} use "
-            "racecoach analyze (metrics) and racecoach coach (feedback) meanwhile",
-            file=sys.stderr,
-        )
-        return 2
+        from racecoach.report.run_report import report_run
+
+        destination = report_run(args.run_id)
+        print(f"Report written to {destination}")
+        return 0
     raise AssertionError(f"unhandled command {args.command}")
 
 
