@@ -47,6 +47,9 @@ def main(argv: list[str] | None = None) -> int:
 
     run_cmd = commands.add_parser("run", help="drive the car and capture telemetry (Path B)")
     run_cmd.add_argument("--config", default="configs/race.toml")
+    run_cmd.add_argument("--host", default=None, help="override [connection].host")
+    run_cmd.add_argument("--port", type=int, default=None, help="override [connection].port")
+    run_cmd.add_argument("--max-laps", type=int, default=None, help="override [race].max_laps")
     report_cmd = commands.add_parser("report", help="render the post-race report")
     report_cmd.add_argument("--run", dest="run_id", required=True)
 
@@ -113,13 +116,17 @@ def _dispatch(args: argparse.Namespace) -> int:
         print(f"Next experiment: {feedback['next_experiment']}")
         return 0
     if args.command == "run":
-        print(
-            "racecoach run needs the live SCR/TORCS environment, which isn't set up "
-            "yet (see docs/DATA_AVAILABILITY.md §6). Import an exporter CSV instead: "
-            "racecoach import <run.csv>",
-            file=sys.stderr,
+        from racecoach.telemetry.live import capture_run
+
+        config, driver = load_race_config(
+            Path(args.config), host=args.host, port=args.port, max_laps=args.max_laps
         )
-        return 2
+        print(f"Connecting to scr_server at {config.host}:{config.port} …")
+        run_dir = capture_run(config, driver)
+        print(f"Captured {run_dir.name} -> {run_dir}")
+        print(f"Next: racecoach analyze {run_dir.name} · racecoach coach {run_dir.name}"
+              f" · racecoach report --run {run_dir.name}")
+        return 0
     if args.command == "report":
         from racecoach.report.run_report import report_run
 
@@ -127,6 +134,37 @@ def _dispatch(args: argparse.Namespace) -> int:
         print(f"Report written to {destination}")
         return 0
     raise AssertionError(f"unhandled command {args.command}")
+
+
+def load_race_config(path: Path, *, host=None, port=None, max_laps=None):
+    """configs/race.toml (+ CLI overrides) -> (LiveConfig, SimpleDriver)."""
+    import tomllib
+
+    from racecoach.control.simple_driver import SimpleDriver
+    from racecoach.telemetry.live import LiveConfig
+
+    data: dict = {}
+    if path.is_file():
+        with open(path, "rb") as handle:
+            data = tomllib.load(handle)
+    elif str(path) != "configs/race.toml":  # an explicitly named config must exist
+        raise RunImportError(f"No such config file: {path}")
+    connection = data.get("connection", {})
+    race = data.get("race", {})
+    config = LiveConfig(
+        host=host or connection.get("host", "localhost"),
+        port=port or int(connection.get("port", 3001)),
+        bot_id=str(connection.get("bot_id", "SCR")),
+        run_name=str(race.get("run_name", "live")),
+        max_laps=max_laps if max_laps is not None else race.get("max_laps", 3),
+        timeout_s=float(connection.get("timeout_s", 1.0)),
+        identify_attempts=int(connection.get("identify_attempts", 5)),
+    )
+    try:
+        driver = SimpleDriver(**data.get("driver", {}))
+    except TypeError as exc:
+        raise RunImportError(f"[driver] in {path} has an unknown key: {exc}") from exc
+    return config, driver
 
 
 if __name__ == "__main__":

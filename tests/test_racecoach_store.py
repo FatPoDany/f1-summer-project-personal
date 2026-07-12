@@ -74,8 +74,10 @@ def test_cli_import_analyze_report_flow(run_csv, capsys):
     metrics = json.loads((runs_root() / run_id / "metrics.json").read_text("utf-8"))
     assert metrics["run"]["run_id"] == run_id
 
-    assert main(["run"]) == 2  # Path B pending: readable, non-zero, not a crash
-    assert "SCR" in capsys.readouterr().err
+    quick = run_csv.parent / "quick.toml"  # no simulator in tests: fail fast, readably
+    quick.write_text('[connection]\ntimeout_s = 0.02\nidentify_attempts = 1\nport = 39999\n')
+    assert main(["run", "--config", str(quick)]) == 2
+    assert "no scr_server answered" in capsys.readouterr().err
     assert main(["report", "--run", run_id]) == 0
     assert (runs_root() / run_id / "report.html").is_file()
 

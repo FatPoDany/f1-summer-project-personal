@@ -83,14 +83,33 @@ def import_run(src: str | Path) -> Path:
             "single-lap CSVs belong in an Apex session instead."
         )
     df = _read_frame(src)
-    meta = _build_meta(src, df)
-    run_dir = runs_root() / meta.run_id
-    run_dir.mkdir(parents=True, exist_ok=False)
+    run_dir = new_run_dir(src.stem)
+    meta = _build_meta(
+        df, run_id=run_dir.name, source_file=src.name, capture="torcs-exporter"
+    )
     shutil.copy2(src, run_dir / TELEMETRY_NAME)
     (run_dir / META_NAME).write_text(
         json.dumps(meta.to_dict(), indent=2), encoding="utf-8"
     )
     return run_dir
+
+
+def new_run_dir(slug: str) -> Path:
+    """Claim a fresh runs/<run_id>/ directory (used by import and live capture)."""
+    run_dir = runs_root() / _unique_run_id(_slug(slug))
+    run_dir.mkdir(parents=True, exist_ok=False)
+    return run_dir
+
+
+def finalize_run(run_dir: Path, source_file: str, capture: str) -> RunMeta:
+    """Build meta.json from whatever telemetry.csv now holds (live capture's
+    last step — after this the run is indistinguishable from an import)."""
+    df = _read_frame(run_dir / TELEMETRY_NAME)
+    meta = _build_meta(df, run_id=run_dir.name, source_file=source_file, capture=capture)
+    (run_dir / META_NAME).write_text(
+        json.dumps(meta.to_dict(), indent=2), encoding="utf-8"
+    )
+    return meta
 
 
 def list_runs() -> list[RunMeta]:
@@ -122,7 +141,7 @@ def _read_frame(path: Path) -> pd.DataFrame:
         raise RunImportError(f"{path.name} is not parseable CSV: {exc}") from exc
 
 
-def _build_meta(src: Path, df: pd.DataFrame) -> RunMeta:
+def _build_meta(df: pd.DataFrame, *, run_id: str, source_file: str, capture: str) -> RunMeta:
     sim_time = pd.to_numeric(df.get("sim_time_s"), errors="coerce").dropna()
     span = float(sim_time.max() - sim_time.min()) if len(sim_time) else 0.0
     steps = sim_time.diff().dropna()
@@ -136,8 +155,8 @@ def _build_meta(src: Path, df: pd.DataFrame) -> RunMeta:
         lap_numbers = pd.to_numeric(df["race_lap"], errors="coerce").dropna()
         laps = tuple(sorted(int(lap) for lap in lap_numbers.unique()))
     return RunMeta(
-        run_id=_unique_run_id(_slug(src.stem)),
-        source_file=src.name,
+        run_id=run_id,
+        source_file=source_file,
         imported_at=datetime.now(UTC).isoformat(timespec="seconds"),
         n_samples=len(df),
         n_columns=len(df.columns),
@@ -145,7 +164,7 @@ def _build_meta(src: Path, df: pd.DataFrame) -> RunMeta:
         laps_seen=laps,
         sim_time_span_s=round(span, 3),
         cadence_hz=cadence,
-        capture="torcs-exporter",
+        capture=capture,
     )
 
 

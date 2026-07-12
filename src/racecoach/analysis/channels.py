@@ -26,7 +26,12 @@ def numeric(df: pd.DataFrame, column: str) -> np.ndarray:
 
 
 def track_pos(df: pd.DataFrame) -> np.ndarray:
-    """Signed lateral position normalized by half track width (±1 = edge)."""
+    """Signed lateral position normalized by half track width (±1 = edge).
+
+    The SCR client logs it directly (`track_pos`); exporter runs derive it
+    from toMiddle and segment width with the server's own formula."""
+    if "track_pos" in df.columns:
+        return numeric(df, "track_pos")
     to_middle = numeric(df, "track_to_middle_m")
     width = numeric(df, "track_seg_width_m")
     with np.errstate(divide="ignore", invalid="ignore"):

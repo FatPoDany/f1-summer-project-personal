@@ -64,7 +64,8 @@ The CLI face of the same package family, for whole TORCS exporter *runs*
 contain and how they were verified):
 
 ```sh
-racecoach import path/to/run.csv   # -> <workspace>/runs/<run_id>/{telemetry.csv,meta.json}
+racecoach run [--config configs/race.toml]   # Path B: drive over SCR, log live
+racecoach import path/to/run.csv   # Path A: -> <workspace>/runs/<run_id>/…
 racecoach list                     # stored runs with laps/cadence/cars
 racecoach analyze <run_id>         # rule-based metrics -> runs/<run_id>/metrics.json
 racecoach coach <run_id> [--provider mock|ollama|watsonx] [--bob]
@@ -86,8 +87,16 @@ whose evidence doesn't name a real event id, section, or lap from the
 metrics, and every run — success or failure — leaves a verbatim audit record
 in `runs/<id>/coaching/`. `--bob` grounds the "why" with the newest archived
 IBM Bob code analysis (the manual-export evidence flow is documented in
-`docs/bob/README.md`). `racecoach run` (live Python-controlled capture over
-SCR) lands once the simulator environment exists.
+`docs/bob/README.md`).
+
+`run` is Path B: a Python controller (`racecoach/control/simple_driver.py`,
+every tunable a named dataclass field) drives over the SCR UDP protocol
+(wire format verified line-by-line against the torcs-1.3.7 scr_server
+sources) while every 20 ms tick is logged, SI-normalized, into the same run
+store — so analyze/coach/report work unchanged on live captures. The whole
+loop is integration-tested against a stub scr_server; what remains is
+pointing it at a real TORCS (none runs on this Mac — see
+`docs/DATA_AVAILABILITY.md` §6).
 
 ## Layout
 
@@ -117,6 +126,9 @@ src/apex/                desktop shell, Qt lives here only
   widgets/strip_stack.py   ribbon + synced strips + crosshair + evidence-zoom
 src/racecoach/           post-race pipeline CLI (run store, events, metrics, feedback)
   telemetry/run_store.py   <workspace>/runs/<id>/ — raw run + meta, offline-reproducible
+  telemetry/scr.py         SCR wire protocol (verified against scr_server sources)
+  telemetry/live.py        Path B capture loop: identify, drive, buffered logging
+  control/simple_driver.py the coached Python controller (pure, parameterised)
   analysis/events.py       off-track, collision, pedal overlap, steer jerk, lock-up
   analysis/sections.py     straight/corner sections from track_seg_type ground truth
   analysis/metrics.py      the run metrics JSON (sole LLM evidence source)

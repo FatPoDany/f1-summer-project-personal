@@ -51,8 +51,12 @@ def detect_events(df: pd.DataFrame) -> tuple[list[Event], list[str]]:
     """Run every detector whose channels exist. Returns (events, skipped-notes)."""
     events: list[Event] = []
     notes: list[str] = []
+    lateral = (  # SCR logs track_pos directly; exporter runs derive it
+        ("track_pos",) if "track_pos" in df.columns
+        else ("track_to_middle_m", "track_seg_width_m")
+    )
     for detector, required in (
-        (_off_track, ("track_to_middle_m", "track_seg_width_m")),
+        (_off_track, lateral),
         (_collision, ("damage",)),
         (_pedal_overlap, ("accel_cmd", "brake_cmd")),
         (_steering_jerk, ("steer_cmd",)),
