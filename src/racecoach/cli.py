@@ -3,6 +3,7 @@
     racecoach import <run.csv>     copy an exporter run into the store
     racecoach list                 show stored runs
     racecoach analyze <run_id>     rule-based metrics -> runs/<id>/metrics.json
+    racecoach bob-analyze [files]  IBM Bob Shell code analysis -> docs/bob/exports/
     racecoach run / report         arrive with Path B and the report stage
 
 Exit codes: 0 ok, 2 readable user error (bad file, unknown run).
@@ -17,6 +18,7 @@ from racecoach.analysis.metrics import analyze_run
 from racecoach.feedback.contract import FeedbackSchemaError
 from racecoach.feedback.engine import PROVIDER_NAMES, coach_run
 from racecoach.ibm.bob import BobExportError, load_export, newest_export
+from racecoach.ibm.bobshell import DEFAULT_QUESTION, analyze_with_bobshell
 from racecoach.telemetry.run_store import RunImportError, import_run, list_runs, runs_root
 
 
@@ -45,6 +47,37 @@ def main(argv: list[str] | None = None) -> int:
         help="use the newest archived IBM Bob export (docs/bob/README.md)",
     )
 
+    bobshell_cmd = commands.add_parser(
+        "bob-analyze",
+        help="run IBM Bob Shell on the control code and archive the answer as an export",
+    )
+    bobshell_cmd.add_argument(
+        "files", nargs="*", default=["src/racecoach/control/simple_driver.py"],
+        help="files Bob is shown, relative to --cwd (default: the simple driver)",
+    )
+    bobshell_cmd.add_argument(
+        "--prompt", default=DEFAULT_QUESTION,
+        help="the question to ask (default: the retroanalysis question from docs/bob/README.md)",
+    )
+    bobshell_cmd.add_argument(
+        "--topic", default="code-retro",
+        help="filename slug for the export: YYYY-MM-DD-<topic>.md",
+    )
+    bobshell_cmd.add_argument(
+        "--cwd", default=None, help="directory to run Bob Shell from (the analysed repo's root)"
+    )
+    bobshell_cmd.add_argument(
+        "--key-file", default=None,
+        help='JSON file with an "apikey" field; BOBSHELL_API_KEY in the environment wins',
+    )
+    bobshell_cmd.add_argument(
+        "--timeout", type=float, default=300.0, help="seconds to wait for Bob's answer"
+    )
+    bobshell_cmd.add_argument(
+        "--accept-license", action="store_true",
+        help="accept the IBM license (needed once, on the first non-interactive run)",
+    )
+
     run_cmd = commands.add_parser("run", help="drive the car and capture telemetry (Path B)")
     run_cmd.add_argument("--config", default="configs/race.toml")
     run_cmd.add_argument("--host", default=None, help="override [connection].host")
@@ -56,6 +89,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return _dispatch(args)
+    except KeyboardInterrupt:
+        print("racecoach: interrupted.", file=sys.stderr)
+        return 130
     except (RunImportError, FeedbackSchemaError, BobExportError, RuntimeError, OSError) as exc:
         print(f"racecoach: {exc}", file=sys.stderr)
         return 2
@@ -114,6 +150,21 @@ def _dispatch(args: argparse.Namespace) -> int:
         for line in feedback["code_recommendations"]:
             print(f"  # {line}")
         print(f"Next experiment: {feedback['next_experiment']}")
+        return 0
+    if args.command == "bob-analyze":
+        print(f"Asking Bob Shell (may take a few minutes; timeout {args.timeout:.0f}s) …",
+              flush=True)
+        destination = analyze_with_bobshell(
+            args.prompt,
+            args.files,
+            topic=args.topic,
+            cwd=args.cwd,
+            key_file=Path(args.key_file) if args.key_file else None,
+            timeout_s=args.timeout,
+            accept_license=args.accept_license,
+        )
+        print(f"Bob Shell answer archived as {destination}")
+        print("Next: racecoach coach <run_id> --bob")
         return 0
     if args.command == "run":
         from racecoach.telemetry.live import capture_run
