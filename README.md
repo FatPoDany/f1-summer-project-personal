@@ -57,6 +57,27 @@ python scripts/screenshot.py  # Garage/Analysis/Compare/audit PNGs for blog post
 Python ≥ 3.11. On headless boxes run Qt things with `QT_QPA_PLATFORM=offscreen`.
 The workspace lives at `~/Apex/sessions/` (override with `APEX_WORKSPACE`).
 
+## racecoach — post-race pipeline CLI
+
+The CLI face of the same package family, for whole TORCS exporter *runs*
+(multi-lap raw CSVs; see `docs/DATA_AVAILABILITY.md` for exactly what they
+contain and how they were verified):
+
+```sh
+racecoach import path/to/run.csv   # -> <workspace>/runs/<run_id>/{telemetry.csv,meta.json}
+racecoach list                     # stored runs with laps/cadence/cars
+racecoach analyze <run_id>         # rule-based metrics -> runs/<run_id>/metrics.json
+```
+
+`analyze` detects, per lap and with distance spans: off-track excursions
+(|2·toMiddle/width| > 1), collisions (damage deltas), throttle+brake overlap,
+steering jerks, and wheel lock-ups — each detector skips with a readable note
+when its columns are missing. Sections (T1/S1…) come from the exporter's
+`track_seg_type` ground truth, with per-lap speed envelopes and braking
+points. The metrics JSON is the only evidence the LLM feedback stage is
+allowed to cite. `racecoach run` (live Python-controlled capture over SCR)
+lands once the simulator environment exists.
+
 ## Layout
 
 ```
@@ -83,8 +104,13 @@ src/apex/                desktop shell, Qt lives here only
   coach_panel.py           AI Race Engineer: provider picker, streaming, ◈ show
   compare_view.py          two-lap cumulative time-delta (before/after coaching)
   widgets/strip_stack.py   ribbon + synced strips + crosshair + evidence-zoom
+src/racecoach/           post-race pipeline CLI (run store, events, metrics)
+  telemetry/run_store.py   <workspace>/runs/<id>/ — raw run + meta, offline-reproducible
+  analysis/events.py       off-track, collision, pedal overlap, steer jerk, lock-up
+  analysis/sections.py     straight/corner sections from track_seg_type ground truth
+  analysis/metrics.py      the run metrics JSON (sole LLM evidence source)
 scripts/                 sample-session generator · screenshot renderer
-tests/                   pytest (loader, analysis, session, workspace, torcs, shell)
+tests/                   pytest (loader, analysis, session, workspace, torcs, shell, racecoach)
 ```
 
 House rule: **the app never computes telemetry truth** — it renders what

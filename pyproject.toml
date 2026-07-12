@@ -31,9 +31,10 @@ package = [
 
 [project.scripts]
 apex = "apex.app:main"
+racecoach = "racecoach.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/apex", "src/f1coach_core"]
+packages = ["src/apex", "src/f1coach_core", "src/racecoach"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
