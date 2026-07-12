@@ -49,4 +49,4 @@ src = ["src", "tests", "scripts"]
 select = ["E", "F", "W", "I", "UP", "B"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["apex", "f1coach_core"]
+known-first-party = ["apex", "f1coach_core", "racecoach"]

@@ -11,6 +11,8 @@ coaching contract, LLM providers, and audit trail.
 from racecoach.analysis.events import Event, detect_events
 from racecoach.analysis.metrics import build_run_metrics
 from racecoach.analysis.sections import Section, detect_sections
+from racecoach.feedback.contract import FeedbackSchemaError, RunFeedback, feedback_from_dict
+from racecoach.feedback.engine import build_feedback_prompt, coach_run, mock_feedback
 from racecoach.telemetry.run_store import (
     LoadedRun,
     RunImportError,
@@ -23,15 +25,21 @@ from racecoach.telemetry.run_store import (
 
 __all__ = [
     "Event",
+    "FeedbackSchemaError",
     "LoadedRun",
+    "RunFeedback",
     "RunImportError",
     "RunMeta",
     "Section",
+    "build_feedback_prompt",
     "build_run_metrics",
+    "coach_run",
     "detect_events",
     "detect_sections",
+    "feedback_from_dict",
     "import_run",
     "list_runs",
     "load_run",
+    "mock_feedback",
     "runs_root",
 ]

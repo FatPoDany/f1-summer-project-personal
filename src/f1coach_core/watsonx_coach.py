@@ -91,13 +91,14 @@ class WatsonxCoach(CoachProvider):
         self._stream_factory = stream_factory or _sdk_stream
         self._resolve = credentials_resolver or resolve_credentials
 
-    def generate(
+    def stream_completion(
         self,
-        evidence_summary: dict,
+        prompt: str,
         on_progress: Callable[[str], None] | None = None,
-    ) -> CoachingReport:
+    ) -> str:
+        """Send one prompt, stream back the full text. The lap-coach contract
+        and racecoach's run-level feedback engine both ride on this."""
         credentials = self._resolve()
-        prompt = build_coach_prompt(evidence_summary)
         text = ""
         try:
             for chunk in self._stream_factory(credentials, self.model_id, prompt):
@@ -111,4 +112,12 @@ class WatsonxCoach(CoachProvider):
                 f"watsonx call failed: {exc}. Check the API key and project id, "
                 f"the endpoint ({credentials.url}), and that this machine is online."
             ) from exc
+        return text
+
+    def generate(
+        self,
+        evidence_summary: dict,
+        on_progress: Callable[[str], None] | None = None,
+    ) -> CoachingReport:
+        text = self.stream_completion(build_coach_prompt(evidence_summary), on_progress)
         return report_from_llm_text(text, model=self.model_id)

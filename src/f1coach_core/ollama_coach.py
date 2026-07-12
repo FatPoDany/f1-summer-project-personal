@@ -64,14 +64,16 @@ class OllamaCoach(CoachProvider):
         self._transport = transport or _http_stream
         self._timeout = timeout
 
-    def generate(
+    def stream_completion(
         self,
-        evidence_summary: dict,
+        prompt: str,
         on_progress: Callable[[str], None] | None = None,
-    ) -> CoachingReport:
+    ) -> str:
+        """Send one prompt, stream back the full text. The lap-coach contract
+        and racecoach's run-level feedback engine both ride on this."""
         payload = {
             "model": self.model,
-            "messages": [{"role": "user", "content": build_coach_prompt(evidence_summary)}],
+            "messages": [{"role": "user", "content": prompt}],
             "stream": True,
             "format": "json",
             "options": {"temperature": 0.2, "num_predict": 1500},
@@ -98,4 +100,12 @@ class OllamaCoach(CoachProvider):
                 f"Ollama sent a line that isn't JSON ({exc}) — is something else "
                 f"listening on {self.base_url}?"
             ) from exc
+        return text
+
+    def generate(
+        self,
+        evidence_summary: dict,
+        on_progress: Callable[[str], None] | None = None,
+    ) -> CoachingReport:
+        text = self.stream_completion(build_coach_prompt(evidence_summary), on_progress)
         return report_from_llm_text(text, model=f"ollama/{self.model}")
