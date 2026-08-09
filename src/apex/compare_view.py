@@ -9,9 +9,10 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from apex import theme
-from f1coach_core import Lap, Session, time_delta
+from f1coach_core import Lap, Session, corner_table, time_delta
 
 AXIS_WIDTH = 64
+NARRATE_THRESHOLD_S = 0.05  # corner deltas below this aren't worth a sentence
 
 
 class CompareView(QWidget):
@@ -62,10 +63,18 @@ class CompareView(QWidget):
             # no clip-to-view here: it defers data until a paint happens, and
             # these traces are small enough that clipping buys nothing
 
+        self._changed = QLabel("")
+        self._remaining = QLabel("")
+        for label in (self._changed, self._remaining):
+            label.setWordWrap(True)
+            label.setStyleSheet(f"color: {theme.TEXT_DIM};")
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 4)
         layout.addLayout(header)
         layout.addWidget(glw, stretch=1)
+        layout.addWidget(self._changed)
+        layout.addWidget(self._remaining)
 
     def set_session(self, session: Session, lap_a: Lap | None = None) -> None:
         """Populate the pickers: A is the given lap (default: first non-best),
@@ -101,6 +110,8 @@ class CompareView(QWidget):
         except ValueError as exc:  # e.g. laps too short to share a distance grid
             self._delta_curve.setData([], [])
             self._verdict.setText(f"Can't compare: {exc}")
+            self._changed.clear()
+            self._remaining.clear()
             return
         self._delta_curve.setData(grid, delta)
         behind = float(delta[-1])
@@ -109,5 +120,48 @@ class CompareView(QWidget):
             f"{lap_a.source.stem} crosses the line {abs(behind):.3f} s {verdict} "
             f"{lap_b.source.stem}"
         )
+        self._narrate(lap_a, lap_b)
         for plot in (self._speed_plot, self._delta_plot):
             plot.enableAutoRange()
+
+    def _narrate(self, lap_a: Lap, lap_b: Lap) -> None:
+        """The mockup's "What changed / Still on the table" lines, derived
+        per corner with B (the after/right lap) measured against A."""
+        rows = [] if lap_a is lap_b else corner_table(lap_b, lap_a)
+        if not rows:
+            self._changed.clear()
+            self._remaining.clear()
+            return
+        b_name = lap_b.source.stem
+        gained = min(rows, key=lambda row: row["delta_s"])
+        lost = max(rows, key=lambda row: row["delta_s"])
+        if gained["delta_s"] < -NARRATE_THRESHOLD_S:
+            bits = []
+            before, after = gained["ref_brake_point_m"], gained["brake_point_m"]
+            if before is not None and after is not None and f"{before:,.0f}" != f"{after:,.0f}":
+                bits.append(f"brake point {before:,.0f} → {after:,.0f} m")
+            bits.append(
+                f"min speed {gained['ref_min_speed_kmh']:.0f} →"
+                f" {gained['min_speed_kmh']:.0f} km/h"
+            )
+            self._changed.setText(
+                f"<b style='color:{theme.GREEN};'>What changed</b> — "
+                f"{gained['corner']}: {' · '.join(bits)} · {gained['delta_s']:+.3f} s"
+                f" for {b_name}"
+            )
+        else:
+            self._changed.setText(
+                f"<b style='color:{theme.GREEN};'>What changed</b> — no corner where "
+                f"{b_name} gains more than {NARRATE_THRESHOLD_S:.2f} s"
+            )
+        if lost["delta_s"] > NARRATE_THRESHOLD_S:
+            self._remaining.setText(
+                f"<b style='color:{theme.YELLOW};'>Still on the table</b> — "
+                f"{lost['corner']}: {b_name} loses {lost['delta_s']:+.3f} s. "
+                f"Suggested focus for the next run."
+            )
+        else:
+            self._remaining.setText(
+                f"<b style='color:{theme.YELLOW};'>Still on the table</b> — nothing above "
+                f"{NARRATE_THRESHOLD_S:.2f} s at corner level"
+            )

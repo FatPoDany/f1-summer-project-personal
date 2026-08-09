@@ -1,15 +1,18 @@
-"""Lap Analysis screen: reference picker + sector ribbon + synced strips,
-with the AI Race Engineer panel docked on the right ("◈ show" zooms the
-strips onto a finding's evidence zone)."""
+"""Lap Analysis screen: reference picker + sector ribbon + synced strips
+over a corner table, with the AI Race Engineer panel docked on the right
+("◈ show" and corner-row clicks zoom the strips onto the cited zone)."""
 
 from pathlib import Path
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
     QLabel,
     QSplitter,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -17,7 +20,21 @@ from PySide6.QtWidgets import (
 from apex import theme
 from apex.coach_panel import CoachPanel
 from apex.widgets.strip_stack import StripStack
-from f1coach_core import Lap, Session, render_html_report, sector_times
+from f1coach_core import Lap, Session, corner_table, render_html_report, sector_times
+
+CORNER_HEADERS = ("Corner", "Brake point", "Min speed", "Exit +200 m", "Δ vs ref")
+FLAG_THRESHOLD_S = 0.05  # a corner delta worth colouring / flagging at all
+
+
+def _vs_m(mine: float | None, ref: float | None) -> str:
+    """Mockup format: "4,362 · ref 4,404 m" — em-dash when never crossed."""
+
+    def fmt(value: float | None) -> str:
+        return f"{value:,.0f}" if value is not None else "—"
+
+    if mine is None and ref is None:
+        return "—"
+    return f"{fmt(mine)} · ref {fmt(ref)} m"
 
 
 class AnalysisView(QWidget):
@@ -25,11 +42,15 @@ class AnalysisView(QWidget):
         super().__init__(parent)
         self._lap: Lap | None = None
         self._session: Session | None = None
+        self._corner_rows: list[dict] = []
 
         self._title = QLabel("No lap loaded")
         self._title.setStyleSheet("font-weight: 600;")
         self._readout = QLabel("")
         self._readout.setStyleSheet(f"color: {theme.TEXT_DIM}; font-family: monospace;")
+        self._theoretical = QLabel("")
+        self._theoretical.setStyleSheet(f"color: {theme.PURPLE};")
+        self._theoretical.setToolTip("Best sectors combined — what a clean lap is worth")
         self._ref_combo = QComboBox()
         self._ref_combo.setMinimumWidth(220)
         self._ref_combo.currentIndexChanged.connect(self._apply_reference)
@@ -39,19 +60,39 @@ class AnalysisView(QWidget):
         header.addStretch(1)
         header.addWidget(self._readout)
         header.addSpacing(12)
+        header.addWidget(self._theoretical)
+        header.addSpacing(12)
         header.addWidget(QLabel("Reference:"))
         header.addWidget(self._ref_combo)
 
         self._stack = StripStack(self)
         self._stack.cursorMoved.connect(self._update_readout)
 
+        self._corners = QTableWidget(0, len(CORNER_HEADERS))
+        self._corners.setHorizontalHeaderLabels(CORNER_HEADERS)
+        self._corners.horizontalHeader().setStretchLastSection(True)
+        self._corners.verticalHeader().setVisible(False)
+        self._corners.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._corners.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._corners.setMaximumHeight(190)
+        self._corners.setToolTip("Click a corner to zoom the strips onto its zone")
+        self._corners.cellClicked.connect(self._zoom_corner_row)
+        self._corners.hide()
+
         self._panel = CoachPanel(self)
         self._panel.setMinimumWidth(300)
         self._panel.evidenceRequested.connect(self._show_evidence)
         self._panel.viewResetRequested.connect(self._stack.reset_view)
 
+        charts = QWidget()
+        charts_layout = QVBoxLayout(charts)
+        charts_layout.setContentsMargins(0, 0, 0, 0)
+        charts_layout.setSpacing(4)
+        charts_layout.addWidget(self._stack, stretch=1)
+        charts_layout.addWidget(self._corners)
+
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(self._stack)
+        splitter.addWidget(charts)
         splitter.addWidget(self._panel)
         splitter.setStretchFactor(0, 4)
         splitter.setStretchFactor(1, 1)
@@ -72,6 +113,10 @@ class AnalysisView(QWidget):
         if session is not None:
             title = f"{session.name} · {title}"
         self._title.setText(title)
+        best_sectors = session.best_sector_times if session is not None else {}
+        self._theoretical.setText(
+            f"Theoretical {sum(best_sectors.values()):.3f} s" if best_sectors else ""
+        )
         self._rebuild_reference_combo()
         self._apply_reference()
 
@@ -106,10 +151,58 @@ class AnalysisView(QWidget):
         self._stack.set_lap(self._lap, self._sector_colors(reference))
         self._stack.set_reference(reference)
         self._panel.set_context(self._lap, reference)
+        self._populate_corners(reference)
 
     def _show_evidence(self, d0: float, d1: float) -> None:
         self._stack.highlight_span(d0, d1)
         self._stack.zoom_to_span(d0, d1)
+
+    # -- corner table ------------------------------------------------------
+
+    def _populate_corners(self, reference: Lap | None) -> None:
+        self._corner_rows = []
+        if self._lap is None or reference is None:
+            self._corners.hide()
+            return
+        try:
+            rows = corner_table(self._lap, reference)
+        except ValueError:  # laps too short to share a distance grid
+            rows = []
+        if not rows:
+            self._corners.hide()
+            return
+        self._corner_rows = rows
+        worst = max(range(len(rows)), key=lambda i: rows[i]["delta_s"])
+        self._corners.setRowCount(len(rows))
+        for i, row in enumerate(rows):
+            delta = row["delta_s"]
+            flagged = i == worst and delta > FLAG_THRESHOLD_S
+            cells = (
+                f"{row['corner']} ⚠" if flagged else row["corner"],
+                _vs_m(row["brake_point_m"], row["ref_brake_point_m"]),
+                f"{row['min_speed_kmh']:.0f} / {row['ref_min_speed_kmh']:.0f}",
+                f"{row['exit_speed_kmh']:.0f} / {row['ref_exit_speed_kmh']:.0f}",
+                f"{delta:+.3f}",
+            )
+            for col, text in enumerate(cells):
+                item = QTableWidgetItem(text)
+                if col == 0 and flagged:
+                    item.setForeground(QColor(theme.RED))
+                if col == len(cells) - 1:
+                    if delta > FLAG_THRESHOLD_S:
+                        item.setForeground(QColor(theme.RED))
+                    elif delta < -FLAG_THRESHOLD_S:
+                        item.setForeground(QColor(theme.GREEN))
+                    else:
+                        item.setForeground(QColor(theme.TEXT_DIM))
+                self._corners.setItem(i, col, item)
+        self._corners.resizeColumnsToContents()
+        self._corners.show()
+
+    def _zoom_corner_row(self, row: int, _col: int = 0) -> None:
+        if 0 <= row < len(self._corner_rows):
+            d0, d1 = self._corner_rows[row]["span_m"]
+            self._show_evidence(d0, d1)
 
     # -- report export ----------------------------------------------------
 

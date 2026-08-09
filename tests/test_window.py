@@ -33,7 +33,7 @@ def test_garage_lists_sample_session_and_opens_laps(qtbot):
     garage = window._garage
     assert garage.session is not None and len(garage.session.laps) == 3
     assert garage._table.rowCount() == 3
-    assert garage._table.item(1, 3).text() == "BEST"  # lap_02
+    assert garage._table.item(1, 3).text() == "SESSION BEST"  # lap_02
 
     with qtbot.waitSignal(garage.lapOpened):
         garage._open_row(1)

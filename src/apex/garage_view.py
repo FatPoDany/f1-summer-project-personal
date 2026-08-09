@@ -26,6 +26,7 @@ from f1coach_core import (
     TelemetrySchemaError,
     create_session,
     import_telemetry,
+    latest_coaching_outcomes,
     list_sessions,
     load_session,
 )
@@ -43,6 +44,7 @@ class GarageView(QWidget):
         self._watcher = QFileSystemWatcher(self)
         self._watcher.directoryChanged.connect(self._watched_dir_changed)
         self._watched_seen: set[str] = set()
+        self._fresh: set[str] = set()  # lap stems imported this run, not yet opened
 
         self._session_list = QListWidget()
         self._session_list.currentRowChanged.connect(lambda _row: self._load_selected())
@@ -130,21 +132,25 @@ class GarageView(QWidget):
         if session is None:
             return
         best = session.best_lap
+        coached = latest_coaching_outcomes(session.path)
         rows = len(session.laps) + len(session.problems)
         self._table.setRowCount(rows)
         for row, lap in enumerate(session.laps):
             delta = session.delta_to_best(lap)
             is_best = lap is best
+            status, status_color = self._lap_status(lap.source.stem, is_best, coached)
             cells = (
                 lap.source.stem,
                 f"{lap.lap_time:.3f} s",
                 "—" if is_best else f"+{delta:.3f}",
-                "BEST" if is_best else "",
+                status,
             )
             for col, text in enumerate(cells):
                 item = QTableWidgetItem(text)
                 if is_best:
                     item.setForeground(QColor(theme.PURPLE))
+                elif col == 3 and status_color:
+                    item.setForeground(QColor(status_color))
                 self._table.setItem(row, col, item)
         for i, (name, message) in enumerate(session.problems):
             row = len(session.laps) + i
@@ -155,9 +161,24 @@ class GarageView(QWidget):
                 item.setToolTip(message)
                 self._table.setItem(row, col, item)
 
+    def _lap_status(self, stem: str, is_best: bool, coached: dict[str, int]) -> tuple[str, str]:
+        """Mockup vocabulary: SESSION BEST beats COACHED beats NEW beats blank."""
+        if is_best:
+            return "SESSION BEST", theme.PURPLE
+        if stem in coached:
+            n = coached[stem]
+            return (f"COACHED · {n} finding{'s' if n != 1 else ''}" if n else "COACHED · clean"), ""
+        if stem in self._fresh:
+            return "NEW — just captured", theme.GREEN
+        return "", ""
+
     def _open_row(self, row: int, _col: int = 0) -> None:
         if self._session is not None and 0 <= row < len(self._session.laps):
-            self.lapOpened.emit(self._session.laps[row], self._session)
+            lap = self._session.laps[row]
+            if lap.source.stem in self._fresh:
+                self._fresh.discard(lap.source.stem)
+                self._populate_table()
+            self.lapOpened.emit(lap, self._session)
 
     # -- import / watch ------------------------------------------------------
 
@@ -192,6 +213,9 @@ class GarageView(QWidget):
         except (TelemetrySchemaError, OSError) as exc:
             QMessageBox.critical(self, "Can't import telemetry", str(exc))
         else:
+            # the copy usually keeps the stem; on rename-collisions the NEW
+            # tag is merely missed — it's a hint, not part of the audit trail
+            self._fresh.add(path.stem)
             self.status.emit(summary)
 
     def _toggle_watch(self, checked: bool) -> None:

@@ -61,3 +61,25 @@ def write_coaching_audit(
     dest = _unique_dest(directory, f"{now:%Y%m%d-%H%M%S}-{provider}.json")
     dest.write_text(json.dumps(record, indent=2), encoding="utf-8")
     return dest
+
+
+def latest_coaching_outcomes(session_path: str | Path) -> dict[str, int]:
+    """Lap name -> findings count, from each lap's newest successful audit.
+
+    Drives the Garage's "COACHED · n findings" status. Timestamped filenames
+    make lexical order chronological, so later records win; unreadable or
+    failed records are skipped rather than surfaced — this is a status hint,
+    not the audit trail itself."""
+    directory = Path(session_path) / AUDIT_DIR_NAME
+    if not directory.is_dir():
+        return {}
+    outcomes: dict[str, int] = {}
+    for path in sorted(directory.glob("*.json")):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        report = record.get("report")
+        if record.get("ok") and isinstance(report, dict) and record.get("lap"):
+            outcomes[str(record["lap"])] = len(report.get("findings") or [])
+    return outcomes

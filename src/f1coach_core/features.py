@@ -170,3 +170,41 @@ def _first_above(
     """Distance where the channel first crosses the threshold in [i0, i1)."""
     hits = np.flatnonzero(channel[i0:i1] >= threshold)
     return round(float(grid[i0 + hits[0]]), 1) if hits.size else None
+
+
+EXIT_OFFSET = 200.0  # metres past the apex where exit speed is read (the mockup's column)
+
+
+def corner_table(lap: Lap, reference: Lap) -> list[dict]:
+    """Per-corner comparison rows for the Analysis screen's corner table.
+
+    The evidence summary's corner zones plus exit speeds, one row per corner:
+    brake point, minimum speed, exit speed at apex+200 m (mine vs reference)
+    and the time gained/lost across the zone. Purely presentational — the
+    coach prompt contract (build_evidence_summary) is untouched.
+    """
+    grid, delta = time_delta(lap, reference)
+    mine = _on_grid(lap, grid)
+    ref = _on_grid(reference, grid)
+    rows = []
+    for zone in detect_corners(reference):
+        d0, d1 = zone["span_m"]
+        i0 = int(np.searchsorted(grid, d0))
+        i1 = min(int(np.searchsorted(grid, d1)), grid.size - 1)
+        apex = int(np.searchsorted(grid, zone["apex_m"]))
+        if i1 <= i0:
+            continue
+        exit_i = min(int(np.searchsorted(grid, zone["apex_m"] + EXIT_OFFSET)), grid.size - 1)
+        rows.append(
+            {
+                **zone,
+                "brake_point_m": _first_above(grid, mine["brake"], i0, apex, BRAKE_THRESHOLD),
+                "ref_brake_point_m": _first_above(grid, ref["brake"], i0, apex, BRAKE_THRESHOLD),
+                "min_speed_kmh": round(float(mine["speed"][i0:i1].min()) * 3.6, 1),
+                "ref_min_speed_kmh": round(float(ref["speed"][i0:i1].min()) * 3.6, 1),
+                "exit_speed_kmh": round(float(mine["speed"][exit_i]) * 3.6, 1),
+                "ref_exit_speed_kmh": round(float(ref["speed"][exit_i]) * 3.6, 1),
+                "delta_s": round(float(delta[i1] - delta[i0]), 3),
+            }
+        )
+    return rows

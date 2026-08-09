@@ -60,3 +60,21 @@ def test_summary_against_itself_is_flat(session):
     for corner in summary["corners"]:
         assert corner["time_lost_s"] == pytest.approx(0.0, abs=0.02)
         assert corner["min_speed_kmh"] == corner["ref_min_speed_kmh"]
+
+
+def test_corner_table_extends_the_summary_zones_with_exits():
+    session = load_sample_session()
+    from f1coach_core import corner_table
+
+    lap, best = session.laps[2], session.best_lap
+    rows = corner_table(lap, best)
+    summary = build_evidence_summary(lap, best)
+
+    # same zones, same per-corner time deltas — one source of truth
+    assert [r["corner"] for r in rows] == [c["corner"] for c in summary["corners"]]
+    assert [r["delta_s"] for r in rows] == [c["time_lost_s"] for c in summary["corners"]]
+    for row in rows:
+        assert row["exit_speed_kmh"] > 0 and row["ref_exit_speed_kmh"] > 0
+        assert {"brake_point_m", "ref_brake_point_m", "min_speed_kmh"} <= set(row)
+    # the ragged lap loses time in corners overall
+    assert sum(r["delta_s"] for r in rows) > 0

@@ -5,7 +5,7 @@ and render what it returns.
 """
 
 from f1coach_core.analysis import sector_spans, sector_times
-from f1coach_core.audit import coaching_audit_dir, write_coaching_audit
+from f1coach_core.audit import coaching_audit_dir, latest_coaching_outcomes, write_coaching_audit
 from f1coach_core.coach import (
     CoachingReport,
     CoachingSchemaError,
@@ -17,7 +17,7 @@ from f1coach_core.coach import (
     coaching_report_from_dict,
     get_provider,
 )
-from f1coach_core.features import build_evidence_summary, detect_corners, time_delta
+from f1coach_core.features import build_evidence_summary, corner_table, detect_corners, time_delta
 from f1coach_core.lap import Lap
 from f1coach_core.llm import build_coach_prompt
 from f1coach_core.loader import TelemetrySchemaError, load_telemetry_csv
@@ -52,6 +52,7 @@ __all__ = [
     "build_evidence_summary",
     "coaching_audit_dir",
     "coaching_report_from_dict",
+    "corner_table",
     "create_session",
     "detect_corners",
     "ensure_sample_session",
@@ -59,6 +60,7 @@ __all__ = [
     "import_lap",
     "import_telemetry",
     "is_torcs_export",
+    "latest_coaching_outcomes",
     "list_sessions",
     "load_sample_lap",
     "load_sample_session",

@@ -57,3 +57,21 @@ def test_too_short_laps_read_as_cant_compare(qtbot, tmp_path):
     assert "Can't compare" in view._verdict.text()
     x, _y = view._delta_curve.getData()
     assert x is None or len(x) == 0
+    assert view._changed.text() == "" and view._remaining.text() == ""
+
+
+def test_narrative_lines_derive_from_the_corner_table(qtbot):
+    session = load_sample_session()
+    view = CompareView()
+    qtbot.addWidget(view)
+    view.show()
+    view.set_session(session)  # A = lap_01, B = the session best (lap_02)
+
+    # B is the best lap: its biggest corner gain is narrated with numbers…
+    changed = view._changed.text()
+    assert "What changed" in changed and "km/h" in changed and "lap_02" in changed
+    # …and nothing is left on the table against a slower lap
+    assert "Still on the table" in view._remaining.text()
+
+    view._combo_b.setCurrentIndex(0)  # compare lap_01 with itself
+    assert view._changed.text() == "" and view._remaining.text() == ""
