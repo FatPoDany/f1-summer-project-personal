@@ -1,15 +1,67 @@
-__pycache__/
-*.pyc
+# Secrets and local credentials
+.env
+.env.*
+!.env.example
+apex.json
+**/apex.json
+*credentials*.json
+*secret*.json
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local agents, editors, and OS metadata
+.agents/
+.codex/
+.obsidian/
+/.git-personal/
+/.git-personal-auth/
+.DS_Store
+**/.DS_Store
+._*
+__MACOSX/
+**/.bob/
+~$*
+*.swp
+*~
+
+# Python environments, caches, and build output
 .venv/
 venv/
-dist/
-build/
-*.egg-info/
+env/
+__pycache__/
+*.py[cod]
 .pytest_cache/
 .ruff_cache/
-.DS_Store
-/screenshot.png
-/shots/
-/apex-garage.png
-/apex-analysis.png
-.bob/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
+build/
+dist/
+
+# Generated runs and large raw data
+logs/
+outputs/
+artifacts/
+data/raw/
+telemetry/raw/
+*.log
+*.dmg
+*.mp4
+
+# Existing archives, damaged placeholders, and shared team material
+/apex.zip
+/Torcs/
+/Project Onboarding artifacts-selected/
+/team_member_progress/
+/hard-task-protocol/
+/剪切板.md
+/IBM_F1_Telemetry_Coaching_Supervisor_Plan.docx
+/IBM_Office_Hours_Meeting_Summary.docx
+/Proposals.docx
+/Summer project proposal.docx
+/Team Task Allocation.docx
+/~$分工.docx

@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.DS_Store
+/screenshot.png
+/shots/
+/apex-garage.png
+/apex-analysis.png
+.bob/

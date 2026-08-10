@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "apex-f1coach"
+version = "0.1.0.dev0"
+description = "Apex — desktop telemetry & AI driver-coaching app (Bristol MSc x IBM F1 project)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "PySide6>=6.8",
+    "pyqtgraph>=0.13.7",
+    "pandas>=2.1",
+    "numpy>=1.26",
+    "keyring>=25",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-qt>=4.4",
+    "ruff>=0.6",
+]
+watsonx = [
+    "ibm-watsonx-ai>=1.1",
+]
+package = [
+    "pyinstaller>=6.11",
+]
+
+[project.scripts]
+apex = "apex.app:main"
+racecoach = "racecoach.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/apex", "src/f1coach_core", "src/racecoach"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+qt_api = "pyside6"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["apex", "f1coach_core", "racecoach"]
