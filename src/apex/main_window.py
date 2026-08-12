@@ -1,5 +1,5 @@
-"""The window shell: toolbar navigation between Garage and Lap Analysis,
-menu, drag-and-drop, status line.
+"""The window shell: Garage, analysis, comparison, and Live Pit Wall views,
+plus menu, drag-and-drop, and status line.
 
 Dropping or opening a canonical lap CSV goes straight to Lap Analysis;
 a TORCS run export is split into laps and lands as a session in the Garage.
@@ -7,12 +7,20 @@ a TORCS run export is split into laps and lands as a session in the Garage.
 
 from pathlib import Path
 
-from PySide6.QtGui import QAction, QActionGroup, QDragEnterEvent, QDropEvent, QKeySequence
+from PySide6.QtGui import (
+    QAction,
+    QActionGroup,
+    QCloseEvent,
+    QDragEnterEvent,
+    QDropEvent,
+    QKeySequence,
+)
 from PySide6.QtWidgets import QFileDialog, QMainWindow, QMessageBox, QStackedWidget
 
 from apex.analysis_view import AnalysisView
 from apex.compare_view import CompareView
 from apex.garage_view import GarageView
+from apex.live_view import LivePitWallView
 from f1coach_core import (
     Lap,
     Session,
@@ -34,10 +42,12 @@ class MainWindow(QMainWindow):
         self._garage = GarageView(self)
         self._analysis = AnalysisView(self)
         self._compare = CompareView(self)
+        self._live = LivePitWallView(self)
         self._stacked = QStackedWidget(self)
         self._stacked.addWidget(self._garage)
         self._stacked.addWidget(self._analysis)
         self._stacked.addWidget(self._compare)
+        self._stacked.addWidget(self._live)
         self.setCentralWidget(self._stacked)
 
         self._garage.lapOpened.connect(self.show_analysis)
@@ -131,7 +141,16 @@ class MainWindow(QMainWindow):
         self._compare_action.triggered.connect(
             lambda: self._stacked.setCurrentWidget(self._compare)
         )
-        for action in (self._garage_action, self._analysis_action, self._compare_action):
+        self._live_action = QAction("Live Pit Wall", self, checkable=True)
+        self._live_action.triggered.connect(
+            lambda: self._stacked.setCurrentWidget(self._live)
+        )
+        for action in (
+            self._garage_action,
+            self._analysis_action,
+            self._compare_action,
+            self._live_action,
+        ):
             group.addAction(action)
             toolbar.addAction(action)
         self._stacked.currentChanged.connect(self._sync_view_actions)
@@ -143,9 +162,15 @@ class MainWindow(QMainWindow):
             (self._garage, self._garage_action),
             (self._analysis, self._analysis_action),
             (self._compare, self._compare_action),
+            (self._live, self._live_action),
         ):
             if widget is view:
                 action.setChecked(True)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """Bound shutdown time while asking an active capture to brake and stop."""
+        self._live.shutdown(timeout_s=2.0)
+        super().closeEvent(event)
 
     def _pick_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(

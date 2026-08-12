@@ -4,13 +4,15 @@
     racecoach list                 show stored runs
     racecoach analyze <run_id>     rule-based metrics -> runs/<id>/metrics.json
     racecoach bob-analyze [files]  IBM Bob Shell code analysis -> docs/bob/exports/
-    racecoach run / report         arrive with Path B and the report stage
+    racecoach run                  drive through the TORCS Granite/SCR bridge
+    racecoach report               render the post-race report
 
 Exit codes: 0 ok, 2 readable user error (bad file, unknown run).
 """
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -83,6 +85,28 @@ def main(argv: list[str] | None = None) -> int:
     run_cmd.add_argument("--host", default=None, help="override [connection].host")
     run_cmd.add_argument("--port", type=int, default=None, help="override [connection].port")
     run_cmd.add_argument("--max-laps", type=int, default=None, help="override [race].max_laps")
+    run_cmd.add_argument(
+        "--live-coach",
+        choices=("off", "mock", "granite"),
+        default="off",
+        help="asynchronous live advisor; Granite never controls the car (default: off)",
+    )
+    run_cmd.add_argument(
+        "--coach-interval-s",
+        type=float,
+        default=10.0,
+        help="seconds of simulation time between live advice snapshots (default: 10)",
+    )
+    run_cmd.add_argument(
+        "--granite-base-url",
+        default=None,
+        help="OpenAI-compatible /v1 endpoint (or GRANITE_BASE_URL)",
+    )
+    run_cmd.add_argument(
+        "--granite-model",
+        default=None,
+        help="served Granite model alias (or GRANITE_MODEL)",
+    )
     report_cmd = commands.add_parser("report", help="render the post-race report")
     report_cmd.add_argument("--run", dest="run_id", required=True)
 
@@ -92,7 +116,14 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("racecoach: interrupted.", file=sys.stderr)
         return 130
-    except (RunImportError, FeedbackSchemaError, BobExportError, RuntimeError, OSError) as exc:
+    except (
+        RunImportError,
+        FeedbackSchemaError,
+        BobExportError,
+        RuntimeError,
+        OSError,
+        ValueError,
+    ) as exc:
         print(f"racecoach: {exc}", file=sys.stderr)
         return 2
 
@@ -167,14 +198,45 @@ def _dispatch(args: argparse.Namespace) -> int:
         print("Next: racecoach coach <run_id> --bob")
         return 0
     if args.command == "run":
+        from racecoach.granite import GraniteClient, LiveGraniteAdvisor, MockGraniteClient
         from racecoach.telemetry.live import capture_run
 
         config, driver = load_race_config(
             Path(args.config), host=args.host, port=args.port, max_laps=args.max_laps
         )
-        print(f"Connecting to scr_server at {config.host}:{config.port} …")
-        run_dir = capture_run(config, driver)
+        advisor = None
+        if args.live_coach != "off":
+            backend = (
+                MockGraniteClient()
+                if args.live_coach == "mock"
+                else GraniteClient(base_url=args.granite_base_url, model=args.granite_model)
+            )
+
+            def show_advice(snapshot, result) -> None:
+                advice = result.advice
+                print(
+                    f"\n[Granite 4.1 · lap {snapshot.lap} · {snapshot.sim_time_s:.1f}s"
+                    f" · {advice.urgency}] {advice.message}",
+                    flush=True,
+                )
+
+            advisor = LiveGraniteAdvisor(
+                backend,
+                interval_s=args.coach_interval_s,
+                on_advice=show_advice,
+            )
+        print(f"Connecting to the TORCS Granite/SCR bridge at {config.host}:{config.port} …")
+        run_dir = capture_run(config, driver, advisor=advisor)
         print(f"Captured {run_dir.name} -> {run_dir}")
+        if advisor is not None and advisor.audit_path is not None:
+            print(f"Granite live audit -> {advisor.audit_path}")
+            if advisor.audit_error is not None:
+                print(
+                    f"Warning: Granite audit write failed: {advisor.audit_error}",
+                    file=sys.stderr,
+                )
+            if advisor.shutdown_timed_out:
+                print("Warning: Granite worker did not stop before its timeout", file=sys.stderr)
         print(f"Next: racecoach analyze {run_dir.name} · racecoach coach {run_dir.name}"
               f" · racecoach report --run {run_dir.name}")
         return 0
@@ -202,14 +264,29 @@ def load_race_config(path: Path, *, host=None, port=None, max_laps=None):
         raise RunImportError(f"No such config file: {path}")
     connection = data.get("connection", {})
     race = data.get("race", {})
+    bridge_token = os.environ.get("GRANITE_BRIDGE_TOKEN")
+    if bridge_token is not None and not (
+        16 <= len(bridge_token) <= 128
+        and bridge_token.isascii()
+        and all(character.isalnum() or character in "-_" for character in bridge_token)
+    ):
+        raise RunImportError(
+            "GRANITE_BRIDGE_TOKEN must contain 16-128 letters, digits, '-' or '_'"
+        )
+    bot_id = (
+        f"SCR:{bridge_token}"
+        if bridge_token
+        else str(connection.get("bot_id", "SCR"))
+    )
     config = LiveConfig(
         host=host or connection.get("host", "localhost"),
         port=port or int(connection.get("port", 3001)),
-        bot_id=str(connection.get("bot_id", "SCR")),
+        bot_id=bot_id,
         run_name=str(race.get("run_name", "live")),
         max_laps=max_laps if max_laps is not None else race.get("max_laps", 3),
         timeout_s=float(connection.get("timeout_s", 1.0)),
         identify_attempts=int(connection.get("identify_attempts", 5)),
+        max_idle_s=float(connection.get("max_idle_s", 30.0)),
     )
     try:
         driver = SimpleDriver(**data.get("driver", {}))

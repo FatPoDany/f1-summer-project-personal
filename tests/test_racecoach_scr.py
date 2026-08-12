@@ -5,15 +5,27 @@ The stub speaks the exact wire format verified from the torcs-1.3.7 sources
 lock-step: one state out, one action back — so the test is deterministic.
 """
 
+import base64
+import json
+import re
 import socket
 import threading
 
 import pytest
 
+from f1coach_core.torcs import split_torcs_run
 from racecoach.analysis.metrics import analyze_run
 from racecoach.control.simple_driver import SimpleDriver
+from racecoach.granite import LiveGraniteAdvisor, MockGraniteClient
 from racecoach.telemetry import scr
-from racecoach.telemetry.live import LiveConfig, ScrConnectionError, capture_run
+from racecoach.telemetry.live import (
+    CaptureCancelled,
+    LiveConfig,
+    ScrConnectionError,
+    _action_message,
+    _receive_latest,
+    capture_run,
+)
 from racecoach.telemetry.run_store import list_runs, load_run
 
 # -- protocol -------------------------------------------------------------
@@ -32,6 +44,36 @@ def test_format_actions_matches_carcontrol_field_order():
     assert scr.format_actions(0.8, 0.0, -0.25, 3) == (
         "(accel 0.8)(brake 0)(gear 3)(steer -0.25)(clutch 0)(focus 0)(meta 0)"
     )
+
+
+def test_optional_hud_advice_is_bounded_ascii_and_keeps_legacy_default():
+    legacy = scr.format_actions(0.8, 0.0, -0.25, 3)
+    extended = scr.format_actions(0.8, 0.0, -0.25, 3, hud_advice="Brake progressively")
+    assert extended.startswith(legacy)
+    match = re.search(r"\(coach ([A-Za-z0-9_-]+)\)$", extended)
+    assert match is not None
+    token = match.group(1)
+    decoded = base64.urlsafe_b64decode(token + "=" * (-len(token) % 4)).decode("ascii")
+    assert decoded == "Brake progressively"
+
+    assert scr.sanitize_hud_advice("  Hold\nline — now  ") == "Hold line ? now"
+    assert len(scr.sanitize_hud_advice("x" * 100).encode("ascii")) == scr.HUD_LINE_BYTES
+
+    for invalid in ("", "x" * 32, "not\nprintable", "非 ASCII"):
+        with pytest.raises(ValueError):
+            scr.format_actions(0.0, 1.0, 0.0, 1, hud_advice=invalid)
+
+
+def test_invalid_advisor_hud_never_suppresses_safe_controls():
+    class BadHudAdvisor:
+        hud_advice = "x" * 100
+
+    message = _action_message(
+        {"accel": 0.0, "brake": 1.0, "steer": 0.0, "gear": 1, "clutch": 0.0},
+        BadHudAdvisor(),
+    )
+    assert "(accel 0)(brake 1)" in message
+    assert "(coach " not in message
 
 
 def test_parse_state_unwraps_scalars_and_keeps_arrays():
@@ -159,30 +201,68 @@ def test_capture_run_end_to_end_against_the_stub():
     stub = StubServer(states)
     stub.start()
 
+    advisor = LiveGraniteAdvisor(MockGraniteClient(), interval_s=1000.0)
     run_dir = capture_run(
         LiveConfig(host="127.0.0.1", port=stub.port, run_name="stubrace", timeout_s=2.0),
         quiet=True,
+        advisor=advisor,
     )
     stub.join(timeout=5.0)
 
     assert "(init -90 " in stub.init_line  # rangefinder handshake reached the server
     assert len(stub.actions) == 600 and "(accel" in stub.actions[0]
+    coach_actions = [action for action in stub.actions if "(coach " in action]
+    assert coach_actions  # validated mock advice crossed the display-only extension
 
     (meta,) = list_runs()
     assert meta.run_id == run_dir.name and meta.capture == "scr-client"
     assert meta.n_samples == 600 and meta.laps_seen == (1, 2)
     assert meta.cadence_hz == pytest.approx(50.0)  # reconstructed 20 ms game clock
+    audit = run_dir / "coaching" / "granite-4.1-live.jsonl"
+    record = json.loads(audit.read_text("utf-8").splitlines()[0])
+    assert record["ok"] is True and record["model"].startswith("mock/granite-4.1")
 
     run = load_run(meta.run_id)
     assert run.df["total_speed_mps"].iloc[0] == pytest.approx(25.0)  # 90 km/h -> SI
-
-    import json
 
     metrics = json.loads(analyze_run(meta.run_id).read_text("utf-8"))
     off_track = [event for event in metrics["events"] if event["kind"] == "off_track"]
     assert len(off_track) == 1 and off_track[0]["lap"] == 2
     assert 500.0 <= off_track[0]["dist_start_m"] <= off_track[0]["dist_end_m"] <= 575.0
     assert any("sections" in note for note in metrics["analysis_notes"])  # no seg ground truth
+
+
+def test_bridge_race_counter_keeps_finish_sample_that_closes_the_final_lap():
+    states = [
+        make_state(5759.0, 0.0) + fmt("distRaced", -25) + fmt("raceLap", 0),
+        make_state(0.2, 0.02) + fmt("raceLap", 1),
+        *[
+            make_state(5750.0 * sample / 24, 180.0 * sample / 24) + fmt("raceLap", 1)
+            for sample in range(1, 25)
+        ],
+        make_state(0.2, 0.02) + fmt("raceLap", 2) + fmt("raceFinished", 1),
+    ]
+    stub = StubServer(states)
+    stub.start()
+
+    run_dir = capture_run(
+        LiveConfig(
+            host="127.0.0.1",
+            port=stub.port,
+            max_laps=1,
+            timeout_s=2.0,
+        ),
+        quiet=True,
+    )
+    stub.join(timeout=5.0)
+
+    run = load_run(run_dir.name)
+    assert run.meta.n_samples == len(states)
+    assert run.meta.laps_seen == (1, 2)
+    assert run.df["dist_from_start_m"].iloc[-1] == pytest.approx(0.2)
+    complete = [lap for lap in split_torcs_run(run_dir / "telemetry.csv") if lap.complete]
+    assert [lap.lap_label for lap in complete] == [1]
+    assert "(brake 1)" in stub.actions[-1]  # finish still closes fail-safe
 
 
 def test_no_server_reads_as_instructions():
@@ -194,9 +274,66 @@ def test_no_server_reads_as_instructions():
     config = LiveConfig(
         host="127.0.0.1", port=silent_port, timeout_s=0.05, identify_attempts=2
     )
-    with pytest.raises(ScrConnectionError, match="no scr_server answered"):
+    with pytest.raises(ScrConnectionError, match="no TORCS Granite/SCR bridge answered"):
         capture_run(config, quiet=True)
     assert list_runs() == []  # nothing half-created
+
+
+def test_capture_can_be_cancelled_before_opening_a_socket():
+    stop = threading.Event()
+    stop.set()
+    with pytest.raises(CaptureCancelled, match="before connecting"):
+        capture_run(
+            LiveConfig(host="127.0.0.1", port=3001),
+            quiet=True,
+            stop_requested=stop.is_set,
+        )
+    assert list_runs() == []
+
+
+def test_capture_stop_request_saves_received_rows_and_sends_safe_brake():
+    stop = threading.Event()
+
+    class StopServer(StubServer):
+        def run(self) -> None:
+            data, address = self._sock.recvfrom(1000)
+            self.init_line = data.decode("ascii")
+            self._sock.sendto(scr.IDENTIFIED.encode("ascii"), address)
+            self._sock.sendto(make_state(10.0, 0.02).encode("ascii"), address)
+            self.actions.append(self._sock.recvfrom(1000)[0].decode("ascii"))
+            stop.set()
+            self.actions.append(self._sock.recvfrom(1000)[0].decode("ascii"))
+            self._sock.close()
+
+    stub = StopServer([])
+    stub.start()
+    run_dir = capture_run(
+        LiveConfig(host="127.0.0.1", port=stub.port, timeout_s=0.1),
+        quiet=True,
+        stop_requested=stop.is_set,
+    )
+    stub.join(timeout=2.0)
+
+    assert run_dir.is_dir()
+    assert "(accel" in stub.actions[0]
+    assert "(accel 0)" in stub.actions[-1] and "(brake 1)" in stub.actions[-1]
+
+
+def test_connected_udp_drops_foreign_packets_and_drains_to_the_newest_state():
+    with (
+        socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender,
+        socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as receiver,
+        socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as foreign,
+    ):
+        sender.bind(("127.0.0.1", 0))
+        receiver.bind(("127.0.0.1", 0))
+        receiver.connect(sender.getsockname())
+        foreign.sendto(make_state(999.0, 1.0).encode("ascii"), receiver.getsockname())
+        for dist in (10.0, 20.0, 30.0):
+            sender.sendto(make_state(dist, 1.0).encode("ascii"), receiver.getsockname())
+
+        newest = scr.parse_state(_receive_latest(receiver))
+        assert newest["distFromStart"] == 30.0
 
 
 def test_identified_but_raceless_server_leaves_no_debris():
@@ -216,6 +353,34 @@ def test_identified_but_raceless_server_leaves_no_debris():
         )
     stub.join(timeout=5.0)
     assert list_runs() == []
+
+
+def test_capture_stops_after_bridge_idle_and_sends_safe_brake():
+    class IdleServer(StubServer):
+        def run(self) -> None:
+            data, address = self._sock.recvfrom(1000)
+            self.init_line = data.decode("ascii")
+            self._sock.sendto(scr.IDENTIFIED.encode("ascii"), address)
+            self._sock.sendto(make_state(10.0, 0.02).encode("ascii"), address)
+            self.actions.append(self._sock.recvfrom(1000)[0].decode("ascii"))
+            self.actions.append(self._sock.recvfrom(1000)[0].decode("ascii"))
+            self._sock.close()
+
+    stub = IdleServer([])
+    stub.start()
+    run_dir = capture_run(
+        LiveConfig(
+            host="127.0.0.1",
+            port=stub.port,
+            timeout_s=0.01,
+            max_idle_s=0.04,
+        ),
+        quiet=True,
+    )
+    stub.join(timeout=2.0)
+    assert run_dir.is_dir()
+    assert "(brake 1)" in stub.actions[-1]
+    assert "(accel 0)" in stub.actions[-1]
 
 
 # -- config ---------------------------------------------------------------
@@ -238,4 +403,23 @@ def test_load_race_config_reads_toml_and_applies_overrides(tmp_path):
     from racecoach.telemetry.run_store import RunImportError
 
     with pytest.raises(RunImportError, match="warp_drive"):
+        load_race_config(config_path)
+
+
+def test_load_race_config_uses_a_validated_bridge_token(tmp_path, monkeypatch):
+    from racecoach.cli import load_race_config
+    from racecoach.telemetry.run_store import RunImportError
+
+    config_path = tmp_path / "race.toml"
+    config_path.write_text("")
+    monkeypatch.setenv("GRANITE_BRIDGE_TOKEN", "local_test_token_1234")
+    config, _ = load_race_config(config_path)
+    assert config.bot_id == "SCR:local_test_token_1234"
+
+    monkeypatch.setenv("GRANITE_BRIDGE_TOKEN", "short")
+    with pytest.raises(RunImportError, match="16-128"):
+        load_race_config(config_path)
+
+    monkeypatch.setenv("GRANITE_BRIDGE_TOKEN", "é" * 16)
+    with pytest.raises(RunImportError, match="16-128"):
         load_race_config(config_path)

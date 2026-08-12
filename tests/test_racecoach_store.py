@@ -77,7 +77,7 @@ def test_cli_import_analyze_report_flow(run_csv, capsys):
     quick = run_csv.parent / "quick.toml"  # no simulator in tests: fail fast, readably
     quick.write_text('[connection]\ntimeout_s = 0.02\nidentify_attempts = 1\nport = 39999\n')
     assert main(["run", "--config", str(quick)]) == 2
-    assert "no scr_server answered" in capsys.readouterr().err
+    assert "no TORCS Granite/SCR bridge answered" in capsys.readouterr().err
     assert main(["report", "--run", run_id]) == 0
     assert (runs_root() / run_id / "report.html").is_file()
 
@@ -90,3 +90,8 @@ def test_cli_import_rejects_canonical_lap(tmp_path, capsys):
     lap.write_text(CANONICAL_LAP)
     assert main(["import", str(lap)]) == 2
     assert "Apex session" in capsys.readouterr().err
+
+
+def test_cli_rejects_non_finite_live_coach_interval(capsys):
+    assert main(["run", "--live-coach", "mock", "--coach-interval-s", "nan"]) == 2
+    assert "positive and finite" in capsys.readouterr().err

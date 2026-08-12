@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE params SYSTEM "../../libs/tgf/params.dtd">
+<params name="granite_bridge" type="robotdef">
+  <section name="Robots">
+    <section name="index">
+      <section name="0">
+        <attstr name="name" val="Granite Bridge"/>
+        <attstr name="desc" val="IBM Granite SCR-compatible non-blocking bridge"/>
+        <attstr name="team" val="UOBGraduate"/>
+        <attstr name="author" val="UOBGraduate"/>
+        <attstr name="car name" val="car1-ow1"/>
+        <attstr name="category" val="ow1"/>
+        <attstr name="skill level" val="pro"/>
+        <attnum name="race number" val="41"/>
+        <attnum name="red" val="0.05"/>
+        <attnum name="green" val="0.35"/>
+        <attnum name="blue" val="0.90"/>
+      </section>
+    </section>
+  </section>
+</params>

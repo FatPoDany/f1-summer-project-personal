@@ -1,26 +1,31 @@
-"""Path B live capture: drive the car over SCR, log every tick into the
+"""Path B live capture: drive the car over the Granite/SCR bridge, log every tick into the
 run store. After `finalize_run` the result is indistinguishable from an
 imported exporter run, so analyze/coach/report work unchanged.
 
 Logging discipline (spec: "must not slow the simulation loop"): the hot loop
-does parse -> buffered csv row -> drive -> send, nothing else; rows flush to
-disk every FLUSH_ROWS. Units are normalized to SI at logging time (SCR
-speeds arrive in km/h — scr_server.cpp:493-495). `sim_time_s` is the game
-clock reconstructed from the fixed 20 ms tick; wall_time_s is also kept.
+does parse -> drive -> send before buffered CSV logging and advisory sampling;
+rows flush to disk every FLUSH_ROWS. Units are normalized to SI at logging time (SCR
+speeds arrive in km/h). `sim_time_s` uses the TORCS 1.3.9 game clock when the
+Granite Bridge extension supplies it, with the fixed 20 ms cadence as a
+backward-compatible fallback; wall_time_s is also kept.
 """
 
 import csv
+import math
+import select
 import socket
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
+from typing import Protocol
 
 from racecoach.control.simple_driver import SimpleDriver
 from racecoach.telemetry import scr
 from racecoach.telemetry.run_store import finalize_run, new_run_dir
 
-TICK_S = 0.02  # scr_server sends one state per 20 ms of game time
+TICK_S = 0.02  # the TORCS robot callback normally runs every 20 ms of game time
 FLUSH_ROWS = 250
 LAP_RESET_M = 100.0  # distFromStart dropping this far back means a new lap
 
@@ -31,6 +36,11 @@ FIELDS = (
     "angle_rad", "track_pos", "damage", "fuel_l", "gear", "engine_rpm",
     "race_pos", "pos_z_m",
     "fr_spin_vel_rad_s", "fl_spin_vel_rad_s", "rr_spin_vel_rad_s", "rl_spin_vel_rad_s",
+    "fr_tire_wear", "fl_tire_wear", "rr_tire_wear", "rl_tire_wear",
+    "fr_tire_temp_c", "fl_tire_temp_c", "rr_tire_temp_c", "rl_tire_temp_c",
+    "fr_tire_pressure_kpa", "fl_tire_pressure_kpa",
+    "rr_tire_pressure_kpa", "rl_tire_pressure_kpa",
+    "fr_tire_graining", "fl_tire_graining", "rr_tire_graining", "rl_tire_graining",
     "opp_nearest_m",
     *(f"track_beam_{i:02d}_m" for i in range(19)),
     "accel_cmd", "brake_cmd", "steer_cmd", "gear_cmd", "clutch_cmd",
@@ -38,7 +48,21 @@ FIELDS = (
 
 
 class ScrConnectionError(RuntimeError):
-    """No scr_server answered. The message says how to get one."""
+    """No compatible TORCS UDP bridge answered. The message says how to get one."""
+
+
+class CaptureCancelled(RuntimeError):
+    """A caller requested a clean stop before a usable run could be saved."""
+
+
+class TickAdvisor(Protocol):
+    """A non-blocking observer attached to the deterministic control loop."""
+
+    def start(self, run_dir: Path) -> None: ...
+
+    def observe(self, tick: int, state: dict, actions: dict, lap: int) -> None: ...
+
+    def close(self) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -51,27 +75,97 @@ class LiveConfig:
     max_ticks: int = 90_000  # 30 minutes of game time — a hard safety stop
     timeout_s: float = 1.0
     identify_attempts: int = 5
+    max_idle_s: float | None = 30.0
+
+    def __post_init__(self) -> None:
+        if not self.host:
+            raise ValueError("SCR host must not be empty")
+        if (
+            not isinstance(self.port, int)
+            or isinstance(self.port, bool)
+            or not 1 <= self.port <= 65535
+        ):
+            raise ValueError("SCR port must be an integer from 1 to 65535")
+        if (
+            not isinstance(self.max_ticks, int)
+            or isinstance(self.max_ticks, bool)
+            or self.max_ticks <= 0
+        ):
+            raise ValueError("SCR max_ticks must be a positive integer")
+        if self.max_laps is not None and (
+            not isinstance(self.max_laps, int)
+            or isinstance(self.max_laps, bool)
+            or self.max_laps <= 0
+        ):
+            raise ValueError("SCR max_laps must be a positive integer or null")
+        if (
+            not isinstance(self.identify_attempts, int)
+            or isinstance(self.identify_attempts, bool)
+            or self.identify_attempts <= 0
+        ):
+            raise ValueError("SCR identify_attempts must be a positive integer")
+        if (
+            not isinstance(self.timeout_s, (int, float))
+            or isinstance(self.timeout_s, bool)
+            or not math.isfinite(float(self.timeout_s))
+            or self.timeout_s <= 0
+        ):
+            raise ValueError("SCR timeout_s must be positive and finite")
+        if self.max_idle_s is not None and (
+            not isinstance(self.max_idle_s, (int, float))
+            or isinstance(self.max_idle_s, bool)
+            or not math.isfinite(float(self.max_idle_s))
+            or self.max_idle_s <= 0
+        ):
+            raise ValueError("SCR max_idle_s must be positive and finite or null")
 
 
 def capture_run(
-    config: LiveConfig, driver: SimpleDriver | None = None, quiet: bool = False
+    config: LiveConfig,
+    driver: SimpleDriver | None = None,
+    quiet: bool = False,
+    advisor: TickAdvisor | None = None,
+    stop_requested: Callable[[], bool] | None = None,
 ) -> Path:
-    """Identify, drive, log; returns the finalized run directory."""
+    """Identify, drive, log, and optionally observe; return the finalized run directory.
+
+    An advisor must make ``observe`` non-blocking. Granite uses a one-item
+    background queue so model latency can never delay a 20 ms SCR response.
+    """
+    if _stop_requested(stop_requested):
+        raise CaptureCancelled("live capture was stopped before connecting")
     driver = driver or SimpleDriver()
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.settimeout(config.timeout_s)
         server = (config.host, config.port)
-        _identify(sock, server, config)
+        sock.connect(server)  # kernel rejects datagrams from any foreign local process
+        _identify(sock, config, stop_requested)
 
         run_dir = new_run_dir(config.run_name)
         writer = _RowWriter(run_dir / "telemetry.csv")
         tick, lap, previous_dist = 0, 1, None
+        last_state_at = monotonic()
+        advisor_started = False
+        advisor_error_reported = False
         try:
-            while tick < config.max_ticks:
+            if advisor is not None:
+                advisor.start(run_dir)
+                advisor_started = True
+            while tick < config.max_ticks and not _stop_requested(stop_requested):
+                stop_after_sample = False
                 try:
-                    message = sock.recv(1000).decode("ascii", errors="replace")
+                    message = _receive_latest(sock)
                 except TimeoutError:
-                    continue  # paused menu/loading screen; the race clock isn't running
+                    if _stop_requested(stop_requested):
+                        break
+                    if _idle_expired(last_state_at, config.max_idle_s):
+                        if not quiet:
+                            print(
+                                "TORCS bridge stopped sending telemetry; stopping safely",
+                                file=sys.stderr,
+                            )
+                        break
+                    continue
                 if scr.SHUTDOWN in message:
                     break
                 if scr.RESTART in message:
@@ -79,32 +173,82 @@ def capture_run(
                     continue
                 state = scr.parse_state(message)
                 if "distFromStart" not in state:
+                    if _idle_expired(last_state_at, config.max_idle_s):
+                        if not quiet:
+                            print(
+                                "TORCS bridge sent no valid telemetry; stopping safely",
+                                file=sys.stderr,
+                            )
+                        break
                     continue  # not a state packet
+                last_state_at = monotonic()
                 dist = float(state["distFromStart"])
-                if previous_dist is not None and previous_dist - dist > LAP_RESET_M:
+                torcs_lap = _reported_race_lap(state)
+                if torcs_lap is not None:
+                    # TORCS starts at lap 0 on the grid, changes to 1 at the
+                    # start line, and marks the finish while changing N to
+                    # N+1.  Display grid telemetry as lap 1, but never count
+                    # that first crossing as a completed lap.
+                    lap = max(1, torcs_lap)
+                    stop_after_sample = (
+                        _state_flag(state, "raceFinished")
+                        or config.max_laps is not None
+                        and torcs_lap > config.max_laps
+                    )
+                elif previous_dist is not None and previous_dist - dist > LAP_RESET_M:
+                    # Backward compatibility for stock SCR servers which do
+                    # not expose TORCS' authoritative race counter.
                     lap += 1
                     if config.max_laps is not None and lap > config.max_laps:
-                        break
+                        stop_after_sample = True
                 previous_dist = dist
 
-                actions = driver.drive(state)
-                writer.write(_row(tick, state, actions, lap))
-                sock.sendto(
-                    scr.format_actions(
-                        actions["accel"], actions["brake"], actions["steer"],
-                        actions["gear"], actions["clutch"],
-                    ).encode("ascii"),
-                    server,
+                # The finish packet is also the start-line reset that closes the
+                # final lap.  Persist it before stopping, otherwise the session
+                # importer can only classify that lap as a cut-off fragment.
+                actions = (
+                    {"accel": 0.0, "brake": 1.0, "steer": 0.0, "gear": 1, "clutch": 0.0}
+                    if stop_after_sample
+                    else driver.drive(state)
                 )
+                # Controls have the deadline. Telemetry I/O and advisory sampling
+                # deliberately happen only after the action is on the wire.
+                sock.send(_action_message(actions, advisor).encode("ascii"))
+                writer.write(_row(tick, state, actions, lap))
+                if advisor is not None:
+                    try:
+                        advisor.observe(tick, state, actions, lap)
+                    except Exception as exc:
+                        if not quiet and not advisor_error_reported:
+                            print(
+                                f"live advisor disabled this sample: {type(exc).__name__}: {exc}",
+                                file=sys.stderr,
+                            )
+                            advisor_error_reported = True
                 tick += 1
+                if stop_after_sample:
+                    break
         except KeyboardInterrupt:
             if not quiet:
                 print("capture interrupted — keeping what was logged", file=sys.stderr)
         finally:
-            rows = writer.close()
+            try:
+                try:
+                    sock.send(scr.format_actions(0.0, 1.0, 0.0, 1, 0.0).encode("ascii"))
+                except OSError:
+                    pass
+                rows = writer.close()
+            finally:
+                if advisor is not None and advisor_started:
+                    advisor.close()
         if rows == 0:
             (run_dir / "telemetry.csv").unlink(missing_ok=True)
+            coaching_dir = run_dir / "coaching"
+            if coaching_dir.is_dir() and not any(coaching_dir.iterdir()):
+                coaching_dir.rmdir()
             run_dir.rmdir()
+            if _stop_requested(stop_requested):
+                raise CaptureCancelled("live capture stopped before the first telemetry sample")
             raise ScrConnectionError(
                 f"the server at {config.host}:{config.port} identified us but never "
                 "sent a race state — is a race actually running in TORCS?"
@@ -113,22 +257,93 @@ def capture_run(
         return run_dir
 
 
-def _identify(sock: socket.socket, server: tuple[str, int], config: LiveConfig) -> None:
+def _identify(
+    sock: socket.socket,
+    config: LiveConfig,
+    stop_requested: Callable[[], bool] | None = None,
+) -> None:
     hello = scr.init_string(config.bot_id).encode("ascii")
     for _ in range(config.identify_attempts):
-        sock.sendto(hello, server)
+        if _stop_requested(stop_requested):
+            raise CaptureCancelled("live capture was stopped while connecting")
+        sock.send(hello)
         try:
-            reply = sock.recv(1000).decode("ascii", errors="replace")
-        except TimeoutError:
+            reply = sock.recv(scr.MAX_DATAGRAM_BYTES).decode("ascii", errors="replace")
+        except (TimeoutError, ConnectionRefusedError):
             continue
         if scr.IDENTIFIED in reply:
             return
     raise ScrConnectionError(
-        f"no scr_server answered at {config.host}:{config.port} after "
-        f"{config.identify_attempts} attempts. Start TORCS with the scr_server robot "
-        "in the race (Practice/Quickrace), or see docs/DATA_AVAILABILITY.md §6 for "
-        "ways to get a runnable TORCS."
+        f"no TORCS Granite/SCR bridge answered at {config.host}:{config.port} after "
+        f"{config.identify_attempts} attempts. Start TORCS with the Granite Bridge robot "
+        "in a Practice or Quick Race session; see integrations/torcs-1.3.9/README.md."
     )
+
+
+def _stop_requested(callback: Callable[[], bool] | None) -> bool:
+    return callback is not None and callback()
+
+
+def _receive_latest(sock: socket.socket) -> str:
+    """Wait for one bridge packet, then discard any queued older packets."""
+    message = sock.recv(scr.MAX_DATAGRAM_BYTES)
+    while select.select((sock,), (), (), 0.0)[0]:
+        message = sock.recv(scr.MAX_DATAGRAM_BYTES)
+    return message.decode("ascii", errors="replace")
+
+
+def _action_message(actions: dict, advisor: TickAdvisor | None) -> str:
+    """Format controls first; an invalid display value can never suppress them."""
+    try:
+        hud_advice = getattr(advisor, "hud_advice", None) if advisor is not None else None
+    except Exception:
+        hud_advice = None
+    try:
+        return scr.format_actions(
+            actions["accel"],
+            actions["brake"],
+            actions["steer"],
+            actions["gear"],
+            actions["clutch"],
+            hud_advice=hud_advice,
+        )
+    except (TypeError, ValueError):
+        return scr.format_actions(
+            actions["accel"],
+            actions["brake"],
+            actions["steer"],
+            actions["gear"],
+            actions["clutch"],
+        )
+
+
+def _idle_expired(last_state_at: float, max_idle_s: float | None) -> bool:
+    return max_idle_s is not None and monotonic() - last_state_at >= max_idle_s
+
+
+def _reported_race_lap(state: dict) -> int | None:
+    """Return the bridge's authoritative TORCS counter when it is well formed."""
+    value = state.get("raceLap")
+    if isinstance(value, list) or value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or number < 0 or not number.is_integer():
+        return None
+    return int(number)
+
+
+def _state_flag(state: dict, key: str) -> bool:
+    value = state.get(key)
+    if isinstance(value, list) or value is None:
+        return False
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(number) and number >= 0.5
 
 
 def _row(tick: int, state: dict, actions: dict, lap: int) -> dict:
@@ -143,11 +358,15 @@ def _row(tick: int, state: dict, actions: dict, lap: int) -> dict:
     speeds = [one("speedX", 0.0), one("speedY", 0.0), one("speedZ", 0.0)]  # km/h on the wire
     total = (speeds[0] ** 2 + speeds[1] ** 2 + speeds[2] ** 2) ** 0.5 / 3.6
     wheels = many("wheelSpinVel", 4)  # FR, FL, RR, RL — car.h:40-43
+    tire_wear = many("tireWear", 4)  # 0 new, 1 fully worn — TORCS 1.3.9 car.h
+    tire_temp = many("tireTempC", 4)
+    tire_pressure = many("tirePressureKPa", 4)
+    tire_graining = many("tireGraining", 4)
     beams = many("track", 19)
     opponents = many("opponents", 36)
 
     row = {
-        "sim_time_s": round(tick * TICK_S, 3),
+        "sim_time_s": round(one("simTime", tick * TICK_S), 3),
         "wall_time_s": round(monotonic(), 3),
         "dist_from_start_m": one("distFromStart"),
         "dist_raced_m": one("distRaced"),
@@ -175,6 +394,14 @@ def _row(tick: int, state: dict, actions: dict, lap: int) -> dict:
     }
     for name, value in zip(("fr", "fl", "rr", "rl"), wheels, strict=False):
         row[f"{name}_spin_vel_rad_s"] = value
+    for channel, values in (
+        ("tire_wear", tire_wear),
+        ("tire_temp_c", tire_temp),
+        ("tire_pressure_kpa", tire_pressure),
+        ("tire_graining", tire_graining),
+    ):
+        for name, value in zip(("fr", "fl", "rr", "rl"), values, strict=False):
+            row[f"{name}_{channel}"] = value
     for i, beam in enumerate(beams):
         row[f"track_beam_{i:02d}_m"] = beam
     return row

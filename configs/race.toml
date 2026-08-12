@@ -6,6 +6,8 @@
 host = "localhost"
 port = 3001       # scr_server bot 0 (3001 + bot index)
 bot_id = "SCR"
+timeout_s = 1.0    # individual UDP receive timeout
+max_idle_s = 30.0  # stop safely if valid telemetry disappears
 
 [race]
 run_name = "live"
