@@ -24,6 +24,18 @@ def test_window_starts_in_the_garage(qtbot):
     assert not window._analysis_action.isEnabled()
 
 
+def test_data_collection_guide_is_reachable_without_starting_torcs(qtbot):
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    assert window._capture_action.isEnabled()
+    assert not window._capture.running
+
+    window._capture_action.trigger()
+    assert window._stacked.currentWidget() is window._capture
+    assert not window._capture.running
+
+
 def test_garage_lists_sample_session_and_opens_laps(qtbot):
     ensure_sample_session()
     window = MainWindow()
@@ -87,6 +99,27 @@ def test_open_path_imports_torcs_runs_into_garage(qtbot, tmp_path):
     assert session is not None and session.name == "quali"
     assert len(session.laps) == 3
     assert "3 laps" in window.statusBar().currentMessage()
+
+
+def test_captured_run_opens_as_a_named_garage_session(qtbot, tmp_path):
+    from test_torcs import make_run
+
+    run_dir = tmp_path / "runs" / "P001-baseline"
+    run_dir.mkdir(parents=True)
+    make_run(run_dir / "telemetry.csv")
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    window._open_captured_runs([str(run_dir)])
+
+    assert window._stacked.currentWidget() is window._garage
+    assert window._garage.session is not None
+    assert window._garage.session.name == "P001-baseline"
+    assert len(window._garage.session.laps) == 3
+
+    window._open_captured_runs([str(run_dir)])
+    assert window._garage.session is not None
+    assert len(window._garage.session.laps) == 3
 
 
 def test_report_export_failure_is_a_dialog_not_a_crash(qtbot, tmp_path, monkeypatch):

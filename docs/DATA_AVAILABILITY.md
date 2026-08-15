@@ -16,10 +16,23 @@ This report answers one question: **which driving signals can we actually captur
 | S3 | `Torcs/torcs.app` bundle (TORCS 1.2.4 macOS port, PowerPC) | Ground truth for shipped robots (15 incl. `human`), tracks, and the `simuv2.so` physics module |
 | S4 | Verified local TORCS 1.3.9 archive plus `integrations/torcs-1.3.9/overlay/src/drivers/granite_bridge/`; wire compatibility checked against [`fmirus/torcs-1.3.7`](https://github.com/fmirus/torcs-1.3.7) | Exact 1.3.9 robot ABI and tyre structs; standard SCR packet definitions |
 
-**Two capture paths.** The project can obtain telemetry in two distinct ways; availability differs, so the table carries a column for each.
+**Two reference paths plus a human-study subset.** Availability differs, so the
+table carries columns for the original full exporter (A) and live SCR bridge
+(B); the implemented human-study subset is described immediately below.
 
 - **Path A — simuv2 exporter (current, proven).** A patched TORCS build writes one CSV row per physics step (stride 10 ≈ 50 Hz) with 249 raw columns, driven by built-in robots or the `human` driver. This is the path behind S1/S2. *Caveat: the exporter's patch source lives with the teammate who built it; we hold its full output schema (S1) but not the patch itself.*
 - **Path B — Granite/SCR bridge + Python client (implemented).** Stock TORCS 1.3.9 contains no `scr_server`, so this repository adds a purpose-built non-blocking robot. It streams standard SCR-compatible telemetry around every 20 ms of simulator time, accepts bounded actuator commands from the deterministic Python driver, and appends native 1.3.9 tyre channels. The bridge ABI is compiled against the exact supplied archive by `verify-bridge.sh`.
+
+**Human-study capture (implemented subset).** The pinned 1.3.9 build now also
+contains an opt-in recorder in the normal `human` driver. `racecoach
+capture-human` enables it for one pseudonymous session, records more than 100
+human-control, vehicle, track, collision and wheel channels at the robot callback
+cadence, hashes the raw CSV, and registers it in the existing run store. This
+does not recreate every private simuv2 field in Path A, but it supplies the
+verified fields required for lap-time, braking, throttle, steering, off-track,
+damage and tyre analysis without controlling the car. The A/B table below is
+retained as the full exporter-versus-SCR comparison; see
+`docs/HUMAN_TELEMETRY_CAPTURE.md` for the exact human-recorder schema.
 
 ## 2. Requested-field availability table
 
@@ -72,20 +85,20 @@ Full catalogue: appendix A (251 fields).
 | `opponents[36]` proximity array | A | idem | join other cars' rows by `sim_time_s` (all cars are exported) |
 | direct `angle` column | A | not in exporter schema | one-line derivation, same formula as `scr_server.cpp:390` |
 | slip/force/suspension detail | B | SCR packet is fixed & minimal by design | Path A, or accept reduced evidence on B |
-| exporter patch source | — | lives with the teammate who built it; only its output schema (S1) is in the vault | request the patch, or re-create: the cheatsheet names every struct member to read |
-| real exporter CSVs | — | the 5 runs from S2 were not shared and are not recoverable | generate our own once a runnable TORCS exists (see §6); synthetic runs cover tests meanwhile |
+| exporter patch source | — | the teammate's 249-column simuv2 patch remains unavailable | use the implemented human-driver recorder for the coaching/study subset; request the original patch only if private simuv2 channels are required |
+| original 5 exporter CSVs | — | the raw controller files are not tracked in the shared repository, although derived data and their audit metadata exist | generate new human CSVs with `racecoach capture-human`; keep the controller audit separate from participant evidence |
 
 ## 5. Sampling, units, ranges
 
-- **Cadence:** exporter stores every 10th physics step ≈ **50 Hz** (S2); the Granite Bridge robot callback is scheduled every **20 ms of simulator time** (about 50 Hz in real-time GUI mode). The bridge also transmits TORCS' `simTime` so the logger does not need to assume wall-clock cadence.
+- **Cadence:** exporter stores every 10th physics step ≈ **50 Hz** (S2); the Granite Bridge and human recorder use the robot callback scheduled every **20 ms of simulator time** (about 50 Hz in real-time GUI mode). Both record TORCS' simulation clock rather than assuming wall-clock cadence.
 - **Units:** Path A is SI everywhere (S1 lists per-field units); Path B mixes km/h (speeds ×3.6, `scr_server.cpp:493`) and rad/m — a Path-B adapter must normalize to the canonical SI schema.
 - **Ranges:** actuator ranges are normative from code comments (`car.h:345-349`): steer −1..1, accel/brake/clutch 0..1, gear −1..6. Sensor ranges (speeds, forces) are *empirical* and still need validation against a real run — blocked on §6, tracked as an open item.
 
 ## 6. Environment reality check
 
 - The vault's `Torcs/torcs.app` is the **1.2.4 macOS PowerPC port** and cannot run on current Macs.
-- The supplied Linux `torcs-1.3.9.tar.bz2` is valid and its bridge overlay now compiles against the exact 1.3.9 ABI. A full GUI simulator build on the checked Rocky 8 host is still waiting for administrator-provided Xxf86vm, OpenAL/ALUT, Vorbis, and related development packages; see `integrations/torcs-1.3.9/README.md`.
-- The Python side has a lock-step UDP integration test, and the real IBM Granite 4.1 GGUF has passed the strict live-advice contract. A complete on-track run remains the final environment-dependent acceptance test after the native GUI dependencies are installed.
+- The supplied Linux `torcs-1.3.9.tar.bz2` is valid. The bridge and human recorder compile against the exact 1.3.9 ABI, and the full source tree builds with the repository's user-local dependency bootstrap. Installing and completing one on-track human lap remains the environment-dependent acceptance check; see `integrations/torcs-1.3.9/README.md`.
+- The Python side has a lock-step UDP integration test, and the real IBM Granite 4.1 GGUF has passed the strict live-advice contract. Complete on-track Granite Bridge and human-recorder runs remain the final environment-dependent acceptance tests.
 
 ## 7. Appendix A — full exporter field catalogue (251 fields, from S1)
 

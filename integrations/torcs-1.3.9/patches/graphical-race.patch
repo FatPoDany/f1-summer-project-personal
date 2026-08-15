@@ -1,0 +1,122 @@
+diff --git a/src/libs/raceengineclient/raceinit.cpp b/src/libs/raceengineclient/raceinit.cpp
+--- a/src/libs/raceengineclient/raceinit.cpp
++++ b/src/libs/raceengineclient/raceinit.cpp
+@@ -156,6 +156,33 @@ static void reSelectRaceman(void *params)
+ }
+ 
+ 
++void ReRunRaceOnGUI(const char* raceconfig)
++{
++	ReInit();
++
++	const char *s, *e, *m;
++
++	ReInfo->params = GfParmReadFile(raceconfig, GFPARM_RMODE_STD);
++	if (ReInfo->params == 0) {
++		GfError("Could not open file: %s\n", raceconfig);
++		exit(1);
++	}
++
++	s = GfParmGetFileName(ReInfo->params);
++	while ((m = strstr(s, "/")) != 0) {
++		s = m + 1;
++	}
++
++	e = strstr(s, PARAMEXT);
++	ReInfo->_reFilename = strndup(s, e-s+1);
++	ReInfo->_reFilename[e-s] = '\0';
++	ReInfo->_reName = GfParmGetStr(ReInfo->params, RM_SECT_HEADER, RM_ATTR_NAME, "");
++
++	ReInitResults();
++	ReStateApply((void *) RE_STATE_EVENT_INIT);
++}
++
++
+ void ReRunRaceOnConsole(const char* raceconfig)
+ {
+ 	ReInfo = (tRmInfo *)calloc(1, sizeof(tRmInfo));
+diff --git a/src/libs/raceengineclient/raceinit.h b/src/libs/raceengineclient/raceinit.h
+--- a/src/libs/raceengineclient/raceinit.h
++++ b/src/libs/raceengineclient/raceinit.h
+@@ -38,6 +38,7 @@ extern void ReRaceCleanDrivers(void);
+ extern const char *ReGetCurrentRaceName(void);
+ extern const char *ReGetPrevRaceName(void);
+ extern void ReRunRaceOnConsole(const char* raceconfig);
++extern void ReRunRaceOnGUI(const char* raceconfig);
+ 
+ extern tModList *ReRaceModList;
+ 
+diff --git a/src/linux/main.cpp b/src/linux/main.cpp
+--- a/src/linux/main.cpp
++++ b/src/linux/main.cpp
+@@ -30,6 +30,7 @@ extern bool bKeepModules;
+ 
+ static void
+-init_args(int argc, char **argv, const char **raceconfig)
++init_args(int argc, char **argv, const char **raceconfig,
++          const char **graphicalraceconfig)
+ {
+ 	int i;
+ 	char *buf;
+@@ -78,2 +79,16 @@ init_args(int argc, char **argv, const char **raceconfig)
+	 		bKeepModules = true;
+-#ifndef FREEGLUT
++		} else if(strcmp(argv[i], "-R") == 0) {
++			i++;
++			*graphicalraceconfig = "";
++
++			if(i < argc) {
++				*graphicalraceconfig = argv[i];
++				i++;
++			}
++
++			if((strlen(*graphicalraceconfig) == 0) ||
++			   (strstr(*graphicalraceconfig, ".xml") == 0)) {
++				printf("Please specify a race configuration xml when using -R\n");
++				exit(1);
++			}
++#ifndef FREEGLUT
+@@ -99,6 +114,11 @@ init_args(int argc, char **argv, const char **raceconfig)
+ 			i++;		/* ignore bad args */
+ 		}
+ 	}
++
++	if((strlen(*raceconfig) != 0) && (strlen(*graphicalraceconfig) != 0)) {
++		printf("Use only one of -r or -R\n");
++		exit(1);
++	}
+ 
+ #ifdef FREEGLUT
+ 	GfuiMouseSetHWPresent(); /* allow the hardware cursor (freeglut pb ?) */
+@@ -124,15 +144,19 @@ init_args(int argc, char **argv, const char **raceconfig)
+ int
+ main(int argc, char *argv[])
+ {
+ 	const char *raceconfig = "";
++	const char *graphicalraceconfig = "";
+ 
+-	init_args(argc, argv, &raceconfig);
++	init_args(argc, argv, &raceconfig, &graphicalraceconfig);
+ 	LinuxSpecInit();			/* init specific linux functions */
+ 
+ 	if(strlen(raceconfig) == 0) {
+ 		GfScrInit(argc, argv);	/* init screen */
+ 		TorcsEntry();			/* launch TORCS */
++		if(strlen(graphicalraceconfig) != 0) {
++			ReRunRaceOnGUI(graphicalraceconfig);
++		}
+ 		glutMainLoop();			/* event loop of glut */
+ 	} else {
+ 		// Run race from console, no Window, no OpenGL/OpenAL etc.
+ 		// Thought for blind scripted AI training
+diff --git a/src/linux/torcs.in b/src/linux/torcs.in
+--- a/src/linux/torcs.in
++++ b/src/linux/torcs.in
+@@ -33,6 +33,6 @@ DATADIR=$DATAROOTDIR/games/torcs
+ VARDIR=@localstatedir@/games/torcs
+ 
+-LOCAL_CONF=$HOME/.torcs
++LOCAL_CONF=${APEX_TORCS_LOCAL_DIR:-$HOME/.torcs}
+ 
+ if [ -d $DATADIR ]
+ then

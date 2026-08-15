@@ -48,6 +48,34 @@ fi
 echo "Applying the stock-1.3.9 SCR compatibility overlay"
 cp -a "${SCRIPT_DIR}/overlay/." "${SOURCE_DIR}/"
 
+human_source="${SOURCE_DIR}/src/drivers/human/human.cpp"
+human_makefile="${SOURCE_DIR}/src/drivers/human/Makefile"
+human_patch="${SCRIPT_DIR}/patches/human-telemetry.patch"
+graphical_patch="${SCRIPT_DIR}/patches/graphical-race.patch"
+screen_patch="${SCRIPT_DIR}/patches/screen-size-init.patch"
+screen_source="${SOURCE_DIR}/src/libs/tgfclient/screen.cpp"
+human_record_calls="$(grep -c 'ApexHumanTelemetryRecord' "${human_source}" || true)"
+if ! grep -q 'ApexHumanTelemetryStart' "${human_source}" || \
+   [[ "${human_record_calls}" -ne 2 ]] || \
+   ! grep -q 'ApexHumanTelemetryStop' "${human_source}" || \
+   ! grep -q 'apex_human_telemetry.cpp' "${human_makefile}" || \
+   ! grep -q 'apex_human_telemetry_writer.cpp' "${human_makefile}"; then
+    echo "Applying the opt-in human telemetry capture patch"
+   patch --batch --forward --directory="${SOURCE_DIR}" --strip=1 --input="${human_patch}"
+fi
+
+if ! grep -q 'ReRunRaceOnGUI(graphicalraceconfig)' "${SOURCE_DIR}/src/linux/main.cpp" || \
+   ! grep -q 'APEX_TORCS_LOCAL_DIR' "${SOURCE_DIR}/src/linux/torcs.in"; then
+    echo "Applying the graphical study-race patch"
+    patch --batch --forward --directory="${SOURCE_DIR}" --strip=1 --input="${graphical_patch}"
+fi
+
+if ! grep -q 'GfScrWidth = xw;' "${screen_source}" || \
+   ! grep -q 'GfScrHeight = yw;' "${screen_source}"; then
+    echo "Applying the initial screen-size patch"
+    patch --batch --forward --directory="${SOURCE_DIR}" --strip=1 --input="${screen_patch}"
+fi
+
 if [[ "${ACTION}" == "prepare" ]]; then
     echo "Prepared source: ${SOURCE_DIR}"
     exit 0

@@ -1,0 +1,11 @@
+--- a/src/libs/tgfclient/screen.cpp
++++ b/src/libs/tgfclient/screen.cpp
+@@ -279,6 +279,8 @@ void GfScrInit(int argc, char *argv[])
+ 	maxfreq = (int)GfParmGetNum(handle, GFSCR_SECT_PROP, GFSCR_ATT_MAXREFRESH, (char*)NULL, 160);
+ 	GfViewWidth = xw;
+ 	GfViewHeight = yw;
++	GfScrWidth = xw;
++	GfScrHeight = yw;
+ 	GfScrCenX = xw / 2;
+ 	GfScrCenY = yw / 2;
+ 

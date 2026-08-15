@@ -18,6 +18,7 @@ from f1coach_core.coach import (
     get_provider,
 )
 from f1coach_core.features import build_evidence_summary, corner_table, detect_corners, time_delta
+from f1coach_core.granite_coach import GraniteCoach, GraniteCoachError
 from f1coach_core.lap import Lap
 from f1coach_core.llm import build_coach_prompt
 from f1coach_core.loader import TelemetrySchemaError, load_telemetry_csv
@@ -43,6 +44,8 @@ __all__ = [
     "CoachingSchemaError",
     "Evidence",
     "Finding",
+    "GraniteCoach",
+    "GraniteCoachError",
     "Lap",
     "MockCoach",
     "Session",

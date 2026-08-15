@@ -1,0 +1,52 @@
+--- a/src/drivers/human/Makefile
++++ b/src/drivers/human/Makefile
+@@ -25,7 +25,8 @@ MODULEDIR = drivers/${ROBOT}
+ 
+ LIBS      =  -lplibul
+ 
+-SOURCES   = ${ROBOT}.cpp pref.cpp
++SOURCES   = ${ROBOT}.cpp pref.cpp apex_human_telemetry.cpp \
++            apex_human_telemetry_writer.cpp
+ 
+ SHIPDIR   = drivers/${ROBOT}
+ 
+--- a/src/drivers/human/human.cpp
++++ b/src/drivers/human/human.cpp
+@@ -45,6 +45,7 @@
+ #include <playerpref.h>
+ #include "pref.h"
+ #include "human.h"
++#include "apex_human_telemetry.h"
+ 
+ #define DRWD 0
+ #define DFWD 1
+@@ -103,6 +104,7 @@ static void
+ shutdown(int index)
+ {
+ 	int	idx = index - 1;
++	ApexHumanTelemetryStop(index);
+ 
+ 	free (HCtx[idx]);
+ 
+@@ -329,5 +331,6 @@ void newrace(int index, tCarElt* car, tSituation *s)
+ {
+ 	int idx = index - 1;
++	ApexHumanTelemetryStart(index, car, s, curTrack);
+ 
+ 	if (HCtx[idx]->MouseControlUsed) {
+ 		GfctrlMouseCenter();
+@@ -1041,6 +1044,7 @@ static void drive_mt(int index, tCarElt* car, tSituation *s)
+ 	if (HCtx[idx]->autoClutch && car->_clutchCmd == 0.0f)
+ 		car->_clutchCmd = getAutoClutch(idx, car->_gear, car->_gearCmd, car);
+ 
++	ApexHumanTelemetryRecord(index, car, s, curTrack);
+ }
+ /*
+  * Function
+@@ -1162,5 +1166,6 @@ static void drive_at(int index, tCarElt* car, tSituation *s)
+ 	if (HCtx[idx]->autoClutch && car->_clutchCmd == 0.0f)
+ 	    car->_clutchCmd = getAutoClutch(idx, car->_gear, car->_gearCmd, car);
++	ApexHumanTelemetryRecord(index, car, s, curTrack);
+ }
+ 
+ static int pitcmd(int index, tCarElt* car, tSituation *s)

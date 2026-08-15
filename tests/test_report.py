@@ -24,7 +24,7 @@ def test_full_report_contains_everything():
     assert re.search(r"\+5\.3\d+ s at the flag", html)
     assert "S1" in html and "S3" in html  # sector table
     assert report.findings[0].issue in html
-    assert "mock · mock-1" in html
+    assert f"mock · {report.prompt_version}" in html
     assert "http" not in html.split("xmlns")[0]  # no external assets before the svg ns
 
 

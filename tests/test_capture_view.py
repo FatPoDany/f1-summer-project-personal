@@ -1,0 +1,189 @@
+"""The participant-facing human telemetry collection guide."""
+
+import os
+import threading
+import time
+from pathlib import Path
+
+import pytest
+
+from apex.capture_view import CaptureGuideView
+from racecoach.telemetry.human_capture import (
+    HumanCaptureCancelled,
+    HumanCaptureResult,
+    TorcsStudyPreset,
+)
+
+
+@pytest.fixture(autouse=True)
+def workspace(tmp_path, monkeypatch):
+    monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "ws"))
+
+
+@pytest.fixture
+def torcs_binary(tmp_path) -> Path:
+    binary = tmp_path / "torcs"
+    binary.write_text("#!/bin/sh\nexit 0\n")
+    binary.chmod(0o755)
+    return binary
+
+
+@pytest.fixture
+def study_preset(tmp_path) -> TorcsStudyPreset:
+    race_config = tmp_path / "apexstudy.xml"
+    race_config.write_text("<params name='Apex Study v1'/>", encoding="utf-8")
+    return TorcsStudyPreset(
+        preset_id="apex-study-v1",
+        display_name="Apex Study v1",
+        track_id="g-track-1",
+        track_category="road",
+        car_id="car7-trb1",
+        laps=5,
+        race_config=race_config,
+    )
+
+
+def make_ready(view: CaptureGuideView) -> None:
+    view._participant_id.setText("P001")
+    for check in view._readiness_checks:
+        check.setChecked(True)
+
+
+def test_guide_requires_pseudonym_readiness_and_simulator_before_starting(
+    qtbot, torcs_binary, study_preset
+):
+    calls = []
+    view = CaptureGuideView(
+        capture_fn=lambda *a, **k: calls.append((a, k)),
+        torcs_binary=torcs_binary,
+        study_preset=study_preset,
+    )
+    qtbot.addWidget(view)
+
+    assert view._title.text() == "Collect driving data"
+    assert "No terminal" in view._intro.text()
+    assert view._phase.currentData() == "baseline"
+    assert "Ready" in view._simulator_status.text()
+    assert "g-track-1" in view._preset_summary.text()
+    assert "car7-trb1" in view._preset_summary.text()
+    assert "5 laps" in view._preset_summary.text()
+    assert not view._start_button.isEnabled()
+
+    view._participant_id.setText("Alice Smith")
+    for check in view._readiness_checks:
+        check.setChecked(True)
+    assert not view._start_button.isEnabled()
+    assert "pseudonymous" in view._form_error.text()
+
+    view._participant_id.setText("P001")
+    assert view._start_button.isEnabled()
+    assert not calls  # opening the page and completing checks never starts TORCS
+
+
+def test_capture_runs_off_the_gui_thread_and_shows_registered_result(
+    qtbot, tmp_path, torcs_binary, study_preset
+):
+    gui_thread = threading.get_ident()
+    capture_threads = []
+    capture_dir = tmp_path / "capture"
+    run_dir = tmp_path / "runs" / "human-1"
+    capture_dir.mkdir()
+    run_dir.mkdir(parents=True)
+
+    def fake_capture(config, *, runner, stop_requested):
+        del runner, stop_requested
+        capture_threads.append(threading.get_ident())
+        assert config.participant_id == "P001"
+        assert config.phase == "baseline"
+        assert config.preset == study_preset
+        return HumanCaptureResult(capture_dir=capture_dir, run_dirs=(run_dir,))
+
+    view = CaptureGuideView(
+        capture_fn=fake_capture,
+        torcs_binary=torcs_binary,
+        study_preset=study_preset,
+    )
+    qtbot.addWidget(view)
+    make_ready(view)
+
+    with qtbot.waitSignal(view.sessionFinished, timeout=2000) as finished:
+        view._start_button.click()
+
+    assert capture_threads and capture_threads != [gui_thread]
+    assert finished.args == [str(capture_dir), [str(run_dir)]]
+    assert view._pages.currentWidget() is view._complete_page
+    assert "1 run" in view._result_summary.text()
+    assert str(capture_dir) in view._result_path.text()
+    assert view._new_session_button.isEnabled()
+
+    with qtbot.waitSignal(view.resultsRequested) as requested:
+        view._open_results_button.click()
+    assert requested.args == [[str(run_dir)]]
+
+
+def test_stop_ends_background_session_and_restores_the_guide(
+    qtbot, tmp_path, torcs_binary, study_preset
+):
+    started = threading.Event()
+    capture_dir = tmp_path / "cancelled"
+    capture_dir.mkdir()
+
+    def cancellable_capture(config, *, runner, stop_requested):
+        del config, runner
+        started.set()
+        while not stop_requested():
+            time.sleep(0.005)
+        raise HumanCaptureCancelled("capture stopped by the user", capture_dir)
+
+    view = CaptureGuideView(
+        capture_fn=cancellable_capture,
+        torcs_binary=torcs_binary,
+        study_preset=study_preset,
+    )
+    qtbot.addWidget(view)
+    make_ready(view)
+    view._start_button.click()
+    assert started.wait(1.0)
+    qtbot.waitUntil(lambda: view.running, timeout=1000)
+
+    with qtbot.waitSignal(view.sessionStopped, timeout=2000):
+        view._stop_button.click()
+
+    assert not view.running
+    assert view._pages.currentWidget() is view._setup_page
+    assert "stopped" in view._form_error.text().lower()
+    assert view._start_button.isEnabled()
+    assert view.shutdown(timeout_s=0.1)
+
+
+def test_missing_simulator_has_a_readable_non_terminal_state(qtbot, tmp_path, study_preset):
+    missing = tmp_path / "missing-torcs"
+    view = CaptureGuideView(torcs_binary=missing, study_preset=study_preset)
+    qtbot.addWidget(view)
+    make_ready(view)
+
+    assert not view._start_button.isEnabled()
+    assert "not available" in view._simulator_status.text().lower()
+    assert "facilitator" in view._simulator_help.text().lower()
+    assert os.fspath(missing) not in view._simulator_help.text()
+
+
+def test_missing_study_preset_disables_start_with_facilitator_message(
+    qtbot, tmp_path, torcs_binary
+):
+    preset = TorcsStudyPreset(
+        preset_id="apex-study-v1",
+        display_name="Apex Study v1",
+        track_id="g-track-1",
+        track_category="road",
+        car_id="car7-trb1",
+        laps=5,
+        race_config=tmp_path / "missing.xml",
+    )
+    view = CaptureGuideView(torcs_binary=torcs_binary, study_preset=preset)
+    qtbot.addWidget(view)
+    make_ready(view)
+
+    assert not view._start_button.isEnabled()
+    assert "preset" in view._simulator_status.text().lower()
+    assert "facilitator" in view._simulator_help.text().lower()

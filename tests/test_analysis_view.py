@@ -36,7 +36,10 @@ def test_corner_table_matches_core_and_flags_the_worst_corner(qtbot):
     assert "⚠" in view._corners.item(worst, 0).text()
     assert view._corners.item(0, 1).text().endswith("m")  # "580 · ref 595 m"
     assert "/" in view._corners.item(0, 2).text()  # mine / ref speeds
-    assert view._corners.item(0, 4).text().startswith(("+", "-"))
+    assert view._corners.horizontalHeaderItem(3).text() == "Throttle 50%"
+    assert view._corners.item(0, 3).text().endswith("m")  # mine / ref throttle points
+    assert "/" in view._corners.item(0, 4).text()  # mine / ref exit speeds
+    assert view._corners.item(0, 5).text().startswith(("+", "-"))
 
     total = sum(session.best_sector_times.values())
     assert f"Theoretical {total:.3f} s" == view._theoretical.text()

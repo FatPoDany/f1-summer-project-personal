@@ -1,4 +1,4 @@
-"""Coaching contract v1, the provider interface, and the mock provider.
+"""Coaching contract v2, the provider interface, and the mock provider.
 
 The response contract (fixed for the whole project):
 
@@ -20,9 +20,48 @@ here, not in the UI. watsonx and Ollama providers arrive at A3 behind this
 same interface (plus streaming).
 """
 
+import math
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
+
+FOCUS_AREAS = ("braking", "cornering", "throttle")
+MAX_FINDINGS = 3
+MIN_TIME_LOST = 0.05
+MAX_COACHING_CORNERS = 6
+
+# Public metric names in the coaching contract -> fields in one corner's
+# deterministic evidence packet.  Providers may choose the prose, but every
+# numeric citation is checked against this table before Apex will render it.
+EVIDENCE_METRICS = {
+    "brake_point": ("brake_point_m", "ref_brake_point_m", "m", "braking"),
+    "peak_brake": ("peak_brake_pct", "ref_peak_brake_pct", "%", "braking"),
+    "brake_release": ("brake_release_m", "ref_brake_release_m", "m", "braking"),
+    "entry_speed": ("entry_speed_kmh", "ref_entry_speed_kmh", "km/h", "cornering"),
+    "min_speed": ("min_speed_kmh", "ref_min_speed_kmh", "km/h", "cornering"),
+    "min_speed_point": (
+        "min_speed_point_m",
+        "ref_min_speed_point_m",
+        "m",
+        "cornering",
+    ),
+    "exit_speed": ("exit_speed_kmh", "ref_exit_speed_kmh", "km/h", "cornering"),
+    "throttle_reapply": (
+        "throttle_reapply_m",
+        "ref_throttle_reapply_m",
+        "m",
+        "throttle",
+    ),
+    "throttle_point": ("throttle_point_m", "ref_throttle_point_m", "m", "throttle"),
+    "full_throttle": ("full_throttle_m", "ref_full_throttle_m", "m", "throttle"),
+    "exit_throttle": (
+        "exit_throttle_pct",
+        "ref_exit_throttle_pct",
+        "%",
+        "throttle",
+    ),
+    "coast_distance": ("coast_distance_m", "ref_coast_distance_m", "m", "throttle"),
+}
 
 
 class CoachingSchemaError(ValueError):
@@ -42,6 +81,7 @@ class Evidence:
 
 @dataclass(frozen=True)
 class Finding:
+    focus: str
     issue: str
     cause: str
     action: str
@@ -59,6 +99,7 @@ class CoachingReport:
         return {
             "findings": [
                 {
+                    "focus": f.focus,
                     "issue": f.issue,
                     "cause": f.cause,
                     "action": f.action,
@@ -92,46 +133,178 @@ def _number(value, where: str) -> float:
         isinstance(value, (int, float)) and not isinstance(value, bool),
         f"{where} must be a number (got {value!r})",
     )
-    return float(value)
+    number = float(value)
+    _require(math.isfinite(number), f"{where} must be finite (got {value!r})")
+    return number
 
 
-def coaching_report_from_dict(data: dict) -> CoachingReport:
-    """Validate a raw coaching response and freeze it into dataclasses."""
+def _require_measurement_free_prose(value: str, where: str) -> None:
+    """Keep every numeric claim inside a citation, where it can be fact-checked."""
+    _require(
+        not any(character.isdigit() for character in value),
+        f"{where} must not contain numeric values; put measurements in evidence",
+    )
+
+
+def coachable_corners(evidence_summary: dict) -> list[dict]:
+    """Return the highest-loss corner packets that fit the local model context."""
+    eligible: list[dict] = []
+    for corner in evidence_summary.get("corners", []):
+        if not isinstance(corner, dict):
+            continue
+        try:
+            time_lost = float(corner.get("time_lost_s", 0.0))
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(time_lost) or time_lost < MIN_TIME_LOST:
+            continue
+        eligible.append(corner)
+    return sorted(eligible, key=lambda corner: float(corner["time_lost_s"]), reverse=True)[
+        :MAX_COACHING_CORNERS
+    ]
+
+
+def evidence_catalog(evidence_summary: dict) -> dict[tuple[str, str], dict]:
+    """Flatten significant deterministic corner metrics for exact LLM fact checking."""
+    catalog: dict[tuple[str, str], dict] = {}
+    for corner in coachable_corners(evidence_summary):
+        label = corner.get("corner")
+        span = corner.get("span_m")
+        if (
+            not isinstance(label, str)
+            or not label
+            or not isinstance(span, (list, tuple))
+            or len(span) != 2
+        ):
+            continue
+        for metric, (value_key, ref_key, unit, focus) in EVIDENCE_METRICS.items():
+            value, ref = corner.get(value_key), corner.get(ref_key)
+            if (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(float(value))
+                or not isinstance(ref, (int, float))
+                or isinstance(ref, bool)
+                or not math.isfinite(float(ref))
+            ):
+                continue
+            catalog[(label, metric)] = {
+                "metric": metric,
+                "corner": label,
+                "value": float(value),
+                "ref": float(ref),
+                "unit": unit,
+                "span_m": [float(span[0]), float(span[1])],
+                "focus": focus,
+            }
+    return catalog
+
+
+def opportunity_catalog(evidence_summary: dict) -> dict[tuple[str, str], dict]:
+    """Return only citations whose direction and size support a coaching action."""
+    rules = {
+        "brake_point": lambda value, ref: value <= ref - 10.0,
+        "entry_speed": lambda value, ref: value <= ref - 3.0,
+        "min_speed": lambda value, ref: value <= ref - 3.0,
+        "exit_speed": lambda value, ref: value <= ref - 3.0,
+        "throttle_reapply": lambda value, ref: value >= ref + 15.0,
+        "throttle_point": lambda value, ref: value >= ref + 15.0,
+        "full_throttle": lambda value, ref: value >= ref + 15.0,
+        "exit_throttle": lambda value, ref: value <= ref - 5.0,
+        "coast_distance": lambda value, ref: value >= ref + 10.0,
+    }
+    return {
+        citation: item
+        for citation, item in evidence_catalog(evidence_summary).items()
+        if item["metric"] in rules and rules[item["metric"]](item["value"], item["ref"])
+    }
+
+
+def _same_number(actual: float, expected: float) -> bool:
+    return math.isclose(actual, expected, rel_tol=1e-9, abs_tol=1e-6)
+
+
+def coaching_report_from_dict(
+    data: dict,
+    evidence_summary: dict | None = None,
+    *,
+    opportunities_only: bool = False,
+) -> CoachingReport:
+    """Validate a response and, when supplied, fact-check every citation.
+
+    LLM adapters set ``opportunities_only`` so a citation must not merely be a
+    real telemetry value: its direction and size must support coaching. The
+    deterministic mock keeps access to the broader catalog for its quiet
+    fallback when time loss cannot be attributed to a thresholded technique.
+    """
     _require(
         isinstance(data, dict),
         f"coaching response must be an object (got {type(data).__name__})",
     )
-    for key in ("findings", "model", "prompt_version"):
+    required_top = {"findings", "model", "prompt_version"}
+    for key in required_top:
         _require(key in data, f"coaching response is missing '{key}'")
+    _require(
+        set(data) == required_top,
+        f"coaching response keys must be exactly {sorted(required_top)}",
+    )
     _require(isinstance(data["findings"], list), "'findings' must be a list")
+    _require(
+        len(data["findings"]) <= MAX_FINDINGS,
+        f"'findings' must contain at most {MAX_FINDINGS} items",
+    )
     _require(isinstance(data["model"], str) and data["model"], "'model' must be a non-empty string")
     _require(
         isinstance(data["prompt_version"], str) and data["prompt_version"],
         "'prompt_version' must be a non-empty string",
     )
 
+    if evidence_summary is None:
+        grounded = None
+    elif opportunities_only:
+        grounded = opportunity_catalog(evidence_summary)
+    else:
+        grounded = evidence_catalog(evidence_summary)
     findings = []
     for i, raw in enumerate(data["findings"]):
         where = f"findings[{i}]"
         _require(isinstance(raw, dict), f"{where} must be an object")
+        required_finding = {"focus", "issue", "cause", "action", "confidence", "evidence"}
+        _require(
+            set(raw) == required_finding,
+            f"{where} keys must be exactly {sorted(required_finding)}",
+        )
+        focus = raw.get("focus")
+        _require(focus in FOCUS_AREAS, f"{where}.focus must be one of {list(FOCUS_AREAS)}")
         for key in ("issue", "cause", "action"):
             _require(
                 isinstance(raw.get(key), str) and raw[key].strip(),
                 f"{where}.{key} must be a non-empty string",
             )
+            _require_measurement_free_prose(raw[key], f"{where}.{key}")
         confidence = _number(raw.get("confidence"), f"{where}.confidence")
         _require(0.0 <= confidence <= 1.0, f"{where}.confidence must be between 0 and 1")
         raw_evidence = raw.get("evidence")
         _require(
-            isinstance(raw_evidence, list) and raw_evidence,
-            f"{where}.evidence must be a non-empty list — every claim cites evidence",
+            isinstance(raw_evidence, list) and 1 <= len(raw_evidence) <= 4,
+            f"{where}.evidence must contain 1 to 4 items — every claim cites evidence",
         )
         evidence = []
+        cited: set[tuple[str, str]] = set()
+        cites_focus = False
         for j, ev in enumerate(raw_evidence):
             ev_where = f"{where}.evidence[{j}]"
             _require(isinstance(ev, dict), f"{ev_where} must be an object")
+            required_evidence = {"metric", "corner", "value", "ref", "unit", "span_m"}
+            _require(
+                set(ev) == required_evidence,
+                f"{ev_where} keys must be exactly {sorted(required_evidence)}",
+            )
             for key in ("metric", "corner", "unit"):
-                _require(isinstance(ev.get(key), str), f"{ev_where}.{key} must be a string")
+                _require(
+                    isinstance(ev.get(key), str) and ev[key].strip(),
+                    f"{ev_where}.{key} must be a non-empty string",
+                )
             span = ev.get("span_m")
             _require(
                 isinstance(span, (list, tuple)) and len(span) == 2,
@@ -140,18 +313,46 @@ def coaching_report_from_dict(data: dict) -> CoachingReport:
             d0 = _number(span[0], f"{ev_where}.span_m[0]")
             d1 = _number(span[1], f"{ev_where}.span_m[1]")
             _require(d0 < d1, f"{ev_where}.span_m must satisfy start < end")
+            value = _number(ev.get("value"), f"{ev_where}.value")
+            ref = _number(ev.get("ref"), f"{ev_where}.ref")
+            citation = (ev["corner"], ev["metric"])
+            _require(citation not in cited, f"{ev_where} duplicates citation {citation}")
+            cited.add(citation)
+            if grounded is not None:
+                expected = grounded.get(citation)
+                _require(
+                    expected is not None,
+                    f"{ev_where} cites {citation}, which is not available in the evidence summary",
+                )
+                _require(ev["unit"] == expected["unit"], f"{ev_where}.unit does not match evidence")
+                _require(
+                    _same_number(value, expected["value"]),
+                    f"{ev_where}.value does not match evidence",
+                )
+                _require(
+                    _same_number(ref, expected["ref"]), f"{ev_where}.ref does not match evidence"
+                )
+                _require(
+                    _same_number(d0, expected["span_m"][0])
+                    and _same_number(d1, expected["span_m"][1]),
+                    f"{ev_where}.span_m does not match evidence",
+                )
+                cites_focus = cites_focus or expected["focus"] == focus
             evidence.append(
                 Evidence(
                     metric=ev["metric"],
                     corner=ev["corner"],
-                    value=_number(ev.get("value"), f"{ev_where}.value"),
-                    ref=_number(ev.get("ref"), f"{ev_where}.ref"),
+                    value=value,
+                    ref=ref,
                     unit=ev["unit"],
                     span=(d0, d1),
                 )
             )
+        if grounded is not None:
+            _require(cites_focus, f"{where} must cite at least one {focus} metric")
         findings.append(
             Finding(
+                focus=focus,
                 issue=raw["issue"],
                 cause=raw["cause"],
                 action=raw["action"],
@@ -190,8 +391,8 @@ class MockCoach(CoachProvider):
     """
 
     name = "mock"
-    MAX_FINDINGS = 3
-    MIN_TIME_LOST = 0.05  # seconds — below this a corner isn't worth a finding
+    MAX_FINDINGS = MAX_FINDINGS
+    MIN_TIME_LOST = MIN_TIME_LOST  # seconds — below this a corner isn't worth a finding
 
     def generate(
         self,
@@ -208,83 +409,137 @@ class MockCoach(CoachProvider):
             for corner in corners[: self.MAX_FINDINGS]
             if corner["time_lost_s"] >= self.MIN_TIME_LOST
         ]
-        payload = {"findings": findings, "model": "mock", "prompt_version": "mock-1"}
+        payload = {"findings": findings, "model": "mock", "prompt_version": "mock-2"}
         if on_progress is not None:  # exercise the same streaming path as real providers
             import json
 
             on_progress(json.dumps(payload, indent=2))
-        return coaching_report_from_dict(payload)
+        return coaching_report_from_dict(payload, evidence_summary)
 
     def _finding_for(self, corner: dict) -> dict:
         label, span = corner["corner"], corner["span_m"]
-        causes: list[str] = []
-        actions: list[str] = []
-        evidence = [
-            {
-                "metric": "min_speed",
-                "corner": label,
-                "value": corner["min_speed_kmh"],
-                "ref": corner["ref_min_speed_kmh"],
-                "unit": "km/h",
-                "span_m": span,
-            }
-        ]
+        opportunities: dict[str, dict] = {
+            focus: {"score": 0.0, "causes": [], "actions": [], "evidence": []}
+            for focus in FOCUS_AREAS
+        }
+
+        def add(focus: str, score: float, cause: str, action: str, metric: str) -> None:
+            value_key, ref_key, unit, _ = EVIDENCE_METRICS[metric]
+            value, ref = corner.get(value_key), corner.get(ref_key)
+            if value is None or ref is None:
+                return
+            item = opportunities[focus]
+            item["score"] = max(item["score"], score)
+            item["causes"].append(cause)
+            item["actions"].append(action)
+            item["evidence"].append(
+                {
+                    "metric": metric,
+                    "corner": label,
+                    "value": value,
+                    "ref": ref,
+                    "unit": unit,
+                    "span_m": span,
+                }
+            )
 
         brake, ref_brake = corner["brake_point_m"], corner["ref_brake_point_m"]
         if brake is not None and ref_brake is not None and brake - ref_brake <= -10:
             metres = ref_brake - brake
-            causes.append(f"braking {metres:.0f} m earlier than the reference")
-            actions.append(f"carry brake pressure {metres:.0f} m deeper into {label}")
-            evidence.append(
-                {
-                    "metric": "brake_point",
-                    "corner": label,
-                    "value": brake,
-                    "ref": ref_brake,
-                    "unit": "m",
-                    "span_m": span,
-                }
+            add(
+                "braking",
+                metres / 10.0,
+                "braking begins earlier than the reference",
+                "move initial brake application toward the cited reference marker",
+                "brake_point",
             )
 
         slower = corner["ref_min_speed_kmh"] - corner["min_speed_kmh"]
         if slower >= 3:
-            causes.append(f"arriving {slower:.0f} km/h slower at the apex")
-            actions.append(f"aim for a {corner['ref_min_speed_kmh']:.0f} km/h minimum")
+            add(
+                "cornering",
+                slower / 3.0,
+                "minimum speed is lower than the reference",
+                "release the brake smoothly and preserve speed through the corner",
+                "min_speed",
+            )
+
+        exit_speed = corner.get("exit_speed_kmh")
+        ref_exit_speed = corner.get("ref_exit_speed_kmh")
+        if (
+            exit_speed is not None
+            and ref_exit_speed is not None
+            and ref_exit_speed - exit_speed >= 3
+        ):
+            slower_exit = ref_exit_speed - exit_speed
+            add(
+                "cornering",
+                slower_exit / 3.0,
+                "exit speed is lower than the reference",
+                "prioritise a clean exit and unwind steering progressively",
+                "exit_speed",
+            )
 
         throttle, ref_throttle = corner["throttle_point_m"], corner["ref_throttle_point_m"]
         if throttle is not None and ref_throttle is not None and throttle - ref_throttle >= 15:
             metres = throttle - ref_throttle
-            causes.append(f"opening the throttle {metres:.0f} m later on exit")
-            actions.append(f"get back to full throttle by {ref_throttle:.0f} m")
-            evidence.append(
-                {
-                    "metric": "throttle_point",
-                    "corner": label,
-                    "value": throttle,
-                    "ref": ref_throttle,
-                    "unit": "m",
-                    "span_m": span,
-                }
+            add(
+                "throttle",
+                metres / 15.0,
+                "half throttle arrives later than the reference on exit",
+                "begin squeezing the throttle earlier as steering unwinds",
+                "throttle_point",
             )
 
-        if not causes:
-            causes = ["carrying less speed through the zone than the reference"]
-            actions = [f"match the reference commitment through {label}"]
+        full, ref_full = corner.get("full_throttle_m"), corner.get("ref_full_throttle_m")
+        if full is not None and ref_full is not None and full - ref_full >= 15:
+            metres = full - ref_full
+            add(
+                "throttle",
+                metres / 15.0,
+                "full throttle arrives later than the reference",
+                "build throttle progressively toward the cited full-throttle point",
+                "full_throttle",
+            )
+
+        focus = max(FOCUS_AREAS, key=lambda name: opportunities[name]["score"])
+        selected = opportunities[focus]
+        if selected["score"] == 0.0:
+            focus = "cornering"
+            selected = opportunities[focus]
+            selected["causes"] = ["carrying less pace through the zone than the reference"]
+            selected["actions"] = ["build a repeatable entry, apex and exit through the zone"]
+            selected["evidence"] = [
+                {
+                    "metric": "min_speed",
+                    "corner": label,
+                    "value": corner["min_speed_kmh"],
+                    "ref": corner["ref_min_speed_kmh"],
+                    "unit": "km/h",
+                    "span_m": span,
+                }
+            ]
 
         time_lost = corner["time_lost_s"]
         confidence = round(min(0.9, 0.5 + 0.8 * time_lost), 2)
+        causes = selected["causes"]
+        actions = selected["actions"]
         return {
-            "issue": f"{label}: losing {time_lost:.2f} s to the reference",
-            "cause": (causes[0][:1].upper() + causes[0][1:] + "".join(
-                f", and {extra}" for extra in causes[1:]
-            ) + "."),
+            "focus": focus,
+            "issue": f"{focus.capitalize()} is the clearest opportunity",
+            "cause": (
+                causes[0][:1].upper()
+                + causes[0][1:]
+                + "".join(f", and {extra}" for extra in causes[1:])
+                + "."
+            ),
             "action": ("; ".join(actions)[:1].upper() + "; ".join(actions)[1:] + "."),
             "confidence": confidence,
-            "evidence": evidence,
+            "evidence": selected["evidence"][:4],
         }
 
 
-PROVIDER_NAMES = ("mock", "ollama", "watsonx")
+PROVIDER_NAMES = ("granite", "mock", "ollama", "watsonx")
 
 
 def available_providers() -> tuple[str, ...]:
@@ -292,6 +547,10 @@ def available_providers() -> tuple[str, ...]:
 
 
 def get_provider(name: str = "mock") -> CoachProvider:
+    if name == "granite":
+        from f1coach_core.granite_coach import GraniteCoach
+
+        return GraniteCoach()
     if name == "mock":
         return MockCoach()
     if name == "ollama":  # imported lazily: providers pull in transport machinery
@@ -302,6 +561,4 @@ def get_provider(name: str = "mock") -> CoachProvider:
         from f1coach_core.watsonx_coach import WatsonxCoach
 
         return WatsonxCoach()
-    raise ValueError(
-        f"Unknown coach provider '{name}'; available: {', '.join(PROVIDER_NAMES)}"
-    )
+    raise ValueError(f"Unknown coach provider '{name}'; available: {', '.join(PROVIDER_NAMES)}")

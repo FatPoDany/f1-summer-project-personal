@@ -108,4 +108,8 @@ class OllamaCoach(CoachProvider):
         on_progress: Callable[[str], None] | None = None,
     ) -> CoachingReport:
         text = self.stream_completion(build_coach_prompt(evidence_summary), on_progress)
-        return report_from_llm_text(text, model=f"ollama/{self.model}")
+        return report_from_llm_text(
+            text,
+            model=f"ollama/{self.model}",
+            evidence_summary=evidence_summary,
+        )

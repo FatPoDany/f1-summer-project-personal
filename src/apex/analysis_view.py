@@ -22,7 +22,14 @@ from apex.coach_panel import CoachPanel
 from apex.widgets.strip_stack import StripStack
 from f1coach_core import Lap, Session, corner_table, render_html_report, sector_times
 
-CORNER_HEADERS = ("Corner", "Brake point", "Min speed", "Exit +200 m", "Δ vs ref")
+CORNER_HEADERS = (
+    "Corner",
+    "Brake point",
+    "Min speed",
+    "Throttle 50%",
+    "Exit +200 m",
+    "Δ vs ref",
+)
 FLAG_THRESHOLD_S = 0.05  # a corner delta worth colouring / flagging at all
 
 
@@ -181,6 +188,7 @@ class AnalysisView(QWidget):
                 f"{row['corner']} ⚠" if flagged else row["corner"],
                 _vs_m(row["brake_point_m"], row["ref_brake_point_m"]),
                 f"{row['min_speed_kmh']:.0f} / {row['ref_min_speed_kmh']:.0f}",
+                _vs_m(row["throttle_point_m"], row["ref_throttle_point_m"]),
                 f"{row['exit_speed_kmh']:.0f} / {row['ref_exit_speed_kmh']:.0f}",
                 f"{delta:+.3f}",
             )

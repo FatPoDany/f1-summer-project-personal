@@ -18,6 +18,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QFileDialog, QMainWindow, QMessageBox, QStackedWidget
 
 from apex.analysis_view import AnalysisView
+from apex.capture_view import CaptureGuideView
 from apex.compare_view import CompareView
 from apex.garage_view import GarageView
 from apex.live_view import LivePitWallView
@@ -38,13 +39,16 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(960, 540)
         self.resize(1280, 720)
         self.setAcceptDrops(True)
+        self._opened_capture_runs: set[Path] = set()
 
         self._garage = GarageView(self)
+        self._capture = CaptureGuideView(self)
         self._analysis = AnalysisView(self)
         self._compare = CompareView(self)
         self._live = LivePitWallView(self)
         self._stacked = QStackedWidget(self)
         self._stacked.addWidget(self._garage)
+        self._stacked.addWidget(self._capture)
         self._stacked.addWidget(self._analysis)
         self._stacked.addWidget(self._compare)
         self._stacked.addWidget(self._live)
@@ -52,6 +56,8 @@ class MainWindow(QMainWindow):
 
         self._garage.lapOpened.connect(self.show_analysis)
         self._garage.status.connect(lambda text: self.statusBar().showMessage(text))
+        self._capture.resultsRequested.connect(self._open_captured_runs)
+        self._capture.sessionFinished.connect(self._capture_completed)
 
         self._build_menu_and_toolbar()
         self._garage.refresh_sessions()
@@ -79,6 +85,32 @@ class MainWindow(QMainWindow):
         if lap.dist_derived:
             summary += "  ·  dist derived from speed"
         self.statusBar().showMessage(summary)
+
+    def _capture_completed(self, _capture_dir: str, run_dirs: list[str]) -> None:
+        self.statusBar().showMessage(
+            f"Driving data saved — {len(run_dirs)} validated run"
+            f"{'s' if len(run_dirs) != 1 else ''} ready for analysis"
+        )
+
+    def _open_captured_runs(self, run_dirs: list[str]) -> None:
+        summaries = []
+        selected = None
+        for value in run_dirs:
+            run_dir = Path(value).resolve()
+            selected = run_dir.name
+            if run_dir in self._opened_capture_runs:
+                summaries.append(f"Opened existing captured laps from {run_dir.name}")
+                continue
+            telemetry = run_dir / "telemetry.csv"
+            try:
+                summaries.append(import_telemetry(telemetry, session_name=run_dir.name))
+            except (TelemetrySchemaError, OSError) as exc:
+                QMessageBox.critical(self, "Can't open captured laps", str(exc))
+                return
+            self._opened_capture_runs.add(run_dir)
+        self._garage.refresh_sessions(select=selected)
+        self.show_garage()
+        self.statusBar().showMessage(" · ".join(summaries))
 
     # -- opening files ---------------------------------------------------------
 
@@ -131,6 +163,10 @@ class MainWindow(QMainWindow):
         self._garage_action.triggered.connect(
             lambda: self._stacked.setCurrentWidget(self._garage)
         )
+        self._capture_action = QAction("Collect Data", self, checkable=True)
+        self._capture_action.triggered.connect(
+            lambda: self._stacked.setCurrentWidget(self._capture)
+        )
         self._analysis_action = QAction("Lap Analysis", self, checkable=True)
         self._analysis_action.setEnabled(False)  # until a lap is opened
         self._analysis_action.triggered.connect(
@@ -147,6 +183,7 @@ class MainWindow(QMainWindow):
         )
         for action in (
             self._garage_action,
+            self._capture_action,
             self._analysis_action,
             self._compare_action,
             self._live_action,
@@ -160,6 +197,7 @@ class MainWindow(QMainWindow):
         widget = self._stacked.widget(index)
         for view, action in (
             (self._garage, self._garage_action),
+            (self._capture, self._capture_action),
             (self._analysis, self._analysis_action),
             (self._compare, self._compare_action),
             (self._live, self._live_action),
@@ -169,6 +207,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Bound shutdown time while asking an active capture to brake and stop."""
+        self._capture.shutdown(timeout_s=2.0)
         self._live.shutdown(timeout_s=2.0)
         super().closeEvent(event)
 

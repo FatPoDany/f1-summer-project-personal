@@ -1,49 +1,114 @@
-"""Shared LLM plumbing: prompt content, JSON extraction, response parsing."""
+"""Shared LLM plumbing: compact prompt, strict schema, extraction and parsing."""
 
 import json
+from copy import deepcopy
 
 import pytest
 
 from f1coach_core import CoachingSchemaError, build_evidence_summary, load_sample_session
+from f1coach_core.coach import evidence_catalog, opportunity_catalog
 from f1coach_core.llm import (
     PROMPT_VERSION,
     build_coach_prompt,
+    build_coach_response_format,
     extract_json_object,
     report_from_llm_text,
 )
 
-FINDINGS_JSON = json.dumps(
-    {
-        "findings": [
-            {
-                "issue": "T1: losing 0.40 s",
-                "cause": "Braking 15 m earlier.",
-                "action": "Brake at 585 m.",
-                "confidence": 0.8,
-                "evidence": [
-                    {
-                        "metric": "brake_point",
-                        "corner": "T1",
-                        "value": 570.0,
-                        "ref": 585.0,
-                        "unit": "m",
-                        "span_m": [510.0, 960.0],
-                    }
-                ],
-            }
-        ]
-    }
-)
+WRAPPED_JSON = json.dumps({"findings": []})
+EVIDENCE_KEYS = ("metric", "corner", "value", "ref", "unit", "span_m")
 
 
-def test_prompt_carries_the_evidence_and_the_contract():
+@pytest.fixture(scope="module")
+def summary():
     session = load_sample_session()
-    summary = build_evidence_summary(session.laps[2], session.best_lap)
-    prompt = build_coach_prompt(summary)
+    return build_evidence_summary(session.laps[2], session.best_lap)
+
+
+def available_citation(summary: dict, focus: str = "braking") -> dict:
+    citation = next(
+        item for item in opportunity_catalog(summary).values() if item["focus"] == focus
+    )
+    return {key: citation[key] for key in EVIDENCE_KEYS}
+
+
+def grounded_findings_json(summary: dict, focus: str = "braking") -> str:
+    citation = available_citation(summary, focus)
+    return json.dumps(
+        {
+            "findings": [
+                {
+                    "focus": focus,
+                    "issue": f"The main opportunity is {focus}",
+                    "cause": "The cited telemetry differs from the reference.",
+                    "action": "Use a smoother, more repeatable technique through this zone.",
+                    "confidence": 0.8,
+                    "evidence": [citation],
+                }
+            ]
+        }
+    )
+
+
+def test_prompt_carries_only_compact_coachable_evidence_and_the_contract(summary):
+    packet = deepcopy(summary)
+    packet["raw_samples"] = ["must-not-enter-the-model"]
+    template = deepcopy(summary["corners"][0])
+    packet["corners"] = []
+    for index in range(8):
+        corner = deepcopy(template)
+        corner["corner"] = f"X{index + 1}"
+        corner["time_lost_s"] = float(index + 1)
+        packet["corners"].append(corner)
+
+    prompt = build_coach_prompt(packet)
+
     assert "lap_03" in prompt and "lap_02" in prompt
-    assert str(summary["corners"][0]["span_m"][0]) in prompt
-    assert '"findings"' in prompt and "span_m" in prompt
-    assert "never invent values" in prompt
+    assert '"findings"' in prompt and "span_m" in prompt and '"focus"' in prompt
+    assert "Never invent" in prompt
+    assert "must-not-enter-the-model" not in prompt  # unrelated bulk is removed
+    assert '"X8"' in prompt and '"X3"' in prompt  # six highest-loss corners survive
+    assert '"X2"' not in prompt and '"X1"' not in prompt
+
+
+def test_response_format_is_strict_and_allows_only_available_citations(summary):
+    response_format = build_coach_response_format(summary)
+    assert response_format["type"] == "json_schema"
+    envelope = response_format["json_schema"]
+    assert envelope["name"] == "apex_lap_coaching" and envelope["strict"] is True
+
+    schema = envelope["schema"]
+    assert schema["additionalProperties"] is False
+    findings = schema["properties"]["findings"]
+    assert findings["minItems"] == 1
+    assert findings["maxItems"] == 3
+    finding = findings["items"]
+    assert finding["additionalProperties"] is False
+    assert finding["properties"]["focus"]["enum"] == [
+        "braking",
+        "cornering",
+        "throttle",
+    ]
+    for field in ("issue", "cause", "action"):
+        assert finding["properties"][field]["type"] == "string"
+        assert "pattern" not in finding["properties"][field]
+
+    choices = finding["properties"]["evidence"]["items"]["oneOf"]
+    assert len(choices) == len(opportunity_catalog(summary))
+    expected_item = next(iter(opportunity_catalog(summary).values()))
+    expected = {key: expected_item[key] for key in EVIDENCE_KEYS}
+    assert any(
+        all(choice["properties"][key]["const"] == expected[key] for key in EVIDENCE_KEYS)
+        for choice in choices
+    )
+    assert all(choice["additionalProperties"] is False for choice in choices)
+
+
+def test_empty_evidence_schema_forces_an_empty_findings_list():
+    response_format = build_coach_response_format({"corners": []})
+    findings = response_format["json_schema"]["schema"]["properties"]["findings"]
+    assert findings["minItems"] == 0
+    assert findings["maxItems"] == 0
 
 
 @pytest.mark.parametrize(
@@ -55,8 +120,8 @@ def test_prompt_carries_the_evidence_and_the_contract():
     ],
 )
 def test_extract_json_survives_wrapping(wrapper):
-    text = wrapper.format(payload=FINDINGS_JSON)
-    assert extract_json_object(text) == json.loads(FINDINGS_JSON)
+    text = wrapper.format(payload=WRAPPED_JSON)
+    assert extract_json_object(text) == json.loads(WRAPPED_JSON)
 
 
 def test_extract_json_handles_braces_inside_strings():
@@ -77,13 +142,81 @@ def test_extract_json_failures_are_readable(text, fragment):
         extract_json_object(text)
 
 
-def test_report_from_llm_text_stamps_model_and_prompt_version():
-    report = report_from_llm_text(FINDINGS_JSON, model="ibm/granite-3-3-8b-instruct")
-    assert report.model == "ibm/granite-3-3-8b-instruct"
+def test_report_from_llm_text_stamps_model_prompt_and_checks_evidence(summary):
+    text = grounded_findings_json(summary)
+    report = report_from_llm_text(
+        text,
+        model="ibm-granite/granite-4.1-3b",
+        evidence_summary=summary,
+    )
+    expected = available_citation(summary)
+    assert report.model == "ibm-granite/granite-4.1-3b"
     assert report.prompt_version == PROMPT_VERSION
-    assert report.findings[0].evidence[0].span == (510.0, 960.0)
+    assert report.findings[0].focus == "braking"
+    assert report.findings[0].evidence[0].span == tuple(expected["span_m"])
 
 
-def test_report_from_llm_text_requires_findings_key():
+@pytest.mark.parametrize("field", ["issue", "cause", "action"])
+def test_report_from_llm_text_replaces_model_prose_with_grounded_guidance(summary, field):
+    payload = json.loads(grounded_findings_json(summary))
+    payload["findings"][0][field] = "Brake release differs by 42 metres."
+
+    report = report_from_llm_text(
+        json.dumps(payload),
+        model="granite-test",
+        evidence_summary=summary,
+    )
+
+    value = getattr(report.findings[0], field)
+    assert value and not any(character.isdigit() for character in value)
+    assert "42" not in value
+
+
+def test_opportunity_catalog_keeps_only_directionally_actionable_metrics(summary):
+    catalog = opportunity_catalog(summary)
+
+    assert catalog
+    ambiguous = {"peak_brake", "brake_release", "min_speed_point"}
+    assert all(metric not in ambiguous for _, metric in catalog)
+    assert any(metric == "min_speed" for _, metric in catalog)
+    assert all(
+        item["value"] >= item["ref"] + 15.0
+        for (_, metric), item in catalog.items()
+        if metric == "throttle_reapply"
+    )
+
+
+def test_llm_parser_rejects_real_but_non_actionable_citation(summary):
+    actionable = opportunity_catalog(summary)
+    non_actionable = next(
+        item for citation, item in evidence_catalog(summary).items() if citation not in actionable
+    )
+    citation = {key: non_actionable[key] for key in EVIDENCE_KEYS}
+    payload = {
+        "findings": [
+            {
+                "focus": non_actionable["focus"],
+                "issue": "Telemetry shows an opportunity.",
+                "cause": "The cited telemetry differs from the reference.",
+                "action": "Use a smooth and repeatable technique.",
+                "confidence": 0.8,
+                "evidence": [citation],
+            }
+        ]
+    }
+
+    with pytest.raises(CoachingSchemaError, match="not available"):
+        report_from_llm_text(
+            json.dumps(payload),
+            model="granite-test",
+            evidence_summary=summary,
+        )
+
+
+def test_report_from_llm_text_requires_findings_key(summary):
     with pytest.raises(CoachingSchemaError, match="'findings'"):
-        report_from_llm_text('{"analysis": "great lap"}', model="m")
+        report_from_llm_text(
+            '{"analysis": "great lap"}',
+            model="m",
+            evidence_summary=summary,
+        )

@@ -6,9 +6,17 @@ from pathlib import Path
 
 import pytest
 
-from apex.coach_panel import FindingCard, _CoachTask
+from apex import theme
+from apex.coach_panel import CoachPanel, FindingCard, _CoachTask
 from apex.main_window import MainWindow
-from f1coach_core import CoachProvider, load_sample_session, workspace_root
+from f1coach_core import (
+    CoachProvider,
+    Evidence,
+    Finding,
+    build_coach_prompt,
+    load_sample_session,
+    workspace_root,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -23,13 +31,15 @@ def analysis(qtbot):
     qtbot.addWidget(window)
     window.show_analysis(session.laps[2], session)  # ragged lap, ref defaults to best
     # pin the provider: the picker persists the user's last choice via QSettings
-    window._analysis._panel._provider_combo.setCurrentText("mock")
+    combo = window._analysis._panel._provider_combo
+    combo.setCurrentIndex(combo.findData("mock"))
     return window._analysis
 
 
-def test_coach_me_renders_finding_cards(qtbot, analysis):
+def test_analyze_lap_renders_finding_cards(qtbot, analysis):
     panel = analysis._panel
     assert panel._coach_button.isEnabled()  # reference (lap_02) is set by default
+    assert panel._coach_button.text() == "Analyze lap"
 
     with qtbot.waitSignal(panel.reportReady, timeout=5000):
         panel._run()
@@ -37,7 +47,74 @@ def test_coach_me_renders_finding_cards(qtbot, analysis):
     assert panel.report is not None and len(panel.report.findings) >= 1
     cards = analysis._panel._cards_host.findChildren(FindingCard)
     assert len(cards) == len(panel.report.findings)
-    assert panel._chip.text() == "mock · mock-1"
+    assert panel._chip.text() == f"{panel.report.model} · {panel.report.prompt_version}"
+    assert panel._coach_button.text() == "Analyze lap"
+
+
+def test_provider_picker_uses_friendly_labels_and_provider_keys(qtbot, analysis):
+    panel = analysis._panel
+    combo = panel._provider_combo
+    assert {combo.itemText(index): combo.itemData(index) for index in range(combo.count())} == {
+        "Granite 4.1 (local)": "granite",
+        "Mock": "mock",
+        "Ollama": "ollama",
+        "Watsonx": "watsonx",
+    }
+    combo.setCurrentIndex(combo.findData("granite"))
+    assert combo.currentText() == "Granite 4.1 (local)"
+    assert panel.provider_name == "granite"
+
+
+def test_provider_picker_defaults_to_granite_without_saved_setting(qtbot, monkeypatch):
+    class EmptySettings:
+        def __init__(self, *_args):
+            self.values = {}
+
+        def value(self, key, default=None):
+            return self.values.get(key, default)
+
+        def setValue(self, key, value):
+            self.values[key] = value
+
+    monkeypatch.setattr("apex.coach_panel.QSettings", EmptySettings)
+    panel = CoachPanel()
+    qtbot.addWidget(panel)
+
+    assert panel.provider_name == "granite"
+    assert panel._provider_combo.currentText() == "Granite 4.1 (local)"
+
+
+@pytest.mark.parametrize(
+    ("focus", "label", "colour"),
+    [
+        ("braking", "Braking", theme.RED),
+        ("cornering", "Cornering", theme.BLUE),
+        ("throttle", "Throttle", theme.GREEN),
+    ],
+)
+def test_finding_card_displays_coloured_focus_chip(qtbot, focus, label, colour):
+    finding = Finding(
+        focus=focus,
+        issue="T1 opportunity",
+        cause="The trace differs from the reference.",
+        action="Follow the reference trace.",
+        confidence=0.8,
+        evidence=(
+            Evidence(
+                metric="brake_point",
+                corner="T1",
+                value=580.0,
+                ref=595.0,
+                unit="m",
+                span=(510.0, 960.0),
+            ),
+        ),
+    )
+    card = FindingCard(finding)
+    qtbot.addWidget(card)
+
+    assert card._focus_chip.text() == label
+    assert colour in card._focus_chip.styleSheet()
 
 
 def test_evidence_zoom_targets_the_span(qtbot, analysis):
@@ -83,7 +160,7 @@ def test_every_run_writes_an_audit_record(qtbot, analysis):
     assert record["ok"] is True and record["error"] is None
     assert record["provider"] == "mock" and record["model"] == "mock"
     assert record["lap"] == "lap_03" and record["reference"] == "lap_02"
-    assert "never invent values" in record["prompt"]  # the exact prompt, verbatim
+    assert record["prompt"] == build_coach_prompt(record["evidence_summary"])
     assert record["raw_response"].lstrip().startswith("{")  # the raw stream, verbatim
     assert len(record["report"]["findings"]) == len(panel.report.findings)
 

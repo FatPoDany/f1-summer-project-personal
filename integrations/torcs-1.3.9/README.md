@@ -111,6 +111,40 @@ For the visible workflow, start `apex`, open **Live Pit Wall**, and press
 **Start live session** instead of running the CLI command. Do not run both
 clients simultaneously; this bridge intentionally locks one active peer.
 
+## Human-driver telemetry capture
+
+Granite Bridge controls its own robot car, so its CSV is not human-study data.
+The build overlay also adds a separate opt-in recorder to TORCS' normal `human`
+driver. It observes the human callback without changing any command and writes
+the canonical analysis signature plus vehicle, track, collision and four-wheel
+channels.
+
+```bash
+integrations/torcs-1.3.9/verify-human-capture.sh
+integrations/torcs-1.3.9/verify-study-preset.sh
+integrations/torcs-1.3.9/build.sh install
+racecoach capture-human --participant-id P001 --phase baseline
+```
+
+Participants should normally open Apex and use **Collect Data** instead of this
+command. The desktop guide performs the same opt-in launch, validation, and run
+registration in a background task, then opens complete laps in the Garage. A
+packaged study build can place `torcs-runtime/` beside the Apex executable; the
+application discovers it automatically without participant configuration.
+
+For the desktop path, Apex uses graphical `-R` to open the versioned
+`apexstudy.xml` directly: one normal Human driver, `g-track-1`, and five laps.
+The assignment is shown before Start and frozen into the capture manifest, so a
+participant does not select a driver, track, car, or lap count in TORCS.
+Standard `-r` keeps its original console/headless meaning for automation.
+
+Drive the assigned laps and exit TORCS to finalize and register the run. The
+recorder is disabled unless the launcher supplies its private output directory.
+See
+[`docs/HUMAN_TELEMETRY_CAPTURE.md`](../../docs/HUMAN_TELEMETRY_CAPTURE.md) for
+fields, units, integrity metadata, failure recovery and the pre-study real-lap
+acceptance check.
+
 ## Protocol and limitations
 
 Standard SCR state/action tags remain compatible with the Python client. The

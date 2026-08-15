@@ -181,6 +181,29 @@ The run directory contains:
 - after `racecoach analyze RUN_ID`: deterministic metrics and events;
 - after `racecoach report --run RUN_ID`: the HTML report.
 
+## Step 9: Granite post-lap coaching
+
+After importing a run into an Apex session, open a lap in **Analysis** and
+select a quicker clean lap as the reference. Choose **Granite 4.1 (local)** and
+press **Analyze lap**. The same loopback server from step 4 is used, but this
+request contains a compact lap-vs-reference evidence packet rather than one
+live snapshot.
+
+The deterministic analysis measures, per detected corner:
+
+- brake onset, peak pressure and release point;
+- entry, minimum and exit speed, including the distance of minimum speed;
+- throttle reapplication, half-throttle and full-throttle points, exit
+  throttle and coasting distance.
+
+Only the highest-loss corner zones are sent to Granite. The response is
+grammar-constrained and then checked again in Python: every cited metric,
+corner, value, reference value, unit and distance span must exactly match that
+packet. Advice cards are labelled **Braking**, **Cornering** or **Throttle**;
+use **◈ show** to zoom all telemetry strips to the cited zone. Full prompts,
+raw output, validation failures and accepted reports are kept in the coaching
+audit directory.
+
 ## Why the output is trustworthy
 
 The response is grammar-constrained by JSON Schema, then independently

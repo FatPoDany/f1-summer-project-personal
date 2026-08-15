@@ -5,6 +5,7 @@
     racecoach analyze <run_id>     rule-based metrics -> runs/<id>/metrics.json
     racecoach bob-analyze [files]  IBM Bob Shell code analysis -> docs/bob/exports/
     racecoach run                  drive through the TORCS Granite/SCR bridge
+    racecoach capture-human        record a human TORCS session without controlling it
     racecoach report               render the post-race report
 
 Exit codes: 0 ok, 2 readable user error (bad file, unknown run).
@@ -106,6 +107,33 @@ def main(argv: list[str] | None = None) -> int:
         "--granite-model",
         default=None,
         help="served Granite model alias (or GRANITE_MODEL)",
+    )
+    from racecoach.telemetry.human_capture import default_torcs_binary
+
+    human_cmd = commands.add_parser(
+        "capture-human",
+        help="launch TORCS and record pseudonymous human-driver telemetry",
+    )
+    human_cmd.add_argument(
+        "--participant-id",
+        required=True,
+        help="pseudonymous study id, for example P001 (never use a name or email)",
+    )
+    human_cmd.add_argument(
+        "--phase",
+        required=True,
+        help="study phase/condition slug, for example baseline or coached",
+    )
+    human_cmd.add_argument(
+        "--torcs",
+        type=Path,
+        default=default_torcs_binary(),
+        help="patched TORCS executable produced by build.sh install",
+    )
+    human_cmd.add_argument(
+        "torcs_args",
+        nargs=argparse.REMAINDER,
+        help="arguments passed directly to TORCS; put them after --",
     )
     report_cmd = commands.add_parser("report", help="render the post-race report")
     report_cmd.add_argument("--run", dest="run_id", required=True)
@@ -239,6 +267,30 @@ def _dispatch(args: argparse.Namespace) -> int:
                 print("Warning: Granite worker did not stop before its timeout", file=sys.stderr)
         print(f"Next: racecoach analyze {run_dir.name} · racecoach coach {run_dir.name}"
               f" · racecoach report --run {run_dir.name}")
+        return 0
+    if args.command == "capture-human":
+        from racecoach.telemetry.human_capture import HumanCaptureConfig, capture_human_runs
+
+        torcs_args = tuple(args.torcs_args)
+        if torcs_args[:1] == ("--",):
+            torcs_args = torcs_args[1:]
+        print(
+            f"Launching TORCS human capture for {args.participant_id} / {args.phase}. "
+            "Quit TORCS after the driving session to finalize the data.",
+            flush=True,
+        )
+        result = capture_human_runs(
+            HumanCaptureConfig(
+                participant_id=args.participant_id,
+                phase=args.phase,
+                torcs_binary=args.torcs,
+                torcs_args=torcs_args,
+            )
+        )
+        print(f"Raw capture and manifest -> {result.capture_dir}")
+        for run_dir in result.run_dirs:
+            print(f"Registered run {run_dir.name} -> {run_dir}")
+        print("Next: racecoach analyze RUN_ID · racecoach coach RUN_ID")
         return 0
     if args.command == "report":
         from racecoach.report.run_report import report_run

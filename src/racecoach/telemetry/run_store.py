@@ -39,7 +39,7 @@ class RunMeta:
     laps_seen: tuple[int, ...]
     sim_time_span_s: float
     cadence_hz: float | None  # None when the time channel is degenerate
-    capture: str  # "torcs-exporter" (Path A) | "scr-client" (Path B, future)
+    capture: str  # "torcs-exporter" | "scr-client" | "human-driver"
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -71,7 +71,7 @@ def runs_root() -> Path:
     return workspace_root() / "runs"
 
 
-def import_run(src: str | Path) -> Path:
+def import_run(src: str | Path, *, capture: str = "torcs-exporter") -> Path:
     """Copy an exporter CSV into the store; returns the new run directory."""
     src = Path(src)
     if not src.is_file():
@@ -84,9 +84,7 @@ def import_run(src: str | Path) -> Path:
         )
     df = _read_frame(src)
     run_dir = new_run_dir(src.stem)
-    meta = _build_meta(
-        df, run_id=run_dir.name, source_file=src.name, capture="torcs-exporter"
-    )
+    meta = _build_meta(df, run_id=run_dir.name, source_file=src.name, capture=capture)
     shutil.copy2(src, run_dir / TELEMETRY_NAME)
     (run_dir / META_NAME).write_text(
         json.dumps(meta.to_dict(), indent=2), encoding="utf-8"

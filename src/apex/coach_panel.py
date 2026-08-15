@@ -38,13 +38,23 @@ from f1coach_core import (
 )
 
 CARD_STYLE = (
-    "QFrame#findingCard { background: #1f1f1f; border: 1px solid #393939;"
-    " border-radius: 6px; }"
+    "QFrame#findingCard { background: #1f1f1f; border: 1px solid #393939; border-radius: 6px; }"
 )
 CHIP_STYLE = (
     f"background: #262626; color: {theme.TEXT_DIM}; border-radius: 4px;"
     " padding: 2px 8px; font-size: 11px;"
 )
+FOCUS_CHIPS = {
+    "braking": ("Braking", theme.RED),
+    "cornering": ("Cornering", theme.BLUE),
+    "throttle": ("Throttle", theme.GREEN),
+}
+PROVIDER_LABELS = {
+    "granite": "Granite 4.1 (local)",
+    "mock": "Mock",
+    "ollama": "Ollama",
+    "watsonx": "Watsonx",
+}
 
 
 class _CoachSignals(QObject):
@@ -117,13 +127,17 @@ class FindingCard(QFrame):
         layout.setSpacing(4)
 
         top = QHBoxLayout()
+        self._focus_chip = self._make_focus_chip(finding.focus)
+        top.addWidget(self._focus_chip, alignment=Qt.AlignmentFlag.AlignTop)
+        top.addStretch(1)
+        confidence = self._confidence_chip(finding.confidence)
+        top.addWidget(confidence, alignment=Qt.AlignmentFlag.AlignTop)
+        layout.addLayout(top)
+
         issue = QLabel(finding.issue)
         issue.setWordWrap(True)
         issue.setStyleSheet("font-weight: 600;")
-        top.addWidget(issue, stretch=1)
-        chip = self._confidence_chip(finding.confidence)
-        top.addWidget(chip, alignment=Qt.AlignmentFlag.AlignTop)
-        layout.addLayout(top)
+        layout.addWidget(issue)
 
         cause = QLabel(finding.cause)
         cause.setWordWrap(True)
@@ -150,6 +164,15 @@ class FindingCard(QFrame):
             row.addWidget(show)
             row.addWidget(text, stretch=1)
             layout.addLayout(row)
+
+    @staticmethod
+    def _make_focus_chip(focus: str) -> QLabel:
+        label, colour = FOCUS_CHIPS[focus]
+        chip = QLabel(label)
+        chip.setStyleSheet(
+            CHIP_STYLE + f" color: {colour}; border: 1px solid {colour}; font-weight: 600;"
+        )
+        return chip
 
     @staticmethod
     def _confidence_chip(confidence: float) -> QLabel:
@@ -205,18 +228,20 @@ class CoachPanel(QWidget):
         self._chip = QLabel("")
         self._chip.setStyleSheet(CHIP_STYLE)
         self._provider_combo = QComboBox()
-        self._provider_combo.addItems(list(available_providers()))
-        saved = str(self._settings.value("coach/provider", "mock"))
-        if saved in available_providers():
-            self._provider_combo.setCurrentText(saved)
-        self._provider_combo.currentTextChanged.connect(self._provider_changed)
+        for name in available_providers():
+            self._provider_combo.addItem(PROVIDER_LABELS.get(name, name.title()), name)
+        saved = str(self._settings.value("coach/provider", "granite"))
+        saved_index = self._provider_combo.findData(saved)
+        if saved_index >= 0:
+            self._provider_combo.setCurrentIndex(saved_index)
+        self._provider_combo.currentIndexChanged.connect(self._provider_changed)
         header = QHBoxLayout()
         header.addWidget(title)
         header.addWidget(self._chip)
         header.addStretch(1)
         header.addWidget(self._provider_combo)
 
-        self._coach_button = QPushButton("Coach me")
+        self._coach_button = QPushButton("Analyze lap")
         self._coach_button.clicked.connect(self._run)
         reset_button = QPushButton("Reset view")
         reset_button.clicked.connect(self.viewResetRequested.emit)
@@ -257,9 +282,10 @@ class CoachPanel(QWidget):
 
     @property
     def provider_name(self) -> str:
-        return self._provider_combo.currentText()
+        return str(self._provider_combo.currentData())
 
-    def _provider_changed(self, name: str) -> None:
+    def _provider_changed(self, _index: int) -> None:
+        name = self.provider_name
         self._settings.setValue("coach/provider", name)
         self._chip.setText(name)
 
@@ -273,7 +299,7 @@ class CoachPanel(QWidget):
         self._coach_button.setEnabled(ready)
         if ready:
             self._placeholder.setText(
-                f"Ready — Coach me compares {lap.source.stem} with {reference.source.stem}."
+                f"Ready — Analyze lap compares {lap.source.stem} with {reference.source.stem}."
             )
         else:
             self._placeholder.setText(
@@ -294,7 +320,7 @@ class CoachPanel(QWidget):
         self._coach_button.setEnabled(False)
         self._coach_button.setText("Analyzing…")
         self._clear_cards()
-        self._placeholder.setText(f"Asking {provider.name}…")
+        self._placeholder.setText(f"Asking {self._provider_combo.currentText()}…")
         task = _CoachTask(provider, self._lap, self._reference)
         task.signals.finished.connect(self.show_report)
         task.signals.failed.connect(self._failed)
@@ -320,7 +346,7 @@ class CoachPanel(QWidget):
         self.report = report
         self._task = None
         self._coach_button.setEnabled(True)
-        self._coach_button.setText("Coach me")
+        self._coach_button.setText("Analyze lap")
         self._scroll.verticalScrollBar().setValue(0)  # outcome reads from the top
         self._chip.setText(f"{report.model} · {report.prompt_version}")
         self._clear_cards()
@@ -337,7 +363,7 @@ class CoachPanel(QWidget):
     def _failed(self, message: str) -> None:
         self._task = None
         self._coach_button.setEnabled(True)
-        self._coach_button.setText("Coach me")
+        self._coach_button.setText("Analyze lap")
         self._scroll.verticalScrollBar().setValue(0)  # outcome reads from the top
         text = f"Coaching failed: {message}"
         if self.audit_path is not None:  # audited arrives first, so this is current

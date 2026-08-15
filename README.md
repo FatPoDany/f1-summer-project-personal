@@ -57,6 +57,24 @@ latency. TORCS' own Driver Board also shows the sidecar state and a bounded
 summary of fresh advice; press the number key **1** during the race if that
 board is hidden.
 
+For post-lap coaching, import a multi-lap CSV into a session, open a lap in
+**Analysis**, choose the quickest clean lap as **Reference**, keep
+**Granite 4.1 (local)** selected, and press **Analyze lap**. Apex compares both
+laps on the same distance grid and reports evidence-grounded opportunities in
+three areas: brake application/release, minimum and exit corner speed, and
+throttle reapplication/full-throttle timing. Each card can zoom the plotted
+telemetry to the cited corner. The Python validator rejects any model citation
+whose corner, value, unit, or distance span does not exactly match the computed
+evidence packet.
+
+For human telemetry, open **Collect Data** in Apex. The guided workflow checks
+study readiness, shows the locked assignment, opens TORCS directly on the
+five-lap Human session, records the drive, validates the CSV, and opens complete
+laps in the Garage. Participants do not use a terminal or select the TORCS
+driver, track, vehicle, or lap count. See the
+[human capture guide](docs/HUMAN_TELEMETRY_CAPTURE.md) for the build and pilot
+acceptance procedure.
+
 Start with the
 [Granite/TORCS walkthrough](docs/GRANITE_TORCS_WALKTHROUGH.md) and the
 [TORCS build notes](integrations/torcs-1.3.9/README.md). A contract-only demo

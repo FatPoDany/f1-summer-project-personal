@@ -50,6 +50,8 @@ outputs/
 artifacts/
 data/raw/
 telemetry/raw/
+/captures/
+/runs/
 *.log
 *.dmg
 *.mp4
