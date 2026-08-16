@@ -51,6 +51,9 @@ cp -a "${SCRIPT_DIR}/overlay/." "${SOURCE_DIR}/"
 human_source="${SOURCE_DIR}/src/drivers/human/human.cpp"
 human_makefile="${SOURCE_DIR}/src/drivers/human/Makefile"
 human_patch="${SCRIPT_DIR}/patches/human-telemetry.patch"
+berniw_source="${SOURCE_DIR}/src/drivers/berniw/berniw.cpp"
+berniw_makefile="${SOURCE_DIR}/src/drivers/berniw/Makefile"
+berniw_patch="${SCRIPT_DIR}/patches/berniw-telemetry.patch"
 graphical_patch="${SCRIPT_DIR}/patches/graphical-race.patch"
 screen_patch="${SCRIPT_DIR}/patches/screen-size-init.patch"
 screen_source="${SOURCE_DIR}/src/libs/tgfclient/screen.cpp"
@@ -61,7 +64,17 @@ if ! grep -q 'ApexHumanTelemetryStart' "${human_source}" || \
    ! grep -q 'apex_human_telemetry.cpp' "${human_makefile}" || \
    ! grep -q 'apex_human_telemetry_writer.cpp' "${human_makefile}"; then
     echo "Applying the opt-in human telemetry capture patch"
-   patch --batch --forward --directory="${SOURCE_DIR}" --strip=1 --input="${human_patch}"
+    patch --batch --forward --directory="${SOURCE_DIR}" --strip=1 --input="${human_patch}"
+fi
+
+berniw_record_calls="$(grep -c 'ApexRobotTelemetryRecord' "${berniw_source}" || true)"
+if ! grep -q 'ApexRobotTelemetryStart' "${berniw_source}" || \
+   [[ "${berniw_record_calls}" -ne 1 ]] || \
+   ! grep -q 'ApexRobotTelemetryStop' "${berniw_source}" || \
+   ! grep -q 'apex_robot_telemetry.cpp' "${berniw_makefile}" || \
+   ! grep -q 'apex_robot_telemetry_writer.cpp' "${berniw_makefile}"; then
+    echo "Applying the opt-in berniw reference telemetry patch"
+    patch --batch --forward --directory="${SOURCE_DIR}" --strip=1 --input="${berniw_patch}"
 fi
 
 if ! grep -q 'ReRunRaceOnGUI(graphicalraceconfig)' "${SOURCE_DIR}/src/linux/main.cpp" || \

@@ -84,6 +84,13 @@ driver, track, vehicle, or lap count. See the
 [human capture guide](docs/HUMAN_TELEMETRY_CAPTURE.md) for the build and pilot
 acceptance procedure.
 
+Facilitators can validate the same software pipeline before recruitment with a
+fixed TORCS built-in robot. Launch `APEX_RESEARCH_MODE=1 apex` and open
+**Robot Pilot**, or run `racecoach capture-synthetic --count 3`. The default is
+three sequential sessions of three laps using pinned `berniw` index 9,
+`g-track-1`, and `car7-trb1`. Synthetic evidence is stored separately and is
+never presented as participant data or proof that coaching improves lap time.
+
 Start with the
 [Granite/TORCS walkthrough](docs/GRANITE_TORCS_WALKTHROUGH.md) and the
 [TORCS build notes](integrations/torcs-1.3.9/README.md). A contract-only demo

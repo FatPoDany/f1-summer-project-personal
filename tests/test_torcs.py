@@ -69,6 +69,18 @@ def test_split_marks_only_full_laps_complete(tmp_path):
     assert all(lap.car_name == "bt 3" for lap in laps)
 
 
+def test_finish_flag_does_not_promote_a_trailing_fragment_to_a_lap(tmp_path):
+    run = make_run(tmp_path / "bt_3.csv")
+    frame = pd.read_csv(run)
+    frame["race_finished"] = 0
+    frame.loc[frame.index[-1], "race_finished"] = 1
+    frame.to_csv(run, index=False)
+
+    complete = [lap for lap in split_torcs_run(run) if lap.complete]
+
+    assert [lap.lap_label for lap in complete] == [1, 2, 3]
+
+
 def test_complete_laps_map_to_canonical_schema(tmp_path):
     lap = next(lap for lap in split_torcs_run(make_run(tmp_path / "bt_3.csv")) if lap.complete)
     df = lap.df

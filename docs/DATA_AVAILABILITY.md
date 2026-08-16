@@ -34,6 +34,17 @@ damage and tyre analysis without controlling the car. The A/B table below is
 retained as the full exporter-versus-SCR comparison; see
 `docs/HUMAN_TELEMETRY_CAPTURE.md` for the exact human-recorder schema.
 
+**Synthetic reference capture (implemented subset).** A second opt-in recorder
+observes the pinned built-in `berniw` driver at index 9. It writes the same
+analysis-facing control, vehicle, track, collision and wheel channels as the
+human recorder with schema `apex-robot-v1`, plus the independently validated
+`driver_index=9` and `race_finished` fields. The frozen unattended preset uses
+`g-track-1`, stock `car7-trb1`, and three laps. Python rejects mismatched
+module/index/car/track/schema evidence and requires exactly three complete
+distance-aligned laps before registering a run as `synthetic-robot`. This path
+is for pipeline qualification and fixed-controller reference data, not human
+study outcomes.
+
 ## 2. Requested-field availability table
 
 Fields the client and spec asked about, plus the candidate list. "A" = exporter path (S1), "B" = SCR path (S4).
@@ -90,7 +101,7 @@ Full catalogue: appendix A (251 fields).
 
 ## 5. Sampling, units, ranges
 
-- **Cadence:** exporter stores every 10th physics step ≈ **50 Hz** (S2); the Granite Bridge and human recorder use the robot callback scheduled every **20 ms of simulator time** (about 50 Hz in real-time GUI mode). Both record TORCS' simulation clock rather than assuming wall-clock cadence.
+- **Cadence:** exporter stores every 10th physics step ≈ **50 Hz** (S2); the Granite Bridge, human recorder, and `berniw` reference recorder use the robot callback scheduled every **20 ms of simulator time** (about 50 Hz in real-time GUI mode). All record TORCS' simulation clock rather than assuming wall-clock cadence.
 - **Units:** Path A is SI everywhere (S1 lists per-field units); Path B mixes km/h (speeds ×3.6, `scr_server.cpp:493`) and rad/m — a Path-B adapter must normalize to the canonical SI schema.
 - **Ranges:** actuator ranges are normative from code comments (`car.h:345-349`): steer −1..1, accel/brake/clutch 0..1, gear −1..6. Sensor ranges (speeds, forces) are *empirical* and still need validation against a real run — blocked on §6, tracked as an open item.
 - **Lap closure provenance:** Path B stores the bridge's raw `raceFinished` value as `race_finished`. If a race mode ends with `***shutdown***` before sending that final state, `capture_lap_closed` is a separate deterministic marker: it is set only on the configured final lap after at least 98% coverage of a previously observed start-line-to-start-line distance. It is never presented as a raw TORCS sensor value.
@@ -98,7 +109,7 @@ Full catalogue: appendix A (251 fields).
 ## 6. Environment reality check
 
 - The vault's `Torcs/torcs.app` is the **1.2.4 macOS PowerPC port** and cannot run on current Macs.
-- The supplied Linux `torcs-1.3.9.tar.bz2` is valid. The bridge and human recorder compile against the exact 1.3.9 ABI, and the full source tree builds with the repository's user-local dependency bootstrap. Installing and completing one on-track human lap remains the environment-dependent acceptance check; see `integrations/torcs-1.3.9/README.md`.
+- The supplied Linux `torcs-1.3.9.tar.bz2` is valid. The bridge, human recorder, and pinned `berniw` recorder compile against the exact 1.3.9 ABI, and the full source tree builds with the repository's user-local dependency bootstrap. The robot writer/source contract and unattended preset have automated verification; a real three-session batch remains their runtime qualification gate. Installing and completing one on-track human lap remains the separate participant-path acceptance check; see `integrations/torcs-1.3.9/README.md`.
 - The Python side has a lock-step UDP integration test, and the real IBM Granite 4.1 GGUF has passed the strict live-advice contract. An automated three-lap on-track Granite Bridge run has also verified capture, final-lap closure, three-lap import, and idempotent re-import; this validates the deterministic driver path, not human driving or a live Granite inference. A complete human-recorder run remains an environment-dependent acceptance test.
 
 ## 7. Appendix A — full exporter field catalogue (251 fields, from S1)

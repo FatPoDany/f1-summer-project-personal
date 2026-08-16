@@ -145,6 +145,56 @@ See
 fields, units, integrity metadata, failure recovery and the pre-study real-lap
 acceptance check.
 
+## Synthetic reference-pilot capture
+
+The same pinned build contains a separate, opt-in recorder for TORCS' built-in
+`berniw` driver. Version one deliberately allows only driver index 9, whose
+stock robot definition selects `car7-trb1`. It observes the commands already
+calculated by `rbDrive`; it does not write actuators, contact a model, or share
+the human recorder's environment variable or output directory.
+
+Verify the writer, source patch, robot assignment, and three-lap preset before
+building:
+
+```bash
+integrations/torcs-1.3.9/verify-reference-recorder.sh
+integrations/torcs-1.3.9/verify-robot-study-preset.sh
+integrations/torcs-1.3.9/build.sh install
+```
+
+Run the default batch of three unattended sessions from the CLI:
+
+```bash
+racecoach capture-synthetic --count 3
+```
+
+Each TORCS process receives `-r apexrobotstudy.xml` and exits after one fixed
+three-lap `g-track-1` practice assignment. Sessions run sequentially so they do
+not contend for the simulator runtime. Raw files and atomic manifests live
+under `<workspace>/captures/synthetic/`; registered run metadata uses
+`capture="synthetic-robot"`. The CSV schema is `apex-robot-v1` and includes
+`driver_module=berniw`, `driver_index=9`, the stock car id, track id, raw lap
+state, and a final `race_finished` marker. Registration requires exactly three
+complete distance-aligned laps and rejects all outputs before importing any if
+one file has conflicting provenance.
+
+Facilitators can opt into the same path in Apex:
+
+```bash
+APEX_RESEARCH_MODE=1 apex
+```
+
+Open **Robot Pilot**, choose 1–20 sessions (default 3), and use the visible
+Start/Stop controls. The page is absent when research mode is not explicitly
+enabled. It is labelled synthetic throughout and never asks for participant
+identity or a human study phase. Granite is not called during collection;
+completed runs enter the existing Garage/Analysis workflow afterward.
+
+These sessions verify plumbing and provide a fixed-controller reference. They
+are not simulated participants and cannot demonstrate that coaching improves
+human lap time. Human effectiveness claims still require the planned
+comparative user study.
+
 ## Protocol and limitations
 
 Standard SCR state/action tags remain compatible with the Python client. The

@@ -17,7 +17,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from f1coach_core.torcs import SIGNATURE_COLUMNS, is_torcs_export
+from f1coach_core.torcs import (
+    MIN_LAP_DISTANCE_COVERAGE,
+    SIGNATURE_COLUMNS,
+    is_torcs_export,
+)
 from f1coach_core.workspace import workspace_root
 
 TELEMETRY_NAME = "telemetry.csv"
@@ -36,10 +40,10 @@ class RunMeta:
     n_samples: int
     n_columns: int
     car_names: tuple[str, ...]
-    laps_seen: tuple[int, ...]
+    laps_seen: tuple[int, ...]  # labels whose samples cover a full track distance
     sim_time_span_s: float
     cadence_hz: float | None  # None when the time channel is degenerate
-    capture: str  # "torcs-exporter" | "scr-client" | "human-driver"
+    capture: str  # "torcs-exporter" | "scr-client" | "human-driver" | "synthetic-robot"
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -148,11 +152,7 @@ def _build_meta(df: pd.DataFrame, *, run_id: str, source_file: str, capture: str
     cars: tuple[str, ...] = ()
     if "car_name" in df.columns:
         cars = tuple(sorted(str(name) for name in df["car_name"].dropna().unique()))
-    laps: tuple[int, ...] = ()
-    if "race_lap" in df.columns:
-        lap_numbers = pd.to_numeric(df["race_lap"], errors="coerce").dropna()
-        counts = lap_numbers.value_counts()
-        laps = tuple(sorted(int(lap) for lap, count in counts.items() if count >= 2))
+    laps = _full_track_lap_labels(df)
     return RunMeta(
         run_id=run_id,
         source_file=source_file,
@@ -165,6 +165,33 @@ def _build_meta(df: pd.DataFrame, *, run_id: str, source_file: str, capture: str
         cadence_hz=cadence,
         capture=capture,
     )
+
+
+def _full_track_lap_labels(df: pd.DataFrame) -> tuple[int, ...]:
+    if "race_lap" not in df.columns or "dist_from_start_m" not in df.columns:
+        return ()
+    evidence = pd.DataFrame(
+        {
+            "lap": pd.to_numeric(df["race_lap"], errors="coerce"),
+            "dist": pd.to_numeric(df["dist_from_start_m"], errors="coerce"),
+        }
+    ).dropna()
+    if evidence.empty:
+        return ()
+    track_length = float(evidence["dist"].max())
+    if track_length <= 0:
+        return ()
+    labels = []
+    for label, group in evidence.groupby("lap"):
+        numeric_label = float(label)
+        distance_span = float(group["dist"].max() - group["dist"].min())
+        if (
+            len(group) >= 2
+            and numeric_label.is_integer()
+            and distance_span >= MIN_LAP_DISTANCE_COVERAGE * track_length
+        ):
+            labels.append(int(numeric_label))
+    return tuple(sorted(labels))
 
 
 def _slug(stem: str) -> str:

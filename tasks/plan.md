@@ -96,3 +96,142 @@ study metadata, process launch, discovery, validation, and run registration.
 - The study-PC real lap remains the hardware-dependent acceptance gate before
   recruitment; the desktop workflow exposes this explicitly rather than
   treating automated GUI tests as participant evidence.
+
+# Implementation Plan: Synthetic Robot Pilot Capture
+
+## Overview
+
+Add a facilitator-only path that runs 1–20 sequential, unattended TORCS
+reference sessions using pinned `berniw` index 9. Each session uses
+`g-track-1`, `car7-trb1`, and three laps; records independently validated robot
+telemetry; registers complete runs; and preserves per-session and batch audit
+evidence. Synthetic data remains physically and semantically separate from
+participant data and does not automatically invoke Granite.
+
+## Architecture Decisions
+
+- Put synthetic configuration, provenance, validation, launch lifecycle, and
+  manifests in `racecoach.telemetry.synthetic_capture`; reuse the existing run
+  store only after validation rather than adding another ingestion system.
+- Allow only `berniw` index 9 in version one. Repeated sessions exercise the
+  collection workflow and establish a fixed reference, but are not represented
+  as different users or evidence of coaching effectiveness.
+- Add a separate opt-in environment variable and robot CSV schema. The native
+  recorder observes commands already produced by `rbDrive` and cannot write to
+  actuator fields or call a model/network service.
+- Use a new `apexrobotstudy.xml` with TORCS' unattended `-r` entry. The existing
+  graphical human preset, `-R` entry, and five-lap participant assignment remain
+  unchanged.
+- Launch one TORCS process at a time with an argument list and per-session
+  directory. Cancellation terminates the active child, prevents later launches,
+  and records an explicit outcome without deleting partial raw evidence.
+- Gate the Apex page behind explicit research mode. Use `QThreadPool` and task
+  identity checks so collection never blocks Qt and stale signals cannot mutate
+  a later batch.
+
+## Dependency Graph
+
+```text
+Task 15 synthetic contract
+  -> Tasks 16-17 native writer and berniw hook
+  -> Task 18 unattended three-lap preset
+  -> Tasks 19-21 Python preflight, single-session, and batch/CLI
+  -> Tasks 22-23 facilitator UI and Garage handoff
+  -> Tasks 24-25 documentation and final qualification
+```
+
+## Task List
+
+### Phase 1: Evidence contract
+
+- [ ] Task 15: Implement the fail-closed synthetic capture contract.
+
+### Checkpoint: Contract
+
+- [ ] Invalid identity, phase, count, paths, and provenance fail before launch;
+  valid evidence is atomic and cannot be labelled human.
+
+### Phase 2: Pinned TORCS reference
+
+- [ ] Task 16: Add and contract-test the GNU++98 robot CSV writer.
+- [ ] Task 17: Hook the opt-in recorder into `berniw` index 9 without changing control.
+- [ ] Task 18: Ship and verify the unattended three-lap robot preset.
+
+### Checkpoint: Native reference
+
+- [ ] Exact-archive preparation is idempotent, source/native verifiers pass,
+  other robots remain unrecorded, and the human preset is unchanged.
+
+### Phase 3: Validated collection
+
+- [ ] Task 19: Validate the installed robot preset from Python before launch.
+- [ ] Task 20: Complete one synthetic session through validation and run registration.
+- [ ] Task 21: Add sequential batches, cancellation, audit summaries, and CLI recovery.
+
+### Checkpoint: Collection slice
+
+- [ ] Fake-process tests cover three successes, failure isolation, cancellation,
+  malformed/mismatched CSV, and zero output without registering invalid runs.
+
+### Phase 4: Facilitator workflow
+
+- [ ] Task 22: Add the cancellable research batch worker and visible pilot page.
+- [ ] Task 23: Gate navigation and open completed runs through existing Garage plumbing.
+
+### Checkpoint: Desktop slice
+
+- [ ] Offscreen Qt automation uses the visible controls for a default batch of
+  three, remains responsive, and rejects stale results.
+
+### Phase 5: Evidence and qualification
+
+- [ ] Task 24: Document the synthetic protocol, provenance boundary, commands, and recovery.
+- [ ] Task 25: Run all automated checks and the real three-session TORCS/UI smoke gate.
+
+### Checkpoint: Complete
+
+- [ ] Focused tests, full pytest, Ruff, archive checksum, native verifiers,
+  offscreen Qt runtime inspection, and final diff review pass.
+- [ ] Three real unattended sessions each produce exactly one distinct,
+  validated three-lap synthetic run, or the unavailable environment gate is
+  reported explicitly without claiming qualification.
+
+## Verification Checkpoints
+
+1. After Task 15: run `QT_QPA_PLATFORM=offscreen pytest -q tests/test_synthetic_capture.py`.
+2. After Tasks 16–18: run the archive checksum, reference-recorder verifier,
+   robot-preset verifier, and `integrations/torcs-1.3.9/build.sh prepare` twice.
+3. After Tasks 19–21: rerun synthetic tests and inspect
+   `PYTHONPATH=src python -m racecoach.cli capture-synthetic --help`.
+4. After Tasks 22–23: run synthetic Qt tests plus `tests/test_window.py` and
+   perform an offscreen interaction/screenshot check.
+5. After Tasks 24–25: run full pytest, Ruff, all relevant native verifiers, and
+   the real three-session smoke procedure when the TORCS runtime is available.
+
+## Risks and Mitigations
+
+| Risk | Impact | Mitigation |
+|---|---|---|
+| Pinned `berniw` callbacks or build flags differ from the human module | High | Compile against the exact verified archive early; keep hooks minimal and GNU++98-compatible |
+| Recorder changes robot control timing or values | High | Observe only after normal control calculation; source checks prohibit actuator assignments; use buffered fail-safe output |
+| Headless race does not exit or leaves an orphan process | High | Bounded managed subprocess lifecycle, explicit cancellation, terminal outcome audit, and real smoke gate |
+| Synthetic data is confused with participants | High | Separate root, phase, schema, capture tag, id prefix, UI warning, and fail-closed provenance validation |
+| Partial or mismatched output is imported | High | Unique directories, exact module/index/track/car/lap checks, hash before registration, preserve rejected raw evidence |
+| Robot repeatability is overstated | Medium | Freeze TORCS/preset/controller identity and call sessions reference pilots, not distinct users or bit-identical trials |
+| Late Qt signals overwrite a newer batch | Medium | Immutable progress snapshots and current-task identity guards |
+| Existing human workflow regresses | High | Do not alter human contracts; rerun human capture, capture-view, window, and preset verification tests |
+
+## Parallelization and Sequencing
+
+- Tasks 16 and 18 are conceptually separate but both touch the TORCS build
+  overlay, so execute them sequentially in this workspace.
+- Tasks 19–21 must follow the native/preset contract so Python validates real
+  identifiers rather than guessed ones.
+- UI work starts only after the runner callback and cancellation contract are stable.
+- Documentation may be drafted after the collection checkpoint, then corrected
+  against the qualified runtime behavior before completion.
+
+## Open Questions
+
+- No design decision is currently open. Availability of a buildable/runnable
+  TORCS environment is an execution gate, not permission to weaken the tests.

@@ -6,6 +6,7 @@
     racecoach bob-analyze [files]  IBM Bob Shell code analysis -> docs/bob/exports/
     racecoach run                  drive through the TORCS Granite/SCR bridge
     racecoach capture-human        record a human TORCS session without controlling it
+    racecoach capture-synthetic    run pinned unattended robot reference sessions
     racecoach report               render the post-race report
 
 Exit codes: 0 ok, 2 readable user error (bad file, unknown run).
@@ -131,6 +132,33 @@ def main(argv: list[str] | None = None) -> int:
         help="patched TORCS executable produced by build.sh install",
     )
     human_cmd.add_argument(
+        "torcs_args",
+        nargs=argparse.REMAINDER,
+        help="arguments passed directly to TORCS; put them after --",
+    )
+    synthetic_cmd = commands.add_parser(
+        "capture-synthetic",
+        help="run pinned unattended TORCS reference sessions",
+    )
+    synthetic_cmd.add_argument(
+        "--count",
+        type=int,
+        default=3,
+        help="number of sequential reference sessions, 1-20 (default: 3)",
+    )
+    synthetic_cmd.add_argument(
+        "--torcs",
+        type=Path,
+        default=default_torcs_binary(),
+        help="patched TORCS executable produced by build.sh install",
+    )
+    synthetic_cmd.add_argument(
+        "--workspace",
+        type=Path,
+        default=None,
+        help="temporary Apex workspace override for this batch",
+    )
+    synthetic_cmd.add_argument(
         "torcs_args",
         nargs=argparse.REMAINDER,
         help="arguments passed directly to TORCS; put them after --",
@@ -291,6 +319,48 @@ def _dispatch(args: argparse.Namespace) -> int:
         for run_dir in result.run_dirs:
             print(f"Registered run {run_dir.name} -> {run_dir}")
         print("Next: racecoach analyze RUN_ID · racecoach coach RUN_ID")
+        return 0
+    if args.command == "capture-synthetic":
+        from racecoach.telemetry.synthetic_capture import (
+            SyntheticCaptureConfig,
+            capture_synthetic_batch,
+            default_robot_study_preset,
+        )
+
+        torcs_args = tuple(args.torcs_args)
+        if torcs_args[:1] == ("--",):
+            torcs_args = torcs_args[1:]
+        previous_workspace = os.environ.get("APEX_WORKSPACE")
+        if args.workspace is not None:
+            os.environ["APEX_WORKSPACE"] = str(args.workspace)
+        try:
+            print(
+                f"Launching {args.count} synthetic reference session(s): "
+                "berniw 9 · g-track-1 · car7-trb1 · 3 laps.",
+                flush=True,
+            )
+            result = capture_synthetic_batch(
+                SyntheticCaptureConfig(
+                    torcs_binary=args.torcs,
+                    preset=default_robot_study_preset(args.torcs),
+                    count=args.count,
+                    torcs_args=torcs_args,
+                )
+            )
+        finally:
+            if args.workspace is not None:
+                if previous_workspace is None:
+                    os.environ.pop("APEX_WORKSPACE", None)
+                else:
+                    os.environ["APEX_WORKSPACE"] = previous_workspace
+        print(f"Synthetic batch and audit -> {result.batch_dir}")
+        for outcome in result.outcomes:
+            if outcome.status == "complete":
+                run_ids = ", ".join(path.name for path in outcome.run_dirs)
+                print(f"  {outcome.session_id}: complete -> {run_ids}")
+            else:
+                detail = f" ({outcome.error})" if outcome.error else ""
+                print(f"  {outcome.session_id}: {outcome.status}{detail}")
         return 0
     if args.command == "report":
         from racecoach.report.run_report import report_run

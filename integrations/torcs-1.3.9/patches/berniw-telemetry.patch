@@ -1,0 +1,45 @@
+--- a/src/drivers/berniw/Makefile
++++ b/src/drivers/berniw/Makefile
+@@ -3,7 +3,8 @@ MODULE = ${ROBOT}.so
+ 
+ MODULEDIR = drivers/${ROBOT}
+ 
+-SOURCES   = ${ROBOT}.cpp spline.cpp trackdesc.cpp pathfinder.cpp mycar.cpp
++SOURCES   = ${ROBOT}.cpp spline.cpp trackdesc.cpp pathfinder.cpp mycar.cpp \
++            apex_robot_telemetry.cpp apex_robot_telemetry_writer.cpp
+ 
+ SHIPDIR   = drivers/${ROBOT}
+ 
+--- a/src/drivers/berniw/berniw.cpp
++++ b/src/drivers/berniw/berniw.cpp
+@@ -18,6 +18,7 @@
+ 
+ 
+ #include "berniw.h"
++#include "apex_robot_telemetry.h"
+ #include <portability.h>
+ 
+ #ifdef DMALLOC
+@@ -96,6 +97,7 @@ static const tdble waitToTurn = 1.0; /* how long should i wait till i try to tu
+ /* release resources when the module gets unloaded */
+ static void shutdown(int index) {
+ 	int i = index - 1;
++	ApexRobotTelemetryStop(index);
+ 	if (mycar[i] != NULL) {
+ 		delete mycar[i];
+ 		mycar[i] = NULL;
+@@ -157,5 +159,6 @@ static void newRace(int index, tCarElt* car, tSituation *situation)
+ 
+ 	currenttime = situation->currentTime;
++	ApexRobotTelemetryStart(index, car, situation, myTrackDesc->getTorcsTrack());
+ }
+ 
+ 
+@@ -387,6 +390,7 @@ static void drive(int index, tCarElt* car, tSituation *situation)
+ 	}
+ 
+ 	if (myc->tr_mode == 0) car->_steerCmd = steer;
++	ApexRobotTelemetryRecord(index, car, situation, myTrackDesc->getTorcsTrack());
+ }
+ 
+ /* pitstop callback */

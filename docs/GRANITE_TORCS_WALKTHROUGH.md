@@ -190,6 +190,49 @@ The run directory contains:
 - after `racecoach analyze RUN_ID`: deterministic metrics and events;
 - after `racecoach report --run RUN_ID`: the HTML report.
 
+## Synthetic collection pilot (no Granite required)
+
+Before recruiting participants, a facilitator can exercise the collection,
+validation, run-store, Garage, and analysis path with the pinned TORCS built-in
+reference robot. First verify and install the native components:
+
+```bash
+integrations/torcs-1.3.9/verify-reference-recorder.sh
+integrations/torcs-1.3.9/verify-robot-study-preset.sh
+integrations/torcs-1.3.9/build.sh install
+```
+
+For the visible workflow, launch Apex in explicit research mode:
+
+```bash
+APEX_RESEARCH_MODE=1 apex
+```
+
+Open **Robot Pilot** and start the default batch. Apex runs three sequential
+sessions of pinned `berniw` index 9; each session uses `g-track-1`,
+`car7-trb1`, and three laps. Progress, cancellation, per-session outcomes, and
+completed Garage runs are shown without asking for participant identity. The
+page is absent in the normal participant-facing application.
+
+The equivalent recovery command is:
+
+```bash
+racecoach capture-synthetic --count 3
+```
+
+Raw evidence is kept under `<workspace>/captures/synthetic/`. Every session
+manifest records the exact robot, preset, command, CSV hash, sample count,
+complete lap labels, and registered run id; the batch manifest records
+complete, failed, cancelled, and not-started outcomes. A failed session is not
+silently retried and does not invalidate completed siblings. Collection does
+not call Granite—the runs become inputs to the existing deterministic analysis
+and optional post-lap coaching after capture.
+
+Synthetic runs prove that the software pipeline operates against a frozen
+controller and can support known-difference experiments. They are not users,
+do not represent baseline/coached conditions, and cannot establish a human
+coaching benefit.
+
 ## Step 9: Granite post-lap coaching
 
 After importing a run into an Apex session, open any complete lap in

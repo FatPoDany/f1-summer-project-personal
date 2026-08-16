@@ -2,6 +2,7 @@
 
 import json
 
+import pandas as pd
 import pytest
 
 from racecoach.cli import main
@@ -45,6 +46,24 @@ def test_import_list_load_roundtrip(run_csv):
 
     run = load_run(meta.run_id)
     assert len(run.df) == 600 and run.path == run_dir
+
+
+def test_run_summary_excludes_grid_and_finish_fragments(tmp_path):
+    frame = make_run_frame()
+    grid = frame.iloc[:25].copy()
+    grid["race_lap"] = 0
+    trailing = frame.iloc[:25].copy()
+    trailing["race_lap"] = 3
+    trailing["race_finished"] = 0
+    trailing.loc[trailing.index[-1], "race_finished"] = 1
+    combined = pd.concat((grid, frame, trailing), ignore_index=True)
+    combined["sim_time_s"] = combined.index * 0.1
+    path = tmp_path / "fragments.csv"
+    combined.to_csv(path, index=False)
+
+    import_run(path)
+
+    assert list_runs()[0].laps_seen == (1, 2)
 
 
 def test_import_refuses_non_exporter_files(tmp_path):

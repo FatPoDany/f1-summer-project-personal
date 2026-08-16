@@ -5,6 +5,7 @@ Dropping or opening a canonical lap CSV goes straight to Lap Analysis;
 a TORCS run export is split into laps and lands as a session in the Garage.
 """
 
+import os
 from pathlib import Path
 
 from PySide6.QtGui import (
@@ -22,6 +23,7 @@ from apex.capture_view import CaptureGuideView
 from apex.compare_view import CompareView
 from apex.garage_view import GarageView
 from apex.live_view import LivePitWallView
+from apex.synthetic_capture_view import SyntheticCaptureView
 from f1coach_core import (
     Lap,
     Session,
@@ -43,12 +45,15 @@ class MainWindow(QMainWindow):
 
         self._garage = GarageView(self)
         self._capture = CaptureGuideView(self)
+        self._synthetic = SyntheticCaptureView(self) if _research_mode_enabled() else None
         self._analysis = AnalysisView(self)
         self._compare = CompareView(self)
         self._live = LivePitWallView(self)
         self._stacked = QStackedWidget(self)
         self._stacked.addWidget(self._garage)
         self._stacked.addWidget(self._capture)
+        if self._synthetic is not None:
+            self._stacked.addWidget(self._synthetic)
         self._stacked.addWidget(self._analysis)
         self._stacked.addWidget(self._compare)
         self._stacked.addWidget(self._live)
@@ -59,6 +64,9 @@ class MainWindow(QMainWindow):
         self._garage.status.connect(lambda text: self.statusBar().showMessage(text))
         self._capture.resultsRequested.connect(self._open_captured_runs)
         self._capture.sessionFinished.connect(self._capture_completed)
+        if self._synthetic is not None:
+            self._synthetic.resultsRequested.connect(self._open_captured_runs)
+            self._synthetic.batchFinished.connect(self._synthetic_completed)
 
         self._build_menu_and_toolbar()
         self._garage.refresh_sessions()
@@ -90,6 +98,12 @@ class MainWindow(QMainWindow):
     def _capture_completed(self, _capture_dir: str, run_dirs: list[str]) -> None:
         self.statusBar().showMessage(
             f"Driving data saved — {len(run_dirs)} validated run"
+            f"{'s' if len(run_dirs) != 1 else ''} ready for analysis"
+        )
+
+    def _synthetic_completed(self, _batch_dir: str, run_dirs: list[str]) -> None:
+        self.statusBar().showMessage(
+            f"Synthetic reference batch saved — {len(run_dirs)} validated run"
             f"{'s' if len(run_dirs) != 1 else ''} ready for analysis"
         )
 
@@ -181,6 +195,15 @@ class MainWindow(QMainWindow):
         self._capture_action.triggered.connect(
             lambda: self._stacked.setCurrentWidget(self._capture)
         )
+        self._synthetic_action = None
+        if self._synthetic is not None:
+            self._synthetic_action = QAction("Robot Pilot", self, checkable=True)
+            self._synthetic_action.setToolTip(
+                "Facilitator-only synthetic reference collection"
+            )
+            self._synthetic_action.triggered.connect(
+                lambda: self._stacked.setCurrentWidget(self._synthetic)
+            )
         self._analysis_action = QAction("Lap Analysis", self, checkable=True)
         self._analysis_action.setEnabled(False)  # until a lap is opened
         self._analysis_action.triggered.connect(
@@ -198,10 +221,13 @@ class MainWindow(QMainWindow):
         for action in (
             self._garage_action,
             self._capture_action,
+            self._synthetic_action,
             self._analysis_action,
             self._compare_action,
             self._live_action,
         ):
+            if action is None:
+                continue
             group.addAction(action)
             toolbar.addAction(action)
         self._stacked.currentChanged.connect(self._sync_view_actions)
@@ -212,16 +238,19 @@ class MainWindow(QMainWindow):
         for view, action in (
             (self._garage, self._garage_action),
             (self._capture, self._capture_action),
+            (self._synthetic, self._synthetic_action),
             (self._analysis, self._analysis_action),
             (self._compare, self._compare_action),
             (self._live, self._live_action),
         ):
-            if widget is view:
+            if action is not None and widget is view:
                 action.setChecked(True)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Bound shutdown time while asking an active capture to brake and stop."""
         self._capture.shutdown(timeout_s=2.0)
+        if self._synthetic is not None:
+            self._synthetic.shutdown(timeout_s=2.0)
         self._live.shutdown(timeout_s=2.0)
         super().closeEvent(event)
 
@@ -257,3 +286,8 @@ class MainWindow(QMainWindow):
 
     def dropEvent(self, event: QDropEvent) -> None:
         self.open_path(event.mimeData().urls()[0].toLocalFile())
+
+
+def _research_mode_enabled() -> bool:
+    value = os.environ.get("APEX_RESEARCH_MODE", "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}

@@ -38,6 +38,7 @@ SIGNATURE_COLUMNS = (
 )
 SPEED_CANDIDATES = ("total_speed_mps", "speed_body_x_mps")
 MIN_LAP_SAMPLES = 20
+MIN_LAP_DISTANCE_COVERAGE = 0.8
 
 
 @dataclass(frozen=True)
@@ -113,10 +114,15 @@ def split_torcs_run(path: str | Path) -> list[TorcsLap]:
                 seg["capture_lap_closed"], errors="coerce"
             ).iloc[-1]
             capture_closed = bool(np.isfinite(final_marker) and final_marker >= 0.5)
+        covered_track = (
+            float(canonical["dist"].max() - canonical["dist"].min())
+            >= MIN_LAP_DISTANCE_COVERAGE * track_length
+        )
         ends_at_line = (
             i < len(bounds) - 2  # a following reset closed this segment
             or i == len(bounds) - 2
             and (finish_flag or capture_closed)
+            and covered_track
         )
         if "race_lap" in seg.columns:
             lap_label = int(seg["race_lap"].iloc[len(seg) // 2])
