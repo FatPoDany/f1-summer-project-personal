@@ -114,3 +114,22 @@ def test_import_telemetry_splits_runs_into_sessions(tmp_path, monkeypatch):
     head = (sessions_root() / "bt-run" / "bt_3-lap01.csv").read_text().splitlines()[:3]
     assert head[0] == "# schema_version: 1"
     assert "torcs:bt_3.csv" in head[1] and "car: bt 3" in head[1]
+
+
+def test_reimporting_the_same_torcs_run_does_not_duplicate_laps(tmp_path, monkeypatch):
+    monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "ws"))
+    run = make_run(tmp_path / "bt_3.csv")
+    import_telemetry(run, "bt-run")
+
+    summary = import_telemetry(run, "bt-run")
+
+    assert summary == (
+        "Imported 0 new laps from TORCS run bt_3.csv "
+        "(3 already present, 2 incomplete fragments skipped)"
+    )
+    session = load_session(sessions_root() / "bt-run")
+    assert [lap.source.name for lap in session.laps] == [
+        "bt_3-lap01.csv",
+        "bt_3-lap02.csv",
+        "bt_3-lap03.csv",
+    ]

@@ -53,7 +53,7 @@ def test_garage_lists_sample_session_and_opens_laps(qtbot):
     assert window._analysis.lap is garage.session.laps[1]
 
 
-def test_analysis_defaults_reference_to_next_best_for_the_best_lap(qtbot):
+def test_analysis_defaults_to_single_lap_and_keeps_comparison_optional(qtbot):
     session = load_sample_session()
     best = session.best_lap
     window = MainWindow()
@@ -61,9 +61,8 @@ def test_analysis_defaults_reference_to_next_best_for_the_best_lap(qtbot):
     window.show_analysis(best, session)
 
     view = window._analysis
-    assert view._ref_combo.count() == 3  # "No reference" + two other laps
-    reference = view._ref_combo.currentData()
-    assert reference is not None and reference.source.stem == "lap_01"  # next-best
+    assert view._ref_combo.count() == 3  # single-lap + two optional references
+    assert view._ref_combo.currentData() is None
 
     stack = view._stack
     values = stack.values_at(2000.0)
@@ -71,7 +70,11 @@ def test_analysis_defaults_reference_to_next_best_for_the_best_lap(qtbot):
     assert values["speed_kmh"] > 0
     assert {"dist", "speed_kmh", "throttle_pct", "brake_pct", "gear"} <= set(values)
     x_ref, _ = stack._ref_curves[0].getData()
-    assert x_ref is not None and len(x_ref) > 100  # reference overlay drawn
+    assert x_ref is None or len(x_ref) == 0
+
+    view._ref_combo.setCurrentIndex(1)
+    x_ref, _ = stack._ref_curves[0].getData()
+    assert x_ref is not None and len(x_ref) > 100
 
 
 def test_open_path_shows_lap_without_session(qtbot, tmp_path):
@@ -82,7 +85,7 @@ def test_open_path_shows_lap_without_session(qtbot, tmp_path):
     window.open_path(csv)
 
     assert window._stacked.currentWidget() is window._analysis
-    assert window._analysis._ref_combo.count() == 1  # only "No reference"
+    assert window._analysis._ref_combo.count() == 1  # single-lap analysis only
     assert "dist derived" in window.statusBar().currentMessage()
 
 
@@ -99,6 +102,31 @@ def test_open_path_imports_torcs_runs_into_garage(qtbot, tmp_path):
     assert session is not None and session.name == "quali"
     assert len(session.laps) == 3
     assert "3 laps" in window.statusBar().currentMessage()
+
+
+def test_deleting_the_open_session_invalidates_analysis_and_compare(qtbot, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    ensure_sample_session()
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._garage.refresh_sessions(select="sample-session")
+    session = window._garage.session
+    assert session is not None
+    window.show_analysis(session.laps[0], session)
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(lambda *args, **kwargs: QMessageBox.StandardButton.Yes),
+    )
+
+    window._garage._delete_session()
+
+    assert window._analysis.lap is None
+    assert window._compare._session is None
+    assert not window._analysis_action.isEnabled()
+    assert not window._compare_action.isEnabled()
+    assert window._stacked.currentWidget() is window._garage
 
 
 def test_captured_run_opens_as_a_named_garage_session(qtbot, tmp_path):

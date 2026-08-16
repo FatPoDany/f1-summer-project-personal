@@ -14,9 +14,15 @@ from f1coach_core import (
     Evidence,
     Finding,
     build_coach_prompt,
+    build_evidence_summary,
+    get_provider,
+    latest_coaching_report,
     load_sample_session,
     workspace_root,
+    write_coaching_audit,
 )
+from f1coach_core.coach import opportunity_catalog
+from f1coach_core.llm import report_from_llm_text
 
 
 @pytest.fixture(autouse=True)
@@ -25,20 +31,20 @@ def workspace(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def analysis(qtbot):
+def analysis(qtbot, monkeypatch):
     session = load_sample_session()
+    monkeypatch.setattr(
+        "apex.coach_panel.get_provider", lambda name: get_provider("mock")
+    )
     window = MainWindow()
     qtbot.addWidget(window)
-    window.show_analysis(session.laps[2], session)  # ragged lap, ref defaults to best
-    # pin the provider: the picker persists the user's last choice via QSettings
-    combo = window._analysis._panel._provider_combo
-    combo.setCurrentIndex(combo.findData("mock"))
+    window.show_analysis(session.laps[2], session)
     return window._analysis
 
 
 def test_analyze_lap_renders_finding_cards(qtbot, analysis):
     panel = analysis._panel
-    assert panel._coach_button.isEnabled()  # reference (lap_02) is set by default
+    assert panel._coach_button.isEnabled()
     assert panel._coach_button.text() == "Analyze lap"
 
     with qtbot.waitSignal(panel.reportReady, timeout=5000):
@@ -51,37 +57,19 @@ def test_analyze_lap_renders_finding_cards(qtbot, analysis):
     assert panel._coach_button.text() == "Analyze lap"
 
 
-def test_provider_picker_uses_friendly_labels_and_provider_keys(qtbot, analysis):
+def test_panel_is_granite_only(qtbot, analysis):
     panel = analysis._panel
-    combo = panel._provider_combo
-    assert {combo.itemText(index): combo.itemData(index) for index in range(combo.count())} == {
-        "Granite 4.1 (local)": "granite",
-        "Mock": "mock",
-        "Ollama": "ollama",
-        "Watsonx": "watsonx",
-    }
-    combo.setCurrentIndex(combo.findData("granite"))
-    assert combo.currentText() == "Granite 4.1 (local)"
     assert panel.provider_name == "granite"
+    assert panel._provider_label.text() == "Granite 4.1 · local"
+    assert not hasattr(panel, "_provider_combo")
 
 
-def test_provider_picker_defaults_to_granite_without_saved_setting(qtbot, monkeypatch):
-    class EmptySettings:
-        def __init__(self, *_args):
-            self.values = {}
-
-        def value(self, key, default=None):
-            return self.values.get(key, default)
-
-        def setValue(self, key, value):
-            self.values[key] = value
-
-    monkeypatch.setattr("apex.coach_panel.QSettings", EmptySettings)
+def test_panel_defaults_to_granite(qtbot):
     panel = CoachPanel()
     qtbot.addWidget(panel)
 
     assert panel.provider_name == "granite"
-    assert panel._provider_combo.currentText() == "Granite 4.1 (local)"
+    assert panel._provider_label.text() == "Granite 4.1 · local"
 
 
 @pytest.mark.parametrize(
@@ -143,7 +131,7 @@ def test_export_report_roundtrip(qtbot, analysis, tmp_path):
     out = analysis.export_report(tmp_path / "report.html")
     html = out.read_text(encoding="utf-8")
     assert panel.report.findings[0].issue in html
-    assert "lap_03" in html and "lap_02" in html
+    assert "lap_03" in html and "review guide" in html
 
 
 def test_every_run_writes_an_audit_record(qtbot, analysis):
@@ -159,10 +147,103 @@ def test_every_run_writes_an_audit_record(qtbot, analysis):
     record = json.loads(panel.audit_path.read_text(encoding="utf-8"))
     assert record["ok"] is True and record["error"] is None
     assert record["provider"] == "mock" and record["model"] == "mock"
-    assert record["lap"] == "lap_03" and record["reference"] == "lap_02"
+    assert record["lap"] == "lap_03" and record["reference"] is None
     assert record["prompt"] == build_coach_prompt(record["evidence_summary"])
     assert record["raw_response"].lstrip().startswith("{")  # the raw stream, verbatim
     assert len(record["report"]["findings"]) == len(panel.report.findings)
+
+
+def _saved_granite_report(lap, reference=None):
+    summary = build_evidence_summary(lap, reference)
+    grounded = next(iter(opportunity_catalog(summary).values()))
+    evidence = {
+        key: grounded[key]
+        for key in ("metric", "corner", "value", "ref", "unit", "span_m")
+    }
+    raw = json.dumps(
+        {
+            "findings": [
+                {
+                    "focus": grounded["focus"],
+                    "issue": "A repeatable technique opportunity is visible.",
+                    "cause": "The cited trace differs from its comparison guide.",
+                    "action": "Use the cited marker to make the input more progressive.",
+                    "confidence": 0.8,
+                    "evidence": [evidence],
+                }
+            ]
+        }
+    )
+    report = report_from_llm_text(raw, "granite-4.1-local", summary)
+    path = write_coaching_audit(
+        lap_source=lap.source,
+        provider="granite",
+        lap_name=lap.source.stem,
+        reference_name=reference.source.stem if reference is not None else None,
+        evidence_summary=summary,
+        prompt=build_coach_prompt(summary),
+        raw_response=raw,
+        report=report,
+    )
+    return report, path
+
+
+def test_panel_restores_saved_granite_report_for_the_same_context(qtbot):
+    lap = load_sample_session().laps[1]
+    report, audit_path = _saved_granite_report(lap)
+    panel = CoachPanel()
+    qtbot.addWidget(panel)
+
+    with qtbot.waitSignal(panel.reportReady, timeout=5000):
+        panel.set_context(lap, None)
+
+    assert panel.report == report
+    assert panel.audit_path == audit_path
+    assert panel._audit_button.isEnabled()
+    assert len(panel.findChildren(FindingCard)) == len(report.findings)
+
+
+def test_saved_comparison_report_is_not_reused_for_single_lap_context(qtbot):
+    session = load_sample_session()
+    lap, reference = session.laps[2], session.laps[0]
+    report, audit_path = _saved_granite_report(lap, reference)
+
+    assert latest_coaching_report(lap, None, provider="granite") is None
+    restored = latest_coaching_report(lap, reference, provider="granite")
+    assert restored is not None
+    assert restored.report == report
+    assert restored.path == audit_path
+
+
+def test_saved_report_is_rejected_when_its_frozen_evidence_no_longer_matches():
+    lap = load_sample_session().laps[1]
+    _report, audit_path = _saved_granite_report(lap)
+    record = json.loads(audit_path.read_text(encoding="utf-8"))
+    record["evidence_summary"]["lap"]["lap_time_s"] += 1.0
+    audit_path.write_text(json.dumps(record), encoding="utf-8")
+
+    assert latest_coaching_report(lap, None, provider="granite") is None
+
+
+def test_saved_report_with_duplicate_cards_is_not_restored():
+    lap = load_sample_session().laps[1]
+    _report, audit_path = _saved_granite_report(lap)
+    record = json.loads(audit_path.read_text(encoding="utf-8"))
+    record["report"]["findings"] = record["report"]["findings"] * 2
+    audit_path.write_text(json.dumps(record), encoding="utf-8")
+
+    assert latest_coaching_report(lap, None, provider="granite") is None
+
+
+def test_non_utf8_audit_does_not_hide_an_earlier_valid_report():
+    lap = load_sample_session().laps[1]
+    report, audit_path = _saved_granite_report(lap)
+    (audit_path.parent / "99999999-999999-granite.json").write_bytes(b"\xff")
+
+    restored = latest_coaching_report(lap, None, provider="granite")
+    assert restored is not None
+    assert restored.report == report
+    assert restored.path == audit_path
 
 
 class ExplodingCoach(CoachProvider):
@@ -192,7 +273,7 @@ def test_failed_runs_are_audited_too(qtbot, analysis):
     assert record["model"] is None and record["report"] is None
 
 
-def test_panel_requires_a_reference(qtbot, tmp_path):
+def test_panel_allows_single_lap_analysis(qtbot, tmp_path):
     csv = tmp_path / "loose.csv"
     csv.write_text("t,speed,throttle,brake,steer,gear\n0.0,10,1,0,0,3\n1.0,20,1,0,0,3\n")
     window = MainWindow()
@@ -200,5 +281,22 @@ def test_panel_requires_a_reference(qtbot, tmp_path):
     window.open_path(csv)
 
     panel = window._analysis._panel
-    assert not panel._coach_button.isEnabled()
-    assert "reference" in panel._placeholder.text().lower()
+    assert panel._coach_button.isEnabled()
+    assert "single lap" in panel._placeholder.text().lower()
+
+
+def test_stale_worker_result_cannot_replace_a_new_context(qtbot):
+    session = load_sample_session()
+    panel = CoachPanel()
+    qtbot.addWidget(panel)
+    stale = _CoachTask(get_provider("mock"), session.laps[0], None)
+    panel._task = stale
+    panel.set_context(session.laps[1], None)
+    stale_report = get_provider("mock").generate(
+        build_evidence_summary(session.laps[0])
+    )
+
+    panel._task_finished(stale, stale_report)
+
+    assert panel.report is None
+    assert session.laps[1].source.stem in panel._placeholder.text()

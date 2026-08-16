@@ -1,0 +1,16 @@
+{
+  "run_id": "live-20260815-225240",
+  "source_file": "scr:localhost:3001",
+  "imported_at": "2026-08-15T23:02:02+00:00",
+  "n_samples": 25436,
+  "n_columns": 64,
+  "car_names": [],
+  "laps_seen": [
+    1,
+    2,
+    3
+  ],
+  "sim_time_span_s": 561.098,
+  "cadence_hz": 50.0,
+  "capture": "scr-client"
+}

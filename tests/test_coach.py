@@ -157,7 +157,7 @@ def test_finding_focus_must_match_at_least_one_cited_metric(summary):
 def test_mock_coach_grounds_findings_in_the_evidence(summary):
     report = get_provider("mock").generate(summary)
 
-    assert report.model == "mock" and report.prompt_version == "mock-2"
+    assert report.model == "mock" and report.prompt_version == "mock-3"
     assert 1 <= len(report.findings) <= 3
     worst = max(summary["corners"], key=lambda corner: corner["time_lost_s"])
     assert worst["corner"] == report.findings[0].evidence[0].corner

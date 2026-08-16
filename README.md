@@ -57,15 +57,24 @@ latency. TORCS' own Driver Board also shows the sidecar state and a bounded
 summary of fresh advice; press the number key **1** during the race if that
 board is hidden.
 
-For post-lap coaching, import a multi-lap CSV into a session, open a lap in
-**Analysis**, choose the quickest clean lap as **Reference**, keep
-**Granite 4.1 (local)** selected, and press **Analyze lap**. Apex compares both
-laps on the same distance grid and reports evidence-grounded opportunities in
-three areas: brake application/release, minimum and exit corner speed, and
-throttle reapplication/full-throttle timing. Each card can zoom the plotted
-telemetry to the cited corner. The Python validator rejects any model citation
-whose corner, value, unit, or distance span does not exactly match the computed
-evidence packet.
+For post-lap coaching, import a CSV into a session and open any complete lap in
+**Analysis**. **Single-lap analysis** is the default: press **Analyze lap** and
+the fixed **Granite 4.1 · local** race engineer reviews deterministic technique
+signals such as coasting, repeated pedal applications, and pedal overlap. A
+second lap is optional under **Compare with**; selecting one adds distance-
+aligned time, speed, braking, and throttle comparisons. Each card can zoom the
+plotted telemetry to the cited corner. The Python validator rejects any model
+citation whose corner, value, unit, or distance span does not exactly match the
+computed evidence packet. A successful Granite result is retained in that
+session's coaching audit directory; reopening the same lap with the same
+single-lap/reference selection restores its cards after revalidating the saved
+evidence. Sessions can be deleted from Garage after explicit confirmation;
+only Apex-managed copies and their audits are removed.
+
+The deterministic Granite Bridge capture defaults to three laps through
+`configs/race.toml`, providing enough data for consistency and optional
+lap-to-lap comparison while retaining single-lap coaching when only one lap is
+complete.
 
 For human telemetry, open **Collect Data** in Apex. The guided workflow checks
 study readiness, shows the locked assignment, opens TORCS directly on the

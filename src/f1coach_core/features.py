@@ -1,4 +1,4 @@
-"""Features stage: corner detection and the lap-vs-reference evidence summary.
+"""Features stage: corner detection and evidence summaries.
 
 The evidence summary is the single input every coach provider receives (and
 the ground truth the UI's evidence-zoom points back into). Everything is
@@ -129,9 +129,23 @@ def time_delta(lap: Lap, reference: Lap) -> tuple[np.ndarray, np.ndarray]:
     return grid, _on_grid(lap, grid)["t"] - _on_grid(reference, grid)["t"]
 
 
-def build_evidence_summary(lap: Lap, reference: Lap) -> dict:
-    """Everything a coach provider is allowed to know, as one JSON-ready dict."""
+def build_evidence_summary(lap: Lap, reference: Lap | None = None) -> dict:
+    """Everything a coach provider is allowed to know, as one JSON-ready dict.
+
+    With no reference, deterministic technique checks use explicit review
+    thresholds. They are not lap-time targets and are labelled as guides all
+    the way through the prompt and UI.
+    """
+    if reference is None:
+        return {
+            "analysis_mode": "single_lap",
+            "lap": {"name": lap.source.stem, "lap_time_s": round(lap.lap_time, 3)},
+            "reference": None,
+            "total_delta_s": None,
+            "corners": _single_lap_corner_facts(lap),
+        }
     return {
+        "analysis_mode": "comparison",
         "lap": {"name": lap.source.stem, "lap_time_s": round(lap.lap_time, 3)},
         "reference": {"name": reference.source.stem, "lap_time_s": round(reference.lap_time, 3)},
         "total_delta_s": round(lap.lap_time - reference.lap_time, 3),
@@ -184,6 +198,25 @@ def _first_crossing_index(
     return start + 1 + int(hits[0]) if hits.size else None
 
 
+def _crossing_count(
+    channel: np.ndarray, i0: int, i1: int, threshold: float
+) -> int:
+    """Count rising threshold crossings wholly inside a half-open span."""
+    start = max(0, int(i0))
+    stop = min(int(i1), channel.size)
+    if stop - start < 2:
+        return 0
+    previous = channel[start : stop - 1]
+    current = channel[start + 1 : stop]
+    crossed = (
+        np.isfinite(previous)
+        & np.isfinite(current)
+        & (previous < threshold)
+        & (current >= threshold)
+    )
+    return int(np.count_nonzero(crossed))
+
+
 def _rounded_channel_value(channel: np.ndarray, index: int, scale: float = 1.0) -> float | None:
     value = float(channel[index]) * scale
     return round(value, 1) if np.isfinite(value) else None
@@ -234,6 +267,31 @@ def _channel_corner_facts(
     brake_values = channels["brake"][i0 : min(apex + 1, i1)]
     finite_brake = brake_values[np.isfinite(brake_values)]
     peak_brake = round(float(finite_brake.max()) * 100.0, 1) if finite_brake.size else None
+    brake_applications = _crossing_count(
+        channels["brake"], i0, min(apex + 1, i1), BRAKE_THRESHOLD
+    )
+    throttle_applications = _crossing_count(
+        channels["throttle"], apex, i1, THROTTLE_REAPPLY_THRESHOLD
+    )
+    brake_zone = channels["brake"][i0:i1]
+    throttle_zone = channels["throttle"][i0:i1]
+    finite_pedals = np.isfinite(brake_zone) & np.isfinite(throttle_zone)
+    pedal_overlap = (
+        round(
+            100.0
+            * float(
+                np.count_nonzero(
+                    finite_pedals
+                    & (brake_zone > BRAKE_RELEASE_THRESHOLD)
+                    & (throttle_zone > THROTTLE_REAPPLY_THRESHOLD)
+                )
+            )
+            / float(np.count_nonzero(finite_pedals)),
+            1,
+        )
+        if np.count_nonzero(finite_pedals)
+        else None
+    )
     return {
         "entry_speed_kmh": _rounded_channel_value(channels["speed"], i0, 3.6),
         "min_speed_kmh": min_speed,
@@ -247,6 +305,9 @@ def _channel_corner_facts(
         "full_throttle_m": full_throttle,
         "exit_throttle_pct": _rounded_channel_value(channels["throttle"], exit_i, 100.0),
         "coast_distance_m": _coast_distance(brake_release, throttle_reapply),
+        "brake_applications": brake_applications,
+        "throttle_applications": throttle_applications,
+        "pedal_overlap_pct": pedal_overlap,
     }
 
 
@@ -292,3 +353,53 @@ def corner_table(lap: Lap, reference: Lap) -> list[dict]:
         row["delta_s"] = row.pop("time_lost_s")
         rows.append(row)
     return rows
+
+
+SINGLE_LAP_GUIDES = {
+    "coast_distance_m": 20.0,
+    "brake_applications": 1.0,
+    "throttle_applications": 1.0,
+    "pedal_overlap_pct": 5.0,
+}
+
+
+def _single_lap_corner_facts(lap: Lap) -> list[dict]:
+    """Absolute corner facts plus conservative deterministic review flags."""
+    rows = _corner_facts(lap, lap)
+    for row in rows:
+        row["time_lost_s"] = None
+        flags: list[str] = []
+        score = 0.0
+        checks = (
+            ("coast_distance_m", "long coast", lambda value, guide: value > guide),
+            (
+                "brake_applications",
+                "repeated braking",
+                lambda value, guide: value > guide,
+            ),
+            (
+                "throttle_applications",
+                "interrupted throttle",
+                lambda value, guide: value > guide,
+            ),
+            (
+                "pedal_overlap_pct",
+                "pedal overlap",
+                lambda value, guide: value >= guide,
+            ),
+        )
+        for key, label, is_flagged in checks:
+            value = row.get(key)
+            guide = SINGLE_LAP_GUIDES[key]
+            row[f"ref_{key}"] = guide
+            if isinstance(value, (int, float)) and is_flagged(float(value), guide):
+                flags.append(label)
+                score += max(1.0, float(value) / max(guide, 1.0))
+        row["technique_flags"] = flags
+        row["technique_score"] = round(score, 3)
+    return rows
+
+
+def single_lap_corner_table(lap: Lap) -> list[dict]:
+    """Inspectable absolute corner rows used by the default Analysis mode."""
+    return [dict(row) for row in _single_lap_corner_facts(lap)]

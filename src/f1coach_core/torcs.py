@@ -1,10 +1,12 @@
 """Adapter for Lin's TORCS high-frequency exporter (simuv2, stride 10, ~50 Hz).
 
 Field reference: M_Lin/torcs_highfreq_field_cheatsheet.csv (249 columns).
-A run file holds a whole outing — grid start, N flying laps, a trailing
-fragment — so this module splits the run at start-line crossings (where
-dist_from_start_m snaps back to zero) and maps each lap onto the canonical
-v1 schema (see schema.py):
+    A run file holds a whole outing — grid start, N flying laps, and sometimes
+    a trailing fragment — so this module splits the run at start-line crossings
+    (where dist_from_start_m snaps back to zero). A persisted race_finished flag
+    or deterministic capture_lap_closed marker can also close the final segment
+    when TORCS stops before sending a reset.
+    Each complete lap maps onto the canonical v1 schema (see schema.py):
 
     t        <- sim_time_s, rebased to the lap's first sample
     dist     <- dist_from_start_m
@@ -17,6 +19,7 @@ v1 schema (see schema.py):
 """
 
 from dataclasses import dataclass
+from io import StringIO
 from pathlib import Path
 
 import numpy as np
@@ -100,7 +103,21 @@ def split_torcs_run(path: str | Path) -> list[TorcsLap]:
         if len(canonical) < MIN_LAP_SAMPLES:  # corrupt rows got dropped in conversion
             continue
         starts_at_line = float(canonical["dist"].iloc[0]) < 0.02 * track_length
-        ends_at_line = i < len(bounds) - 2  # a following reset closed this segment
+        finish_flag = False
+        if "race_finished" in seg.columns:
+            final_flag = pd.to_numeric(seg["race_finished"], errors="coerce").iloc[-1]
+            finish_flag = bool(np.isfinite(final_flag) and final_flag >= 0.5)
+        capture_closed = False
+        if "capture_lap_closed" in seg.columns:
+            final_marker = pd.to_numeric(
+                seg["capture_lap_closed"], errors="coerce"
+            ).iloc[-1]
+            capture_closed = bool(np.isfinite(final_marker) and final_marker >= 0.5)
+        ends_at_line = (
+            i < len(bounds) - 2  # a following reset closed this segment
+            or i == len(bounds) - 2
+            and (finish_flag or capture_closed)
+        )
         if "race_lap" in seg.columns:
             lap_label = int(seg["race_lap"].iloc[len(seg) // 2])
         else:
@@ -120,15 +137,21 @@ def split_torcs_run(path: str | Path) -> list[TorcsLap]:
 
 def write_canonical_lap(lap: TorcsLap, dest: str | Path, source_name: str) -> None:
     """Write one split lap as a canonical v1 CSV with provenance comments."""
+    Path(dest).write_text(canonical_lap_text(lap, source_name), encoding="utf-8")
+
+
+def canonical_lap_text(lap: TorcsLap, source_name: str) -> str:
+    """Render one split lap deterministically for writing or import de-duplication."""
     provenance = f"source: torcs:{source_name}"
     if lap.car_name:
         provenance += f" | car: {lap.car_name}"
     provenance += f" | race_lap: {lap.lap_label} | measured_lap_time: {lap.lap_time:.3f}"
-    with open(dest, "w", encoding="utf-8", newline="") as fh:
-        fh.write(f"# schema_version: {SCHEMA_VERSION}\n")
-        fh.write(f"# {provenance}\n")
-        fh.write("# sector: derived as thirds of track length (TORCS exports no sectors)\n")
-        lap.df.to_csv(fh, index=False)
+    output = StringIO(newline="")
+    output.write(f"# schema_version: {SCHEMA_VERSION}\n")
+    output.write(f"# {provenance}\n")
+    output.write("# sector: derived as thirds of track length (TORCS exports no sectors)\n")
+    lap.df.to_csv(output, index=False)
+    return output.getvalue()
 
 
 def _to_canonical(seg: pd.DataFrame, speed_col: str, track_length: float) -> pd.DataFrame:

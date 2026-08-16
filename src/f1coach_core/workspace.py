@@ -23,19 +23,43 @@ def list_sessions() -> list[Path]:
     root = sessions_root()
     if not root.is_dir():
         return []
-    return sorted(p for p in root.iterdir() if p.is_dir())
+    return sorted(p for p in root.iterdir() if p.is_dir() and not p.is_symlink())
 
 
-def create_session(name: str) -> Path:
+def _validate_session_name(name: str) -> str:
     name = name.strip()
     if not name or not name.strip(".") or "/" in name or "\\" in name or "\x00" in name:
         raise ValueError(
             f"Session name {name!r} won't work as a folder name — use letters, "
             "numbers, spaces, dashes or underscores."
         )
+    return name
+
+
+def create_session(name: str) -> Path:
+    name = _validate_session_name(name)
     path = sessions_root() / name
+    if path.is_symlink():
+        raise ValueError(f"Session {name!r} is a symbolic link and cannot be managed safely.")
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def delete_session(name: str) -> Path:
+    """Delete one managed session directory, never an imported source file."""
+    name = _validate_session_name(name)
+    root = sessions_root().resolve(strict=False)
+    target = sessions_root() / name
+    if target.is_symlink():
+        raise ValueError(f"Session {name!r} is a symbolic link and cannot be deleted safely.")
+    try:
+        resolved = target.resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"No session named {name!r} exists in {root}.") from exc
+    if resolved.parent != root or not resolved.is_dir():
+        raise ValueError(f"Session {name!r} is not a managed session directory.")
+    shutil.rmtree(resolved)
+    return resolved
 
 
 def import_lap(src: str | Path, session_name: str) -> Path:
@@ -54,7 +78,7 @@ def import_telemetry(src: str | Path, session_name: str) -> str:
     canonical CSV, incomplete fragments (grid start, cut-off final lap) are
     skipped.
     """
-    from f1coach_core.torcs import is_torcs_export, split_torcs_run, write_canonical_lap
+    from f1coach_core.torcs import canonical_lap_text, is_torcs_export, split_torcs_run
 
     src = Path(src)
     if not is_torcs_export(src):
@@ -64,13 +88,33 @@ def import_telemetry(src: str | Path, session_name: str) -> str:
     laps = split_torcs_run(src)
     complete = [lap for lap in laps if lap.complete]
     dest_dir = create_session(session_name)
+    existing_contents = {
+        existing.read_bytes() for existing in dest_dir.glob("*.csv") if existing.is_file()
+    }
+    imported = 0
+    already_present = 0
     for lap in complete:
+        content = canonical_lap_text(lap, src.name)
+        encoded = content.encode("utf-8")
+        if encoded in existing_contents:
+            already_present += 1
+            continue
         dest = _unique_dest(dest_dir, f"{src.stem}-lap{lap.lap_label:02d}.csv")
-        write_canonical_lap(lap, dest, src.name)
+        dest.write_text(content, encoding="utf-8")
+        existing_contents.add(encoded)
+        imported += 1
     skipped = len(laps) - len(complete)
-    summary = f"Imported {len(complete)} laps from TORCS run {src.name}"
+    noun = "new laps" if already_present else "laps"
+    summary = f"Imported {imported} {noun} from TORCS run {src.name}"
+    details = []
+    if already_present:
+        details.append(f"{already_present} already present")
     if skipped:
-        summary += f" ({skipped} incomplete fragment{'s' if skipped != 1 else ''} skipped)"
+        details.append(
+            f"{skipped} incomplete fragment{'s' if skipped != 1 else ''} skipped"
+        )
+    if details:
+        summary += f" ({', '.join(details)})"
     return summary
 
 

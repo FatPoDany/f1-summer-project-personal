@@ -1,9 +1,9 @@
 """Local IBM Granite 4.1 provider for post-lap coaching.
 
 The live pit-wall client has a deliberately different, single-snapshot
-contract.  This provider sends the lap-vs-reference evidence summary through
-the shared coaching prompt and validates the answer through the same path as
-the other post-lap providers.
+contract. This provider sends either a single-lap technique packet or a
+lap-vs-reference evidence summary through the shared coaching prompt and
+validates the answer through the same path as the other post-lap providers.
 """
 
 from __future__ import annotations

@@ -28,9 +28,11 @@ from racecoach.telemetry.run_store import finalize_run, new_run_dir
 TICK_S = 0.02  # the TORCS robot callback normally runs every 20 ms of game time
 FLUSH_ROWS = 250
 LAP_RESET_M = 100.0  # distFromStart dropping this far back means a new lap
+FINAL_LAP_MIN_COVERAGE = 0.98
 
 FIELDS = (
     "sim_time_s", "wall_time_s", "dist_from_start_m", "dist_raced_m", "race_lap",
+    "race_finished", "capture_lap_closed",
     "cur_lap_time_s", "last_lap_time_s", "total_speed_mps",
     "speed_body_x_mps", "speed_body_y_mps", "speed_body_z_mps",
     "angle_rad", "track_pos", "damage", "fuel_l", "gear", "engine_rpm",
@@ -144,6 +146,9 @@ def capture_run(
         run_dir = new_run_dir(config.run_name)
         writer = _RowWriter(run_dir / "telemetry.csv")
         tick, lap, previous_dist = 0, 1, None
+        observed_track_m: float | None = None
+        lap_peak_m = 0.0
+        close_last_lap = False
         last_state_at = monotonic()
         advisor_started = False
         advisor_error_reported = False
@@ -167,9 +172,17 @@ def capture_run(
                         break
                     continue
                 if scr.SHUTDOWN in message:
+                    close_last_lap = _shutdown_closes_expected_lap(
+                        config.max_laps,
+                        lap,
+                        previous_dist,
+                        observed_track_m,
+                    )
                     break
                 if scr.RESTART in message:
                     lap, previous_dist = 1, None
+                    observed_track_m = None
+                    lap_peak_m = 0.0
                     continue
                 state = scr.parse_state(message)
                 if "distFromStart" not in state:
@@ -183,7 +196,17 @@ def capture_run(
                     continue  # not a state packet
                 last_state_at = monotonic()
                 dist = float(state["distFromStart"])
+                crossed_start_line = (
+                    previous_dist is not None and previous_dist - dist > LAP_RESET_M
+                )
+                if crossed_start_line:
+                    completed_peak_m = max(lap_peak_m, previous_dist)
+                    observed_track_m = max(observed_track_m or 0.0, completed_peak_m)
+                    lap_peak_m = dist
+                else:
+                    lap_peak_m = max(lap_peak_m, dist)
                 torcs_lap = _reported_race_lap(state)
+                previous_lap = lap
                 if torcs_lap is not None:
                     # TORCS starts at lap 0 on the grid, changes to 1 at the
                     # start line, and marks the finish while changing N to
@@ -195,13 +218,21 @@ def capture_run(
                         or config.max_laps is not None
                         and torcs_lap > config.max_laps
                     )
-                elif previous_dist is not None and previous_dist - dist > LAP_RESET_M:
+                elif crossed_start_line:
                     # Backward compatibility for stock SCR servers which do
                     # not expose TORCS' authoritative race counter.
                     lap += 1
                     if config.max_laps is not None and lap > config.max_laps:
                         stop_after_sample = True
                 previous_dist = dist
+
+                # When TORCS advances the counter on a finish-line reset,
+                # keep that closing sample attached to lap N so metadata does
+                # not expose a one-sample phantom lap. Some race modes instead
+                # finish at the end of lap N without advancing the counter.
+                recorded_lap = (
+                    previous_lap if stop_after_sample and lap > previous_lap else lap
+                )
 
                 # The finish packet is also the start-line reset that closes the
                 # final lap.  Persist it before stopping, otherwise the session
@@ -214,10 +245,13 @@ def capture_run(
                 # Controls have the deadline. Telemetry I/O and advisory sampling
                 # deliberately happen only after the action is on the wire.
                 sock.send(_action_message(actions, advisor).encode("ascii"))
-                writer.write(_row(tick, state, actions, lap))
+                row = _row(tick, state, actions, recorded_lap)
+                if stop_after_sample:
+                    row["capture_lap_closed"] = 1
+                writer.write(row)
                 if advisor is not None:
                     try:
-                        advisor.observe(tick, state, actions, lap)
+                        advisor.observe(tick, state, actions, recorded_lap)
                     except Exception as exc:
                         if not quiet and not advisor_error_reported:
                             print(
@@ -237,7 +271,7 @@ def capture_run(
                     sock.send(scr.format_actions(0.0, 1.0, 0.0, 1, 0.0).encode("ascii"))
                 except OSError:
                     pass
-                rows = writer.close()
+                rows = writer.close(mark_last_lap_closed=close_last_lap)
             finally:
                 if advisor is not None and advisor_started:
                     advisor.close()
@@ -346,6 +380,29 @@ def _state_flag(state: dict, key: str) -> bool:
     return math.isfinite(number) and number >= 0.5
 
 
+def _shutdown_closes_expected_lap(
+    max_laps: int | None,
+    lap: int,
+    last_dist_m: float | None,
+    observed_track_m: float | None,
+) -> bool:
+    """Recognise a race-end shutdown without treating an abort as a completed lap.
+
+    Some TORCS race modes send ``***shutdown***`` at the line without a final
+    ``raceFinished`` state or distance reset.  The shutdown closes a lap only
+    when the configured final lap is active and its sampled distance covers a
+    previously observed start-line-to-start-line track length.
+    """
+    return bool(
+        max_laps is not None
+        and lap == max_laps
+        and last_dist_m is not None
+        and observed_track_m is not None
+        and observed_track_m > 0.0
+        and last_dist_m >= FINAL_LAP_MIN_COVERAGE * observed_track_m
+    )
+
+
 def _row(tick: int, state: dict, actions: dict, lap: int) -> dict:
     def one(tag: str, default: float | None = None) -> float | None:
         value = state.get(tag, default)
@@ -371,6 +428,11 @@ def _row(tick: int, state: dict, actions: dict, lap: int) -> dict:
         "dist_from_start_m": one("distFromStart"),
         "dist_raced_m": one("distRaced"),
         "race_lap": lap,
+        "race_finished": int(_state_flag(state, "raceFinished")),
+        # Deterministic capture boundary; unlike race_finished this is not a raw
+        # TORCS field. It can be promoted when a trusted stop condition closes
+        # the final sample.
+        "capture_lap_closed": 0,
         "cur_lap_time_s": one("curLapTime"),
         "last_lap_time_s": one("lastLapTime"),
         "total_speed_mps": round(total, 4),
@@ -415,10 +477,13 @@ class _RowWriter:
         self._writer = csv.DictWriter(self._handle, fieldnames=FIELDS, restval="")
         self._writer.writeheader()
         self._buffer: list[dict] = []
+        self._pending: dict | None = None
         self._rows = 0
 
     def write(self, row: dict) -> None:
-        self._buffer.append(row)
+        if self._pending is not None:
+            self._buffer.append(self._pending)
+        self._pending = row
         self._rows += 1
         if len(self._buffer) >= FLUSH_ROWS:
             self._flush()
@@ -427,7 +492,12 @@ class _RowWriter:
         self._writer.writerows(self._buffer)
         self._buffer.clear()
 
-    def close(self) -> int:
+    def close(self, *, mark_last_lap_closed: bool = False) -> int:
+        if self._pending is not None:
+            if mark_last_lap_closed:
+                self._pending["capture_lap_closed"] = 1
+            self._buffer.append(self._pending)
+            self._pending = None
         self._flush()
         self._handle.close()
         return self._rows

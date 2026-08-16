@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 from f1coach_core import Lap, build_evidence_summary, detect_corners, features, load_sample_session
+from f1coach_core.coach import opportunity_catalog
 
 # expected apex windows on the 4.29 km sample track (segment maths ± margin)
 APEX_WINDOWS = [(690, 880), (1060, 1440), (1840, 2070), (2740, 2930), (3630, 3860)]
@@ -64,6 +65,25 @@ def test_summary_against_itself_is_flat(session):
     for corner in summary["corners"]:
         assert corner["time_lost_s"] == pytest.approx(0.0, abs=0.02)
         assert corner["min_speed_kmh"] == corner["ref_min_speed_kmh"]
+
+
+def test_single_lap_summary_contains_deterministic_technique_evidence(session):
+    summary = build_evidence_summary(session.laps[2])
+
+    assert summary["analysis_mode"] == "single_lap"
+    assert summary["reference"] is None
+    assert summary["total_delta_s"] is None
+    assert summary["corners"]
+    assert opportunity_catalog(summary)
+    for corner in summary["corners"]:
+        assert corner["time_lost_s"] is None
+        assert corner["technique_score"] >= 0.0
+        assert {
+            "brake_applications",
+            "throttle_applications",
+            "pedal_overlap_pct",
+            "coast_distance_m",
+        } <= set(corner)
 
 
 def test_corner_table_extends_the_summary_zones_with_exits():

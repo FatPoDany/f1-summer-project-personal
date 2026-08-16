@@ -151,7 +151,8 @@ def _build_meta(df: pd.DataFrame, *, run_id: str, source_file: str, capture: str
     laps: tuple[int, ...] = ()
     if "race_lap" in df.columns:
         lap_numbers = pd.to_numeric(df["race_lap"], errors="coerce").dropna()
-        laps = tuple(sorted(int(lap) for lap in lap_numbers.unique()))
+        counts = lap_numbers.value_counts()
+        laps = tuple(sorted(int(lap) for lap, count in counts.items() if count >= 2))
     return RunMeta(
         run_id=run_id,
         source_file=source_file,

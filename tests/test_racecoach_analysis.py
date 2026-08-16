@@ -195,3 +195,16 @@ def test_run_metrics_json_is_complete_and_serializable(frame):
     assert len(metrics["events"]) == 5
     assert len(metrics["sections"]) == 5
     assert metrics["analysis_notes"] == []
+
+
+def test_run_metrics_omits_a_terminal_single_sample_lap(frame):
+    terminal = frame.iloc[[-1]].copy()
+    terminal["sim_time_s"] = float(frame["sim_time_s"].iloc[-1]) + DT
+    terminal["dist_from_start_m"] = 0.2
+    terminal["race_lap"] = 3
+    terminal["cur_lap_time_s"] = 0.02
+    with_terminal = pd.concat([frame, terminal], ignore_index=True)
+
+    metrics = build_run_metrics(loaded_run(with_terminal))
+
+    assert [lap["lap"] for lap in metrics["laps"]] == [1, 2]

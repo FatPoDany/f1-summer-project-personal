@@ -20,15 +20,30 @@ from PySide6.QtWidgets import (
 from apex import theme
 from apex.coach_panel import CoachPanel
 from apex.widgets.strip_stack import StripStack
-from f1coach_core import Lap, Session, corner_table, render_html_report, sector_times
+from f1coach_core import (
+    Lap,
+    Session,
+    corner_table,
+    render_html_report,
+    sector_times,
+    single_lap_corner_table,
+)
 
-CORNER_HEADERS = (
+COMPARISON_HEADERS = (
     "Corner",
     "Brake point",
     "Min speed",
     "Throttle 50%",
     "Exit +200 m",
     "Δ vs ref",
+)
+SINGLE_LAP_HEADERS = (
+    "Corner",
+    "Brake point",
+    "Min speed",
+    "Throttle 50%",
+    "Exit +200 m",
+    "Technique review",
 )
 FLAG_THRESHOLD_S = 0.05  # a corner delta worth colouring / flagging at all
 
@@ -42,6 +57,14 @@ def _vs_m(mine: float | None, ref: float | None) -> str:
     if mine is None and ref is None:
         return "—"
     return f"{fmt(mine)} · ref {fmt(ref)} m"
+
+
+def _single_m(value: float | None) -> str:
+    return "—" if value is None else f"{value:,.0f} m"
+
+
+def _single_speed(value: float | None) -> str:
+    return "—" if value is None else f"{value:.0f} km/h"
 
 
 class AnalysisView(QWidget):
@@ -69,14 +92,14 @@ class AnalysisView(QWidget):
         header.addSpacing(12)
         header.addWidget(self._theoretical)
         header.addSpacing(12)
-        header.addWidget(QLabel("Reference:"))
+        header.addWidget(QLabel("Compare with:"))
         header.addWidget(self._ref_combo)
 
         self._stack = StripStack(self)
         self._stack.cursorMoved.connect(self._update_readout)
 
-        self._corners = QTableWidget(0, len(CORNER_HEADERS))
-        self._corners.setHorizontalHeaderLabels(CORNER_HEADERS)
+        self._corners = QTableWidget(0, len(COMPARISON_HEADERS))
+        self._corners.setHorizontalHeaderLabels(COMPARISON_HEADERS)
         self._corners.horizontalHeader().setStretchLastSection(True)
         self._corners.verticalHeader().setVisible(False)
         self._corners.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -127,29 +150,35 @@ class AnalysisView(QWidget):
         self._rebuild_reference_combo()
         self._apply_reference()
 
+    def clear_context(self) -> None:
+        """Invalidate lap data after its managed session has been deleted."""
+        self._lap = None
+        self._session = None
+        self._corner_rows = []
+        self._title.setText("No lap loaded")
+        self._readout.clear()
+        self._theoretical.clear()
+        self._ref_combo.blockSignals(True)
+        self._ref_combo.clear()
+        self._ref_combo.addItem("Single-lap analysis", None)
+        self._ref_combo.blockSignals(False)
+        self._corners.setRowCount(0)
+        self._corners.hide()
+        self._stack.clear_lap()
+        self._panel.set_context(None, None)
+
     # -- reference handling ------------------------------------------------
 
     def _rebuild_reference_combo(self) -> None:
         self._ref_combo.blockSignals(True)
         self._ref_combo.clear()
-        self._ref_combo.addItem("No reference", None)
-        default_index = 0
+        self._ref_combo.addItem("Single-lap analysis", None)
         if self._session is not None and self._lap is not None:
             others = [lap for lap in self._session.laps if lap is not self._lap]
-            default = self._default_reference(others)
             for lap in others:
                 self._ref_combo.addItem(f"{lap.source.stem} · {lap.lap_time:.3f} s", lap)
-                if lap is default:
-                    default_index = self._ref_combo.count() - 1
-        self._ref_combo.setCurrentIndex(default_index)
+        self._ref_combo.setCurrentIndex(0)
         self._ref_combo.blockSignals(False)
-
-    def _default_reference(self, others: list[Lap]) -> Lap | None:
-        """Session best — unless this lap IS the best, then the next-best lap."""
-        if not others or self._session is None or self._lap is None:
-            return None
-        best = self._session.best_lap
-        return min(others, key=lambda lap: lap.lap_time) if best is self._lap else best
 
     def _apply_reference(self) -> None:
         if self._lap is None:
@@ -168,36 +197,63 @@ class AnalysisView(QWidget):
 
     def _populate_corners(self, reference: Lap | None) -> None:
         self._corner_rows = []
-        if self._lap is None or reference is None:
+        if self._lap is None:
             self._corners.hide()
             return
         try:
-            rows = corner_table(self._lap, reference)
+            rows = (
+                corner_table(self._lap, reference)
+                if reference is not None
+                else single_lap_corner_table(self._lap)
+            )
         except ValueError:  # laps too short to share a distance grid
             rows = []
         if not rows:
             self._corners.hide()
             return
         self._corner_rows = rows
-        worst = max(range(len(rows)), key=lambda i: rows[i]["delta_s"])
+        comparison = reference is not None
+        self._corners.setHorizontalHeaderLabels(
+            COMPARISON_HEADERS if comparison else SINGLE_LAP_HEADERS
+        )
+        worst = (
+            max(range(len(rows)), key=lambda i: rows[i]["delta_s"])
+            if comparison
+            else None
+        )
         self._corners.setRowCount(len(rows))
         for i, row in enumerate(rows):
-            delta = row["delta_s"]
-            flagged = i == worst and delta > FLAG_THRESHOLD_S
-            cells = (
-                f"{row['corner']} ⚠" if flagged else row["corner"],
-                _vs_m(row["brake_point_m"], row["ref_brake_point_m"]),
-                f"{row['min_speed_kmh']:.0f} / {row['ref_min_speed_kmh']:.0f}",
-                _vs_m(row["throttle_point_m"], row["ref_throttle_point_m"]),
-                f"{row['exit_speed_kmh']:.0f} / {row['ref_exit_speed_kmh']:.0f}",
-                f"{delta:+.3f}",
-            )
+            if comparison:
+                delta = row["delta_s"]
+                flagged = i == worst and delta > FLAG_THRESHOLD_S
+                cells = (
+                    f"{row['corner']} ⚠" if flagged else row["corner"],
+                    _vs_m(row["brake_point_m"], row["ref_brake_point_m"]),
+                    f"{row['min_speed_kmh']:.0f} / {row['ref_min_speed_kmh']:.0f}",
+                    _vs_m(row["throttle_point_m"], row["ref_throttle_point_m"]),
+                    f"{row['exit_speed_kmh']:.0f} / {row['ref_exit_speed_kmh']:.0f}",
+                    f"{delta:+.3f}",
+                )
+            else:
+                flags = row["technique_flags"]
+                flagged = bool(flags)
+                review = "REVIEW · " + ", ".join(flags) if flags else "No flag"
+                cells = (
+                    f"{row['corner']} ⚠" if flagged else row["corner"],
+                    _single_m(row["brake_point_m"]),
+                    _single_speed(row["min_speed_kmh"]),
+                    _single_m(row["throttle_point_m"]),
+                    _single_speed(row["exit_speed_kmh"]),
+                    review,
+                )
             for col, text in enumerate(cells):
                 item = QTableWidgetItem(text)
                 if col == 0 and flagged:
                     item.setForeground(QColor(theme.RED))
                 if col == len(cells) - 1:
-                    if delta > FLAG_THRESHOLD_S:
+                    if not comparison:
+                        item.setForeground(QColor(theme.YELLOW if flagged else theme.TEXT_DIM))
+                    elif delta > FLAG_THRESHOLD_S:
                         item.setForeground(QColor(theme.RED))
                     elif delta < -FLAG_THRESHOLD_S:
                         item.setForeground(QColor(theme.GREEN))

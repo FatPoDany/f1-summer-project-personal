@@ -258,11 +258,87 @@ def test_bridge_race_counter_keeps_finish_sample_that_closes_the_final_lap():
 
     run = load_run(run_dir.name)
     assert run.meta.n_samples == len(states)
-    assert run.meta.laps_seen == (1, 2)
+    assert run.meta.laps_seen == (1,)
+    assert run.df["race_finished"].iloc[-1] == 1
     assert run.df["dist_from_start_m"].iloc[-1] == pytest.approx(0.2)
     complete = [lap for lap in split_torcs_run(run_dir / "telemetry.csv") if lap.complete]
     assert [lap.lap_label for lap in complete] == [1]
     assert "(brake 1)" in stub.actions[-1]  # finish still closes fail-safe
+
+
+def test_finish_flag_closes_a_final_lap_without_a_distance_reset():
+    states = [
+        make_state(5759.0, 0.0) + fmt("distRaced", -25) + fmt("raceLap", 0),
+        make_state(0.2, 0.02) + fmt("raceLap", 1),
+        *[
+            make_state(5750.0 * sample / 24, 180.0 * sample / 24) + fmt("raceLap", 1)
+            for sample in range(1, 25)
+        ],
+        make_state(5783.8, 185.2) + fmt("raceLap", 1) + fmt("raceFinished", 1),
+    ]
+    stub = StubServer(states)
+    stub.start()
+
+    run_dir = capture_run(
+        LiveConfig(host="127.0.0.1", port=stub.port, max_laps=3, timeout_s=2.0),
+        quiet=True,
+    )
+    stub.join(timeout=5.0)
+
+    run = load_run(run_dir.name)
+    assert run.df["race_finished"].iloc[-1] == 1
+    complete = [lap for lap in split_torcs_run(run_dir / "telemetry.csv") if lap.complete]
+    assert [lap.lap_label for lap in complete] == [1]
+
+
+def test_expected_final_lap_is_closed_when_bridge_shuts_down_at_the_line():
+    states = [
+        make_state(5759.0, 0.0) + fmt("distRaced", -25) + fmt("raceLap", 0),
+    ]
+    for lap in range(1, 4):
+        states.append(make_state(0.2, 0.02) + fmt("raceLap", lap))
+        states.extend(
+            make_state(5783.8 * sample / 24, 185.2 * sample / 24)
+            + fmt("raceLap", lap)
+            for sample in range(1, 25)
+        )
+    stub = StubServer(states)
+    stub.start()
+
+    run_dir = capture_run(
+        LiveConfig(host="127.0.0.1", port=stub.port, max_laps=3, timeout_s=2.0),
+        quiet=True,
+    )
+    stub.join(timeout=5.0)
+
+    run = load_run(run_dir.name)
+    assert run.df["race_finished"].iloc[-1] == 0  # raw TORCS field stays raw
+    assert run.df["capture_lap_closed"].iloc[-1] == 1
+    complete = [lap for lap in split_torcs_run(run_dir / "telemetry.csv") if lap.complete]
+    assert [lap.lap_label for lap in complete] == [1, 2, 3]
+
+
+def test_bridge_shutdown_mid_lap_does_not_close_an_incomplete_lap():
+    states = [
+        make_state(5759.0, 0.0) + fmt("distRaced", -25) + fmt("raceLap", 0),
+        make_state(0.2, 0.02) + fmt("raceLap", 1),
+        *[
+            make_state(2000.0 * sample / 24, 60.0 * sample / 24) + fmt("raceLap", 1)
+            for sample in range(1, 25)
+        ],
+    ]
+    stub = StubServer(states)
+    stub.start()
+
+    run_dir = capture_run(
+        LiveConfig(host="127.0.0.1", port=stub.port, max_laps=3, timeout_s=2.0),
+        quiet=True,
+    )
+    stub.join(timeout=5.0)
+
+    run = load_run(run_dir.name)
+    assert run.df["capture_lap_closed"].iloc[-1] == 0
+    assert not any(lap.complete for lap in split_torcs_run(run_dir / "telemetry.csv"))
 
 
 def test_no_server_reads_as_instructions():

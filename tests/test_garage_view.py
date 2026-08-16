@@ -3,6 +3,7 @@
 import json
 
 import pytest
+from PySide6.QtWidgets import QMessageBox
 
 from apex.garage_view import GarageView
 from f1coach_core import (
@@ -83,3 +84,41 @@ def test_latest_outcomes_newest_wins_and_failures_are_skipped(tmp_path):
 
     assert latest_coaching_outcomes(tmp_path) == {"lap_01": 0}
     assert latest_coaching_outcomes(tmp_path / "nowhere") == {}
+
+
+def test_delete_session_requires_confirmation(qtbot, monkeypatch):
+    target = ensure_sample_session()
+    view = GarageView()
+    qtbot.addWidget(view)
+    view.refresh_sessions()
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(lambda *args, **kwargs: QMessageBox.StandardButton.No),
+    )
+
+    view._delete_session()
+
+    assert target.is_dir()
+    assert view.session is not None
+
+
+def test_confirmed_delete_refreshes_the_garage(qtbot, monkeypatch):
+    target = ensure_sample_session()
+    view = GarageView()
+    qtbot.addWidget(view)
+    view.refresh_sessions()
+    statuses: list[str] = []
+    view.status.connect(statuses.append)
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(lambda *args, **kwargs: QMessageBox.StandardButton.Yes),
+    )
+
+    view._delete_session()
+
+    assert not target.exists()
+    assert view.session is None
+    assert view._session_list.count() == 0
+    assert statuses == ["Deleted session 'sample-session' from the Apex workspace"]

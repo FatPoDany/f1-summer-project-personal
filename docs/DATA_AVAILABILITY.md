@@ -93,12 +93,13 @@ Full catalogue: appendix A (251 fields).
 - **Cadence:** exporter stores every 10th physics step ≈ **50 Hz** (S2); the Granite Bridge and human recorder use the robot callback scheduled every **20 ms of simulator time** (about 50 Hz in real-time GUI mode). Both record TORCS' simulation clock rather than assuming wall-clock cadence.
 - **Units:** Path A is SI everywhere (S1 lists per-field units); Path B mixes km/h (speeds ×3.6, `scr_server.cpp:493`) and rad/m — a Path-B adapter must normalize to the canonical SI schema.
 - **Ranges:** actuator ranges are normative from code comments (`car.h:345-349`): steer −1..1, accel/brake/clutch 0..1, gear −1..6. Sensor ranges (speeds, forces) are *empirical* and still need validation against a real run — blocked on §6, tracked as an open item.
+- **Lap closure provenance:** Path B stores the bridge's raw `raceFinished` value as `race_finished`. If a race mode ends with `***shutdown***` before sending that final state, `capture_lap_closed` is a separate deterministic marker: it is set only on the configured final lap after at least 98% coverage of a previously observed start-line-to-start-line distance. It is never presented as a raw TORCS sensor value.
 
 ## 6. Environment reality check
 
 - The vault's `Torcs/torcs.app` is the **1.2.4 macOS PowerPC port** and cannot run on current Macs.
 - The supplied Linux `torcs-1.3.9.tar.bz2` is valid. The bridge and human recorder compile against the exact 1.3.9 ABI, and the full source tree builds with the repository's user-local dependency bootstrap. Installing and completing one on-track human lap remains the environment-dependent acceptance check; see `integrations/torcs-1.3.9/README.md`.
-- The Python side has a lock-step UDP integration test, and the real IBM Granite 4.1 GGUF has passed the strict live-advice contract. Complete on-track Granite Bridge and human-recorder runs remain the final environment-dependent acceptance tests.
+- The Python side has a lock-step UDP integration test, and the real IBM Granite 4.1 GGUF has passed the strict live-advice contract. An automated three-lap on-track Granite Bridge run has also verified capture, final-lap closure, three-lap import, and idempotent re-import; this validates the deterministic driver path, not human driving or a live Granite inference. A complete human-recorder run remains an environment-dependent acceptance test.
 
 ## 7. Appendix A — full exporter field catalogue (251 fields, from S1)
 

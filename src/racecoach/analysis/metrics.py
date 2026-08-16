@@ -16,6 +16,7 @@ from racecoach.telemetry.run_store import LoadedRun, load_run
 METRICS_NAME = "metrics.json"
 METRICS_VERSION = "run-metrics-v1"
 COMPLETE_LAP_COVERAGE = 0.95  # fraction of track length a lap must cover
+MIN_LAP_ANALYSIS_SAMPLES = 2
 
 KEY_CHANNELS = (
     "sim_time_s", "dist_from_start_m", "race_lap", "total_speed_mps",
@@ -34,7 +35,12 @@ def build_run_metrics(run: LoadedRun) -> dict:
     speed = ch.numeric(df, "total_speed_mps") if "total_speed_mps" in df.columns else None
 
     lap_rows = []
-    lap_ids = sorted(set(int(lap) for lap in laps[~np.isnan(laps)]))
+    observed = laps[~np.isnan(laps)]
+    lap_ids = sorted(
+        int(lap)
+        for lap in set(observed)
+        if int(np.count_nonzero(laps == lap)) >= MIN_LAP_ANALYSIS_SAMPLES
+    )
     for lap in lap_ids:
         inside = laps == lap
         covered = float(np.nanmax(dist[inside]) - np.nanmin(dist[inside]))
@@ -50,12 +56,16 @@ def build_run_metrics(run: LoadedRun) -> dict:
             row["mean_speed_kmh"] = round(float(np.nanmean(speed[inside])) * 3.6, 1)
         lap_rows.append(row)
 
-    events, event_notes = detect_events(df)
-    sections, section_notes = detect_sections(df)
+    analysis_df = df[np.isin(laps, lap_ids)]
+    events, event_notes = detect_events(analysis_df)
+    sections, section_notes = detect_sections(analysis_df)
+
+    run_record = run.meta.to_dict()
+    run_record["laps_seen"] = tuple(lap_ids)
 
     return {
         "metrics_version": METRICS_VERSION,
-        "run": run.meta.to_dict(),
+        "run": run_record,
         "track": {"length_m": round(track_length, 1)},
         "units": {"speed": "km/h", "distance": "m", "time": "s"},
         "laps": lap_rows,

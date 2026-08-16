@@ -25,6 +25,7 @@ from f1coach_core import (
     Session,
     TelemetrySchemaError,
     create_session,
+    delete_session,
     import_telemetry,
     latest_coaching_outcomes,
     list_sessions,
@@ -36,6 +37,7 @@ TABLE_HEADERS = ("Lap", "Time", "Δ best", "Status")
 
 class GarageView(QWidget):
     lapOpened = Signal(object, object)  # (Lap, Session)
+    sessionDeleted = Signal(str)  # absolute managed session path
     status = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -50,6 +52,9 @@ class GarageView(QWidget):
         self._session_list.currentRowChanged.connect(lambda _row: self._load_selected())
         new_button = QPushButton("New Session…")
         new_button.clicked.connect(self._new_session)
+        self._delete_button = QPushButton("Delete Session…")
+        self._delete_button.setEnabled(False)
+        self._delete_button.clicked.connect(self._delete_session)
 
         left = QWidget()
         left_layout = QVBoxLayout(left)
@@ -57,6 +62,7 @@ class GarageView(QWidget):
         left_layout.addWidget(QLabel("Sessions"))
         left_layout.addWidget(self._session_list, stretch=1)
         left_layout.addWidget(new_button)
+        left_layout.addWidget(self._delete_button)
 
         import_button = QPushButton("Import Telemetry…")
         import_button.clicked.connect(self._import_files)
@@ -114,6 +120,7 @@ class GarageView(QWidget):
         else:
             self._session = None
             self._table.setRowCount(0)
+            self._delete_button.setEnabled(False)
 
     def _load_selected(self) -> None:
         item = self._session_list.currentItem()
@@ -124,6 +131,7 @@ class GarageView(QWidget):
             self.refresh_sessions()
             return
         self._session = load_session(match)
+        self._delete_button.setEnabled(True)
         self._populate_table()
 
     def _populate_table(self) -> None:
@@ -192,6 +200,36 @@ class GarageView(QWidget):
                 QMessageBox.warning(self, "Can't create session", str(exc))
                 return
             self.refresh_sessions(select=name)
+
+    def _delete_session(self) -> None:
+        session = self._session
+        if session is None:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Delete session?",
+            f"Delete '{session.name}' and its {len(session.laps)} managed lap "
+            f"cop{'y' if len(session.laps) == 1 else 'ies'}?\n\n"
+            "This also removes coaching audit records stored with the session. "
+            "Original telemetry files imported from elsewhere are not deleted.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        if self._watch_button.isChecked():
+            self._watch_button.setChecked(False)
+        try:
+            delete_session(session.name)
+        except (ValueError, OSError) as exc:
+            QMessageBox.critical(self, "Can't delete session", str(exc))
+            return
+        name = session.name
+        deleted_path = str(session.path.resolve(strict=False))
+        self._session = None
+        self.refresh_sessions()
+        self.sessionDeleted.emit(deleted_path)
+        self.status.emit(f"Deleted session '{name}' from the Apex workspace")
 
     def _import_files(self) -> None:
         if self._session is None:

@@ -5,6 +5,7 @@ import pytest
 from f1coach_core import (
     SAMPLE_SESSION_NAME,
     create_session,
+    delete_session,
     ensure_sample_session,
     import_lap,
     import_telemetry,
@@ -67,3 +68,36 @@ def test_ensure_sample_session_is_idempotent():
     assert sorted(p.name for p in target.glob("*.csv")) == files
     session = load_session(target)
     assert len(session.laps) == 3 and session.problems == ()
+
+
+def test_delete_session_removes_only_the_managed_copy(tmp_path):
+    source = tmp_path / "original-lap.csv"
+    source.write_text(CANONICAL)
+    import_lap(source, "practice")
+
+    deleted = delete_session("practice")
+
+    assert deleted.name == "practice"
+    assert not deleted.exists()
+    assert source.is_file()
+    assert list_sessions() == []
+
+
+@pytest.mark.parametrize("name", ["../outside", "missing"])
+def test_delete_session_rejects_unmanaged_or_missing_targets(name):
+    error = ValueError if name.startswith(".") else FileNotFoundError
+    with pytest.raises(error):
+        delete_session(name)
+
+
+def test_session_symlinks_are_never_listed_or_deleted(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    root = sessions_root()
+    root.mkdir(parents=True)
+    (root / "linked").symlink_to(outside, target_is_directory=True)
+
+    assert list_sessions() == []
+    with pytest.raises(ValueError, match="symbolic link"):
+        delete_session("linked")
+    assert outside.is_dir()

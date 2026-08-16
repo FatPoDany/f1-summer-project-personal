@@ -7,7 +7,7 @@ click zooms the strips onto that corner's zone — same path as "◈ show".
 import pytest
 
 from apex.analysis_view import AnalysisView
-from f1coach_core import corner_table, load_sample_session
+from f1coach_core import corner_table, load_sample_session, single_lap_corner_table
 
 
 @pytest.fixture(autouse=True)
@@ -24,10 +24,22 @@ def make_view(qtbot):
     return view, session
 
 
-def test_corner_table_matches_core_and_flags_the_worst_corner(qtbot):
+def test_single_lap_corner_table_is_the_default(qtbot):
     view, session = make_view(qtbot)
+    assert view._ref_combo.currentData() is None
+
+    rows = single_lap_corner_table(session.laps[2])
+    assert not view._corners.isHidden()
+    assert view._corners.rowCount() == len(rows)
+    assert view._corners.horizontalHeaderItem(5).text() == "Technique review"
+    assert any("REVIEW" in view._corners.item(row, 5).text() for row in range(len(rows)))
+
+
+def test_optional_reference_comparison_matches_core_and_flags_worst(qtbot):
+    view, session = make_view(qtbot)
+    best_index = view._ref_combo.findData(session.best_lap)
+    view._ref_combo.setCurrentIndex(best_index)
     reference = view._ref_combo.currentData()
-    assert reference is session.best_lap
 
     rows = corner_table(session.laps[2], reference)
     assert not view._corners.isHidden()
@@ -54,8 +66,10 @@ def test_corner_row_click_zooms_and_highlights_the_zone(qtbot):
     assert view._stack._highlights  # the zone is shaded across the strips
 
 
-def test_without_reference_the_table_hides(qtbot):
+def test_returning_to_single_lap_keeps_the_table_visible(qtbot):
     view, _session = make_view(qtbot)
-    view._ref_combo.setCurrentIndex(0)  # "No reference"
-    assert view._corners.isHidden()
-    assert view._corner_rows == []
+    view._ref_combo.setCurrentIndex(1)
+    view._ref_combo.setCurrentIndex(0)
+    assert view._ref_combo.currentText() == "Single-lap analysis"
+    assert not view._corners.isHidden()
+    assert view._corner_rows

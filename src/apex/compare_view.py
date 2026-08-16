@@ -98,6 +98,18 @@ class CompareView(QWidget):
             combo.blockSignals(False)
         self._refresh()
 
+    def clear_session(self) -> None:
+        """Drop data whose managed session has been deleted."""
+        self._session = None
+        self._combo_a.clear()
+        self._combo_b.clear()
+        self._speed_a.setData([], [])
+        self._speed_b.setData([], [])
+        self._delta_curve.setData([], [])
+        self._verdict.clear()
+        self._changed.clear()
+        self._remaining.clear()
+
     def _refresh(self) -> None:
         lap_a: Lap | None = self._combo_a.currentData()
         lap_b: Lap | None = self._combo_b.currentData()

@@ -115,6 +115,20 @@ class StripStack(pg.GraphicsLayoutWidget):
                     _channel_series(reference, col),
                 )
 
+    def clear_lap(self) -> None:
+        """Drop plotted data when its owning session is removed."""
+        self.lap = None
+        self.reference = None
+        self._dist = np.empty(0)
+        self._series = {}
+        self.clear_highlight()
+        for curve in (*self._curves, *self._ref_curves):
+            curve.setData([], [])
+        for vline in self._vlines:
+            vline.hide()
+        self._rebuild_ribbon({})
+        self.cursorMoved.emit(None)
+
     def values_at(self, x: float) -> dict | None:
         """Channel values at (or nearest to) distance x — what the readout shows."""
         if self.lap is None or self._dist.size == 0:

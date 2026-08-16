@@ -61,6 +61,24 @@ EVIDENCE_METRICS = {
         "throttle",
     ),
     "coast_distance": ("coast_distance_m", "ref_coast_distance_m", "m", "throttle"),
+    "brake_applications": (
+        "brake_applications",
+        "ref_brake_applications",
+        "count",
+        "braking",
+    ),
+    "throttle_applications": (
+        "throttle_applications",
+        "ref_throttle_applications",
+        "count",
+        "throttle",
+    ),
+    "pedal_overlap": (
+        "pedal_overlap_pct",
+        "ref_pedal_overlap_pct",
+        "%",
+        "braking",
+    ),
 }
 
 
@@ -147,19 +165,22 @@ def _require_measurement_free_prose(value: str, where: str) -> None:
 
 
 def coachable_corners(evidence_summary: dict) -> list[dict]:
-    """Return the highest-loss corner packets that fit the local model context."""
+    """Return the most relevant corner packets that fit the model context."""
+    single_lap = evidence_summary.get("analysis_mode") == "single_lap"
     eligible: list[dict] = []
     for corner in evidence_summary.get("corners", []):
         if not isinstance(corner, dict):
             continue
+        score_key = "technique_score" if single_lap else "time_lost_s"
         try:
-            time_lost = float(corner.get("time_lost_s", 0.0))
+            score = float(corner.get(score_key, 0.0))
         except (TypeError, ValueError):
             continue
-        if not math.isfinite(time_lost) or time_lost < MIN_TIME_LOST:
+        below_threshold = score <= 0.0 if single_lap else score < MIN_TIME_LOST
+        if not math.isfinite(score) or below_threshold:
             continue
         eligible.append(corner)
-    return sorted(eligible, key=lambda corner: float(corner["time_lost_s"]), reverse=True)[
+    return sorted(eligible, key=lambda corner: float(corner[score_key]), reverse=True)[
         :MAX_COACHING_CORNERS
     ]
 
@@ -202,17 +223,25 @@ def evidence_catalog(evidence_summary: dict) -> dict[tuple[str, str], dict]:
 
 def opportunity_catalog(evidence_summary: dict) -> dict[tuple[str, str], dict]:
     """Return only citations whose direction and size support a coaching action."""
-    rules = {
-        "brake_point": lambda value, ref: value <= ref - 10.0,
-        "entry_speed": lambda value, ref: value <= ref - 3.0,
-        "min_speed": lambda value, ref: value <= ref - 3.0,
-        "exit_speed": lambda value, ref: value <= ref - 3.0,
-        "throttle_reapply": lambda value, ref: value >= ref + 15.0,
-        "throttle_point": lambda value, ref: value >= ref + 15.0,
-        "full_throttle": lambda value, ref: value >= ref + 15.0,
-        "exit_throttle": lambda value, ref: value <= ref - 5.0,
-        "coast_distance": lambda value, ref: value >= ref + 10.0,
-    }
+    if evidence_summary.get("analysis_mode") == "single_lap":
+        rules = {
+            "coast_distance": lambda value, guide: value > guide,
+            "brake_applications": lambda value, guide: value > guide,
+            "throttle_applications": lambda value, guide: value > guide,
+            "pedal_overlap": lambda value, guide: value >= guide,
+        }
+    else:
+        rules = {
+            "brake_point": lambda value, ref: value <= ref - 10.0,
+            "entry_speed": lambda value, ref: value <= ref - 3.0,
+            "min_speed": lambda value, ref: value <= ref - 3.0,
+            "exit_speed": lambda value, ref: value <= ref - 3.0,
+            "throttle_reapply": lambda value, ref: value >= ref + 15.0,
+            "throttle_point": lambda value, ref: value >= ref + 15.0,
+            "full_throttle": lambda value, ref: value >= ref + 15.0,
+            "exit_throttle": lambda value, ref: value <= ref - 5.0,
+            "coast_distance": lambda value, ref: value >= ref + 10.0,
+        }
     return {
         citation: item
         for citation, item in evidence_catalog(evidence_summary).items()
@@ -399,22 +428,72 @@ class MockCoach(CoachProvider):
         evidence_summary: dict,
         on_progress: Callable[[str], None] | None = None,
     ) -> CoachingReport:
-        corners = sorted(
-            evidence_summary.get("corners", []),
-            key=lambda c: c["time_lost_s"],
-            reverse=True,
-        )
-        findings = [
-            self._finding_for(corner)
-            for corner in corners[: self.MAX_FINDINGS]
-            if corner["time_lost_s"] >= self.MIN_TIME_LOST
-        ]
-        payload = {"findings": findings, "model": "mock", "prompt_version": "mock-2"}
+        if evidence_summary.get("analysis_mode") == "single_lap":
+            corners = coachable_corners(evidence_summary)
+            findings = [
+                self._single_lap_finding(corner, evidence_summary)
+                for corner in corners[: self.MAX_FINDINGS]
+            ]
+        else:
+            corners = sorted(
+                evidence_summary.get("corners", []),
+                key=lambda c: c["time_lost_s"],
+                reverse=True,
+            )
+            findings = [
+                self._finding_for(corner)
+                for corner in corners[: self.MAX_FINDINGS]
+                if corner["time_lost_s"] >= self.MIN_TIME_LOST
+            ]
+        payload = {"findings": findings, "model": "mock", "prompt_version": "mock-3"}
         if on_progress is not None:  # exercise the same streaming path as real providers
             import json
 
             on_progress(json.dumps(payload, indent=2))
         return coaching_report_from_dict(payload, evidence_summary)
+
+    @staticmethod
+    def _single_lap_finding(corner: dict, evidence_summary: dict) -> dict:
+        catalog = opportunity_catalog(
+            {**evidence_summary, "corners": [corner]}
+        )
+        citation = next(iter(catalog.values()))
+        guidance = {
+            "coast_distance": (
+                "Throttle transition needs review",
+                "The telemetry shows an extended neutral-pedal phase.",
+                "Make the brake-release to throttle-pickup transition smooth and deliberate.",
+            ),
+            "brake_applications": (
+                "Brake application needs review",
+                "The braking input is split into repeated applications.",
+                "Use one progressive brake application and one controlled release.",
+            ),
+            "throttle_applications": (
+                "Throttle application needs review",
+                "The exit input is interrupted by repeated throttle applications.",
+                "Build throttle progressively as steering unwinds.",
+            ),
+            "pedal_overlap": (
+                "Pedal transition needs review",
+                "Brake and throttle are applied together through part of the zone.",
+                "Separate brake release from throttle pickup with a controlled transition.",
+            ),
+        }
+        issue, cause, action = guidance[citation["metric"]]
+        return {
+            "focus": citation["focus"],
+            "issue": issue,
+            "cause": cause,
+            "action": action,
+            "confidence": 0.7,
+            "evidence": [
+                {
+                    key: citation[key]
+                    for key in ("metric", "corner", "value", "ref", "unit", "span_m")
+                }
+            ],
+        }
 
     def _finding_for(self, corner: dict) -> dict:
         label, span = corner["corner"], corner["span_m"]

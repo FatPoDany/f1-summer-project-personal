@@ -55,6 +55,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self._stacked)
 
         self._garage.lapOpened.connect(self.show_analysis)
+        self._garage.sessionDeleted.connect(self._session_deleted)
         self._garage.status.connect(lambda text: self.statusBar().showMessage(text))
         self._capture.resultsRequested.connect(self._open_captured_runs)
         self._capture.sessionFinished.connect(self._capture_completed)
@@ -111,6 +112,19 @@ class MainWindow(QMainWindow):
         self._garage.refresh_sessions(select=selected)
         self.show_garage()
         self.statusBar().showMessage(" · ".join(summaries))
+
+    def _session_deleted(self, path: str) -> None:
+        deleted = Path(path)
+        analysis_session = self._analysis._session
+        if analysis_session is not None and analysis_session.path.resolve(strict=False) == deleted:
+            self._analysis.clear_context()
+            self._analysis_action.setEnabled(False)
+            self._export_action.setEnabled(False)
+        compare_session = self._compare._session
+        if compare_session is not None and compare_session.path.resolve(strict=False) == deleted:
+            self._compare.clear_session()
+            self._compare_action.setEnabled(False)
+        self.show_garage()
 
     # -- opening files ---------------------------------------------------------
 

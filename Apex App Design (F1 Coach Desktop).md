@@ -24,8 +24,8 @@ Considered: **Tauri 2 + React** (only if M6 is far stronger in TS *and* someone 
 
 ## Screens
 
-- **Garage** — session library, lap table with deltas/status, import + watched folder; first run opens the bundled sample session (zero credentials).
-- **Lap Analysis** (the core) — reference picker (session best / previous / other driver / ideal), sector ribbon with timing-screen colors, synced speed/throttle/brake strips on a shared distance axis with one crosshair, corner table, and the **AI Race Engineer panel**: findings rendered from a fixed JSON schema (issue / evidence / cause / action / confidence) with "◈ show" evidence-zoom, provider + prompt-version chip.
+- **Garage** — session library, lap table with deltas/status, import + watched folder, and confirmed deletion of Apex-managed session copies; first run opens the bundled sample session (zero credentials).
+- **Lap Analysis** (the core) — single-lap analysis by default, an optional **Compare with** lap, sector ribbon with timing-screen colors, synced speed/throttle/brake strips on a shared distance axis with one crosshair, corner table, and the Granite-only **AI Race Engineer panel**: findings rendered from a fixed JSON schema (issue / evidence / cause / action / confidence) with "◈ show" evidence-zoom and model + prompt-version provenance. The last successful report for an exact lap/reference context is restored from its audit record and revalidated before display.
 - **Compare** — cumulative time-delta trace for two laps/drivers; doubles as the **before/after-coaching** view for evaluation.
 - **Race Engineer Q&A** — stretch; a docked chat panel reusing the same evidence summary. Ships only if Phase 5 has room.
 - **Report export** — self-contained HTML/PDF per analysis; feeds blog, IBM status forms, final report.
@@ -39,7 +39,7 @@ Desktop shell (PySide6, M6)  — views, Qt signals, QThreadPool workers, streami
         │  imports (same process, no IPC)
 f1coach-core (pure Python, M2–M5) — loaders → features → analysis + evidence summary → coach client
         │                                   Workspace store: ~/Apex/sessions/… (parquet/csv + analysis.json + coaching.json)
-one provider interface, three backends:
+one provider interface with several tested backends; the desktop AI Race Engineer exposes only local IBM Granite:
   watsonx.ai (ibm-watsonx-ai, keys in OS keychain via keyring)
   local Ollama granite3.3:8b (offline demo insurance)
   mock (canned schema-valid responses — UI dev, CI, M7 test laps)

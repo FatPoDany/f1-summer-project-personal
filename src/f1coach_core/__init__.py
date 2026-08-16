@@ -5,7 +5,13 @@ and render what it returns.
 """
 
 from f1coach_core.analysis import sector_spans, sector_times
-from f1coach_core.audit import coaching_audit_dir, latest_coaching_outcomes, write_coaching_audit
+from f1coach_core.audit import (
+    SavedCoachingReport,
+    coaching_audit_dir,
+    latest_coaching_outcomes,
+    latest_coaching_report,
+    write_coaching_audit,
+)
 from f1coach_core.coach import (
     CoachingReport,
     CoachingSchemaError,
@@ -17,7 +23,13 @@ from f1coach_core.coach import (
     coaching_report_from_dict,
     get_provider,
 )
-from f1coach_core.features import build_evidence_summary, corner_table, detect_corners, time_delta
+from f1coach_core.features import (
+    build_evidence_summary,
+    corner_table,
+    detect_corners,
+    single_lap_corner_table,
+    time_delta,
+)
 from f1coach_core.granite_coach import GraniteCoach, GraniteCoachError
 from f1coach_core.lap import Lap
 from f1coach_core.llm import build_coach_prompt
@@ -29,6 +41,7 @@ from f1coach_core.torcs import is_torcs_export, split_torcs_run
 from f1coach_core.workspace import (
     SAMPLE_SESSION_NAME,
     create_session,
+    delete_session,
     ensure_sample_session,
     import_lap,
     import_telemetry,
@@ -39,6 +52,7 @@ from f1coach_core.workspace import (
 
 __all__ = [
     "SAMPLE_SESSION_NAME",
+    "SavedCoachingReport",
     "CoachProvider",
     "CoachingReport",
     "CoachingSchemaError",
@@ -58,12 +72,14 @@ __all__ = [
     "corner_table",
     "create_session",
     "detect_corners",
+    "delete_session",
     "ensure_sample_session",
     "get_provider",
     "import_lap",
     "import_telemetry",
     "is_torcs_export",
     "latest_coaching_outcomes",
+    "latest_coaching_report",
     "list_sessions",
     "load_sample_lap",
     "load_sample_session",
@@ -72,6 +88,7 @@ __all__ = [
     "render_html_report",
     "sector_spans",
     "sector_times",
+    "single_lap_corner_table",
     "sessions_root",
     "split_torcs_run",
     "time_delta",

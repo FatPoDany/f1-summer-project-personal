@@ -104,19 +104,25 @@ def _sector_table(lap: Lap, reference: Lap | None) -> str:
     return "<h2>Sector times</h2><table>" + "".join(rows) + "</table>"
 
 
-def _findings_section(coaching: CoachingReport | None) -> str:
+def _findings_section(coaching: CoachingReport | None, *, has_reference: bool) -> str:
     if coaching is None:
         return '<h2>Coaching</h2><p class="dim">No coaching was run for this analysis.</p>'
     chip = f'<span class="chip">{html.escape(coaching.model)} · ' \
            f"{html.escape(coaching.prompt_version)}</span>"
     if not coaching.findings:
-        return f'<h2>Coaching {chip}</h2><p class="dim">Nothing significant — ' \
-               "this lap matches the reference.</p>"
+        message = (
+            "Nothing significant — this lap matches the reference."
+            if has_reference
+            else "No deterministic technique check crossed its review threshold."
+        )
+        return f'<h2>Coaching {chip}</h2><p class="dim">{message}</p>'
+    comparison_label = "vs" if has_reference else "· review guide"
     cards = []
     for finding in coaching.findings:
         evidence = "".join(
             f'<div class="dim">◈ {html.escape(e.corner)} {html.escape(e.metric)}: '
-            f"{e.value:g} {html.escape(e.unit)} vs {e.ref:g} {html.escape(e.unit)} "
+            f"{e.value:g} {html.escape(e.unit)} {comparison_label} "
+            f"{e.ref:g} {html.escape(e.unit)} "
             f"(at {e.span[0]:.0f}–{e.span[1]:.0f} m)</div>"
             for e in finding.evidence
         )
@@ -161,6 +167,6 @@ def render_html_report(
     if reference is not None:
         parts.append(_delta_chart(lap, reference))
     parts.append(_sector_table(lap, reference))
-    parts.append(_findings_section(coaching))
+    parts.append(_findings_section(coaching, has_reference=reference is not None))
     parts.append("</body></html>")
     return "".join(parts)

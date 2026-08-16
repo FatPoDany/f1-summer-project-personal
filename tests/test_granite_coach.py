@@ -7,6 +7,7 @@ import urllib.error
 import pytest
 
 from f1coach_core import build_evidence_summary, load_sample_session
+from f1coach_core.coach import opportunity_catalog
 from f1coach_core.granite_coach import GraniteCoach, GraniteCoachError
 from f1coach_core.llm import build_coach_response_format
 
@@ -51,6 +52,39 @@ def test_posts_to_openai_endpoint_with_strict_dynamic_schema_and_stamps_model(su
     assert "never invent values" in captured["payload"]["messages"][0]["content"]
     assert report.model == "served/granite-4.1-3b"
     assert progress == [raw]
+
+
+def test_granite_validates_single_lap_guidance_without_a_reference():
+    session = load_sample_session()
+    solo = build_evidence_summary(session.laps[2])
+    available = next(iter(opportunity_catalog(solo).values()))
+    citation = {
+        key: available[key]
+        for key in ("metric", "corner", "value", "ref", "unit", "span_m")
+    }
+    raw = json.dumps(
+        {
+            "findings": [
+                {
+                    "focus": available["focus"],
+                    "issue": "Review this corner.",
+                    "cause": "The evidence supports a technique review.",
+                    "action": "Use a smooth and deliberate pedal transition.",
+                    "confidence": 0.7,
+                    "evidence": [citation],
+                }
+            ]
+        }
+    )
+
+    def transport(url, payload, headers, timeout):
+        return {"choices": [{"message": {"content": raw}}]}
+
+    report = GraniteCoach(transport=transport).generate(solo)
+
+    assert report.findings
+    assert report.findings[0].evidence[0].ref == available["ref"]
+    assert "reference" not in report.findings[0].cause.lower()
 
 
 def test_environment_configures_endpoint_model_key_and_timeout(summary, monkeypatch):

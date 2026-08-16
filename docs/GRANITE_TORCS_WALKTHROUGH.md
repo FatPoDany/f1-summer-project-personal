@@ -161,8 +161,17 @@ source .venv/bin/activate
 export GRANITE_API_KEY="the same model API key"
 export GRANITE_BRIDGE_TOKEN="the same TORCS bridge token"
 racecoach run --config configs/race.toml \
-  --live-coach granite --coach-interval-s 10 --max-laps 1
+  --live-coach granite --coach-interval-s 10 --max-laps 3
 ```
+
+Three laps are the default collection target. Raw Granite Bridge
+`raceFinished` state is persisted as `race_finished`. Some TORCS race modes
+instead send `***shutdown***` at the line without a final state or distance
+reset; in that case the client sets the separate deterministic
+`capture_lap_closed` marker only when the configured final lap is active and
+its distance covers at least 98% of a previously observed lap. Mid-lap exits
+remain incomplete. If TORCS advances its lap counter, the closing sample stays
+assigned to the completed lap and cannot appear as a one-sample extra lap.
 
 Granite advice appears in the terminal and, after strict validation, as a
 printable ASCII summary of at most 31 characters on TORCS' Driver Board under
@@ -183,11 +192,13 @@ The run directory contains:
 
 ## Step 9: Granite post-lap coaching
 
-After importing a run into an Apex session, open a lap in **Analysis** and
-select a quicker clean lap as the reference. Choose **Granite 4.1 (local)** and
-press **Analyze lap**. The same loopback server from step 4 is used, but this
-request contains a compact lap-vs-reference evidence packet rather than one
-live snapshot.
+After importing a run into an Apex session, open any complete lap in
+**Analysis** and press **Analyze lap**. The AI Race Engineer is fixed to local
+**Granite 4.1**; there is no provider selector. The default **Single-lap
+analysis** does not require a reference and sends a compact packet of
+deterministic technique checks. To make a lap-to-lap comparison, select another
+lap under **Compare with** before running Granite. The same loopback server from
+step 4 is used in both modes.
 
 The deterministic analysis measures, per detected corner:
 
@@ -196,21 +207,36 @@ The deterministic analysis measures, per detected corner:
 - throttle reapplication, half-throttle and full-throttle points, exit
   throttle and coasting distance.
 
-Only the highest-loss corner zones are sent to Granite. The response is
-grammar-constrained and then checked again in Python: every cited metric,
-corner, value, reference value, unit and distance span must exactly match that
-packet. Advice cards are labelled **Braking**, **Cornering** or **Throttle**;
-use **◈ show** to zoom all telemetry strips to the cited zone. Full prompts,
-raw output, validation failures and accepted reports are kept in the coaching
-audit directory.
+Single-lap mode additionally records repeated brake/throttle applications and
+pedal-overlap percentage. Conservative code-stamped review thresholds select
+which zones Granite may discuss; they are labelled as review guides, not as a
+reference lap, an optimal target, or a lap-time improvement claim.
+
+In comparison mode only the highest-loss corner zones are sent to Granite; in
+single-lap mode only zones crossing a deterministic review threshold are sent.
+The response is grammar-constrained and then checked again in Python: every
+cited metric, corner, value, reference/guide value, unit and distance span must
+exactly match that packet. Repeated citations are removed, and findings that
+resolve to the same grounded technique are merged into one card with up to four
+unique evidence links. Each candidate is validated independently, so one
+malformed finding cannot suppress valid siblings; if none survive, the run
+still fails closed. Advice cards are labelled **Braking**,
+**Cornering** or **Throttle**; use **◈ show** to zoom all telemetry strips to
+the cited zone. Full prompts, raw output, validation failures and accepted
+reports are kept in the coaching audit directory. When the same lap is opened
+again with the same single-lap or selected-reference context, Apex restores the
+newest successful Granite report from that directory only after its frozen
+evidence packet and every citation pass validation again. Results are never
+reused across different reference selections.
 
 ## Why the output is trustworthy
 
 The response is grammar-constrained by JSON Schema, then independently
 validated in Python. Every evidence key must exist in the same telemetry
 snapshot, every number and unit must match exactly, duplicate evidence is
-rejected, and prose containing unvalidated digits is rejected. Unknown or
-extra fields are rejected. No response field is translated into a vehicle
+suppressed before each surviving finding is revalidated, and prose containing
+unvalidated digits is rejected. Unknown or extra fields are rejected. No
+response field is translated into a vehicle
 control.
 
 If the bridge stops supplying valid telemetry for 30 seconds, the client

@@ -102,7 +102,7 @@ In another terminal, from this repository:
 
 ```bash
 PYTHONPATH=src python3.11 -m racecoach.cli run \
-  --config configs/race.toml --live-coach mock --max-laps 1
+  --config configs/race.toml --live-coach mock --max-laps 3
 ```
 
 Use `--live-coach granite` after starting the Granite server described in
@@ -154,6 +154,13 @@ The race fields come directly from TORCS so the sidecar does not mistake the
 initial grid-to-start-line crossing for a completed lap. Wheel order is
 front-right, front-left, rear-right, rear-left; wear is `0` for new and `1`
 for fully worn.
+
+The Python capture preserves raw `raceFinished` separately as
+`race_finished`. When this TORCS mode ends with `***shutdown***` at the final
+line before emitting that state, it records a distinct deterministic
+`capture_lap_closed` marker only after the configured last lap covers at least
+98% of an already observed full-lap distance. A mid-lap shutdown is therefore
+still imported as an incomplete fragment.
 
 The standard action string is unchanged unless validated advice is available.
 The sidecar then appends `(coach BASE64URL)`. The unpadded token must decode

@@ -1,0 +1,62 @@
+{
+  "metrics_version": "run-metrics-v1",
+  "run": {
+    "run_id": "live-20260815-225240",
+    "source_file": "scr:localhost:3001",
+    "imported_at": "2026-08-15T23:02:02+00:00",
+    "n_samples": 25436,
+    "n_columns": 64,
+    "car_names": [],
+    "laps_seen": [
+      1,
+      2,
+      3
+    ],
+    "sim_time_span_s": 561.098,
+    "cadence_hz": 50.0,
+    "capture": "scr-client"
+  },
+  "track": {
+    "length_m": 5783.9
+  },
+  "units": {
+    "speed": "km/h",
+    "distance": "m",
+    "time": "s"
+  },
+  "laps": [
+    {
+      "lap": 1,
+      "samples": 8513,
+      "lap_time_s": 200.14,
+      "distance_covered_m": 5783.6,
+      "complete": true,
+      "top_speed_kmh": 218.8,
+      "mean_speed_kmh": 109.8
+    },
+    {
+      "lap": 2,
+      "samples": 8584,
+      "lap_time_s": 185.216,
+      "distance_covered_m": 5783.0,
+      "complete": true,
+      "top_speed_kmh": 218.8,
+      "mean_speed_kmh": 112.9
+    },
+    {
+      "lap": 3,
+      "samples": 8339,
+      "lap_time_s": 185.162,
+      "distance_covered_m": 5783.0,
+      "complete": true,
+      "top_speed_kmh": 218.8,
+      "mean_speed_kmh": 113.3
+    }
+  ],
+  "sections": [],
+  "section_stats": [],
+  "events": [],
+  "analysis_notes": [
+    "sections: skipped, missing column(s) ['track_seg_type']"
+  ]
+}
