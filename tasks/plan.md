@@ -202,6 +202,16 @@ Task 15 synthetic contract
   the two force columns the driver ABI cannot supply (`apex-human-v2`,
   `apex-robot-v2`).
 
+### Phase 7: Windows participant build
+
+- [x] Task 27 (portability): make the overlay MSVC-clean, add the Windows `-R`
+  and profile-directory patch, register the recorder sources in the Visual
+  Studio projects, and centralise both runtime layouts.
+- [ ] Task 27 (qualification): run the `windows-installer` workflow and install
+  the artifact on a real Windows machine. The workflow needs no configuration —
+  upstream ships the byte-identical pinned archive — so this is gated only on a
+  Windows run, which a Linux host cannot perform.
+
 ## Verification Checkpoints
 
 1. After Task 15: run `QT_QPA_PLATFORM=offscreen pytest -q tests/test_synthetic_capture.py`.

@@ -11,7 +11,6 @@ import json
 import os
 import re
 import subprocess
-import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -24,6 +23,7 @@ import pandas as pd
 from f1coach_core.torcs import is_torcs_export
 from f1coach_core.workspace import workspace_root
 from racecoach.telemetry.run_store import import_run
+from racecoach.telemetry.torcs_runtime import torcs_raceman_dir
 
 CAPTURE_SCHEMA_VERSION = "apex-human-capture-v1"
 TELEMETRY_DIR_ENV = "APEX_HUMAN_TELEMETRY_DIR"
@@ -156,32 +156,8 @@ class HumanCaptureResult:
     run_dirs: tuple[Path, ...]
 
 
-def default_torcs_binary() -> Path:
-    """Find a packaged simulator first, then the developer runtime."""
-    configured_prefix = os.environ.get("TORCS_PREFIX")
-    if configured_prefix:
-        return Path(configured_prefix) / "bin" / "torcs"
-
-    packaged_roots = []
-    pyinstaller_root = getattr(sys, "_MEIPASS", None)
-    if pyinstaller_root:
-        packaged_roots.append(Path(pyinstaller_root))
-    packaged_roots.append(Path(sys.executable).resolve().parent)
-    for root in packaged_roots:
-        candidate = root / "torcs-runtime" / "bin" / "torcs"
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            return candidate
-
-    uid = os.getuid() if hasattr(os, "getuid") else 0
-    prefix = Path(f"/tmp/apex-torcs-{uid}/torcs-runtime")
-    return prefix / "bin" / "torcs"
-
-
 def default_study_preset(torcs_binary: str | Path) -> TorcsStudyPreset:
-    runtime_root = Path(torcs_binary).resolve().parent.parent
-    race_config = (
-        runtime_root / "share" / "games" / "torcs" / "config" / "raceman" / "apexstudy.xml"
-    )
+    race_config = torcs_raceman_dir(torcs_binary) / "apexstudy.xml"
     return TorcsStudyPreset(
         preset_id="apex-study-v1",
         display_name="Apex Study v1",

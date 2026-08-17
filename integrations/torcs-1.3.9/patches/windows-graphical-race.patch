@@ -1,0 +1,115 @@
+--- a/src/windows/main.cpp
++++ b/src/windows/main.cpp
+@@ -112,9 +112,45 @@
+ }
+ 
+ 
++// Apex capture gives each session its own TORCS profile directory, so that a
++// study run cannot inherit or overwrite the participant's own settings. The
++// Linux launcher script reads the same variable.
++static bool setApexLocalDir(char* buf, const int bufsize)
++{
++	const char* requested = getenv("APEX_TORCS_LOCAL_DIR");
++	if (requested == NULL || requested[0] == '\0') {
++		return false;
++	}
++
++	snprintf(buf, bufsize, "%s", requested);
++	buf[bufsize-1] = '\0';
++	convertDelimiter(buf, bufsize);
++
++	// GfCreateDir and the rest of TORCS expect one trailing separator.
++	size_t length = strlen(buf);
++	if (length > 0 && buf[length-1] != '/' && length + 1 < (size_t)bufsize) {
++		buf[length] = '/';
++		buf[length+1] = '\0';
++	}
++
++	if (GfCreateDir(buf) != GF_DIR_CREATED) {
++		GfError("Apex local directory creation failed: %s\n", buf);
++		return false;
++	}
++
++	SetLocalDir(buf);
++	prepareLocalDir();
++	return true;
++}
++
++
+ // Try to set the users local application data directory
+ static void setUserLocalDir(char* buf, const int bufsize)
+ {
++	if (setApexLocalDir(buf, bufsize)) {
++		return;
++	}
++
+ 	TCHAR szLocalAppDataPath[MAX_PATH];
+ 	if (SUCCEEDED(SHGetFolderPath(NULL, CSIDL_LOCAL_APPDATA | CSIDL_FLAG_CREATE, NULL, 0, szLocalAppDataPath))) {
+ 		convertDelimiter(szLocalAppDataPath, MAX_PATH);			
+@@ -127,10 +163,11 @@
+ }
+ 
+ 
+-static void init_args(int argc, char **argv, const char** raceconfig)
++static void init_args(int argc, char **argv, const char** raceconfig,
++					  const char** graphicalraceconfig)
+ {
+ 	int i = 1;
+-	
++
+ 	while (i < argc) {
+ 		if ((strncmp(argv[i], "-s", 2) == 0) || (strncmp(argv[i], "/s", 2) == 0)) {
+ 			i++;
+@@ -148,11 +185,33 @@
+ 				printf("Please specify a race configuration xml when using -r\n");
+ 				exit(1);
+ 			}
++		} else if ((strncmp(argv[i], "-R", 2) == 0) || (strncmp(argv[i], "/R", 2) == 0)) {
++			// Same contract as the Linux build: -R opens a pinned race
++			// configuration through the normal OpenGL race path, so a
++			// participant never selects a driver, track, car or lap count.
++			i++;
++			*graphicalraceconfig = "";
++			if (i < argc) {
++				convertDelimiter(argv[i], strlen(argv[i]));
++				*graphicalraceconfig = argv[i];
++				i++;
++			}
++
++			if ((strlen(*graphicalraceconfig) == 0) ||
++				(strstr(*graphicalraceconfig, ".xml") == 0)) {
++				printf("Please specify a race configuration xml when using -R\n");
++				exit(1);
++			}
+ 		} else {
+ 			i++;		// Ignore unknown arguments
+ 		}
+ 	}
+ 
++	if ((strlen(*raceconfig) != 0) && (strlen(*graphicalraceconfig) != 0)) {
++		printf("Use only one of -r or -R\n");
++		exit(1);
++	}
++
+ 	static const int BUFSIZE = 1024;
+ 	char buf[BUFSIZE];
+ 	strncpy(buf, argv[0], BUFSIZE);
+@@ -215,13 +274,17 @@
+ main(int argc, char *argv[])
+ {
+ 	const char* raceconfig = "";
++	const char* graphicalraceconfig = "";
+ 
+ 	WindowsSpecInit();			/* init specific windows functions */
+-	init_args(argc, argv, &raceconfig);
++	init_args(argc, argv, &raceconfig, &graphicalraceconfig);
+ 
+ 	if (strlen(raceconfig) == 0) {
+ 		GfScrInit(argc, argv);	/* init screen */
+ 		TorcsEntry();			/* launch TORCS */
++		if (strlen(graphicalraceconfig) != 0) {
++			ReRunRaceOnGUI(graphicalraceconfig);
++		}
+ 		glutMainLoop();			/* event loop of glut */
+ 	} else {
+ 		// Run race from console, no Window, no OpenGL/OpenAL etc.

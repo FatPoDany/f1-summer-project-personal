@@ -1,6 +1,10 @@
 #include "apex_robot_telemetry_writer.h"
 
+#ifdef _WIN32
+#include <process.h>
+#else
 #include <unistd.h>
+#endif
 
 #include <ctime>
 #include <iomanip>
@@ -12,6 +16,16 @@ const unsigned int kFlushRows = 50;
 const int kReferenceRobotIndex = 9;
 const char *kSchemaVersion = "apex-robot-v2";
 const char *kWheelNames[4] = {"fr", "fl", "rr", "rl"};
+
+/* The filename needs one value that differs per concurrent simulator, and
+ * MSVC spells the POSIX call with a leading underscore. */
+long currentProcessId() {
+#ifdef _WIN32
+    return static_cast<long>(_getpid());
+#else
+    return static_cast<long>(getpid());
+#endif
+}
 
 }  // namespace
 
@@ -49,7 +63,7 @@ bool ApexRobotTelemetryWriter::open(const std::string &directory, int driverInde
     close();
     if (directory.empty() || driverIndex != kReferenceRobotIndex) return false;
     if (timestamp == 0L) timestamp = static_cast<long>(std::time(NULL));
-    if (processId == 0L) processId = static_cast<long>(getpid());
+    if (processId == 0L) processId = currentProcessId();
     output_.clear();
     ++openSequence_;
 

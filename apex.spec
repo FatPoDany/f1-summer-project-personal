@@ -3,8 +3,14 @@
 #   pip install -e ".[package]"
 #   pyinstaller apex.spec
 #
-# macOS -> dist/Apex.app (unsigned; right-click > Open on first launch)
-# Linux -> dist/Apex/    (wrap with appimagetool for the AppImage)
+# macOS   -> dist/Apex.app (unsigned; right-click > Open on first launch)
+# Linux   -> dist/Apex/    (wrap with appimagetool for the AppImage)
+# Windows -> dist/Apex/Apex.exe
+#
+# The study installer is built from the Windows output by
+# integrations/torcs-1.3.9/build-windows.ps1, which copies the patched simulator
+# to dist/Apex/torcs-runtime/ — the packaged location default_torcs_binary()
+# resolves from sys.executable's own directory.
 #
 # The watsonx SDK is excluded to keep the bundle lean — packaged builds are
 # the offline demo device (mock + local Ollama). Run from source for watsonx,

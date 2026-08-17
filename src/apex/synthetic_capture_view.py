@@ -23,7 +23,6 @@ from PySide6.QtWidgets import (
 
 from apex import theme
 from apex.synthetic_capture_task import BatchFunction, SyntheticCaptureTask
-from racecoach.telemetry.human_capture import default_torcs_binary
 from racecoach.telemetry.synthetic_capture import (
     RobotStudyPreset,
     SyntheticBatchResult,
@@ -33,6 +32,7 @@ from racecoach.telemetry.synthetic_capture import (
     default_robot_study_preset,
     synthetic_command,
 )
+from racecoach.telemetry.torcs_runtime import default_torcs_binary
 
 
 class SyntheticCaptureView(QWidget):

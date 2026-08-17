@@ -175,3 +175,27 @@ user-local runtime produced by `build.sh install`; `TORCS_PREFIX` remains an
 operator-only override. If the runtime is absent, the guide disables Start and
 shows a facilitator-facing repair message rather than exposing a filesystem path
 or terminal instructions to the participant.
+
+`racecoach.telemetry.torcs_runtime` owns the layout rules, because the two
+supported builds differ:
+
+| | executable | presets |
+|---|---|---|
+| autotools (Linux/macOS) | `<root>/bin/torcs` | `<root>/share/games/torcs/config/raceman/` |
+| Visual Studio (Windows) | `<root>/wtorcs.exe` | `<root>/config/raceman/` |
+
+The Windows difference is not a packaging choice: `src/windows/main.cpp` derives
+`DataDir` from the folder that holds `wtorcs.exe`.
+
+## Running a participant session on Windows
+
+A remote-desktop session adds enough input latency to invalidate a driving
+measurement, so a participant who is not sitting at the study machine needs a
+local build rather than a remote one. `integrations/torcs-1.3.9/build-windows.ps1`
+produces `ApexStudySetup.exe`, a per-user installer carrying Apex and the patched
+simulator together; the `windows-installer` GitHub Actions workflow builds the
+same artifact without anyone needing a local Windows machine. See
+[`integrations/torcs-1.3.9/README.md`](../integrations/torcs-1.3.9/README.md)
+section 3a for requirements and the three deliberate differences from the Linux
+runtime. Upstream's stock `torcs_1.3.9_setup.exe` is not a substitute: it carries
+none of the Apex patches, so it cannot record a session.

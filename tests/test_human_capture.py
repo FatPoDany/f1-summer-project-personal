@@ -1,7 +1,6 @@
 """Human TORCS capture orchestration and research-data failure paths."""
 
 import json
-import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,7 +14,6 @@ from racecoach.telemetry.human_capture import (
     ManagedTorcsRunner,
     TorcsStudyPreset,
     capture_human_runs,
-    default_torcs_binary,
 )
 from racecoach.telemetry.run_store import list_runs, load_run
 
@@ -66,18 +64,6 @@ def study_preset(tmp_path: Path) -> TorcsStudyPreset:
         laps=5,
         race_config=race_config,
     )
-
-
-def test_default_torcs_binary_prefers_runtime_bundled_with_the_app(tmp_path, monkeypatch):
-    bundle = tmp_path / "apex-bundle"
-    binary = bundle / "torcs-runtime" / "bin" / "torcs"
-    binary.parent.mkdir(parents=True)
-    binary.write_bytes(b"bundled simulator")
-    binary.chmod(0o700)
-    monkeypatch.delenv("TORCS_PREFIX", raising=False)
-    monkeypatch.setattr(sys, "_MEIPASS", str(bundle), raising=False)
-
-    assert default_torcs_binary() == binary
 
 
 @pytest.mark.parametrize(

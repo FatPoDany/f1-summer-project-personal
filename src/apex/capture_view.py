@@ -21,8 +21,8 @@ from racecoach.telemetry.human_capture import (
     TorcsStudyPreset,
     capture_human_runs,
     default_study_preset,
-    default_torcs_binary,
 )
+from racecoach.telemetry.torcs_runtime import default_torcs_binary
 
 
 class CaptureGuideView(QWidget):

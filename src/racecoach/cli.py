@@ -109,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="served Granite model alias (or GRANITE_MODEL)",
     )
-    from racecoach.telemetry.human_capture import default_torcs_binary
+    from racecoach.telemetry.torcs_runtime import default_torcs_binary
 
     human_cmd = commands.add_parser(
         "capture-human",

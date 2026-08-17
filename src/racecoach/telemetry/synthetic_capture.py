@@ -22,6 +22,7 @@ import pandas as pd
 from f1coach_core.torcs import is_torcs_export, split_torcs_run
 from f1coach_core.workspace import workspace_root
 from racecoach.telemetry.run_store import import_run
+from racecoach.telemetry.torcs_runtime import torcs_raceman_dir
 
 SYNTHETIC_CAPTURE_SCHEMA_VERSION = "apex-synthetic-capture-v1"
 SYNTHETIC_TELEMETRY_SCHEMA_VERSION = "apex-robot-v2"
@@ -260,16 +261,7 @@ def synthetic_captures_root() -> Path:
 
 
 def default_robot_study_preset(torcs_binary: str | Path) -> RobotStudyPreset:
-    runtime_root = Path(torcs_binary).resolve().parent.parent
-    race_config = (
-        runtime_root
-        / "share"
-        / "games"
-        / "torcs"
-        / "config"
-        / "raceman"
-        / "apexrobotstudy.xml"
-    )
+    race_config = torcs_raceman_dir(torcs_binary) / "apexrobotstudy.xml"
     return RobotStudyPreset(
         preset_id=REFERENCE_PRESET_ID,
         display_name="Apex Robot Study v2",

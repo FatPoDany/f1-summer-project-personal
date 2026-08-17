@@ -460,3 +460,68 @@ TORCS actually publishes and drop the two columns the driver ABI cannot supply.
   `integrations/torcs-1.3.9/README.md`
 
 **Estimated scope:** Medium (schema change across native, Python, and docs)
+
+# Windows Study Installer
+
+## Task 27: Windows build and per-user installer
+
+**Description:** Let a participant drive locally on Windows instead of over a
+remote desktop, whose input latency invalidates a driving measurement. Build the
+overlay with the Visual Studio solution and prebuilt Win64 dependencies already
+in the pinned archive, and package Apex plus the patched simulator as one
+per-user installer produced by CI.
+
+**Acceptance criteria:**
+
+- [x] The recorders compile without POSIX-only calls: `getpid` goes through a
+  `_getpid` shim and no other `unistd.h`/socket use remains outside
+  `granite_bridge`, which is excluded from the Windows build.
+- [x] `patches/windows-graphical-race.patch` gives `src/windows/main.cpp` the
+  same `-R` contract as the Linux build plus `APEX_TORCS_LOCAL_DIR`, so each
+  session gets its own TORCS profile directory.
+- [x] `patches/windows-vcxproj-telemetry.patch` registers the recorder sources
+  in `human.vcxproj` and `berniw.vcxproj`; both patches dry-run apply cleanly
+  against the pinned archive.
+- [x] `racecoach.telemetry.torcs_runtime` owns both runtime layouts
+  (`bin/torcs` + `share/games/torcs` versus `wtorcs.exe` + `config/raceman`),
+  with unit tests for each platform branch.
+- [x] The Linux path is unchanged: full pytest, Ruff, all five native verifiers,
+  and a real three-lap synthetic session still pass.
+- [ ] `msbuild` compiles the patched solution and `setup_win32_generic.bat`
+  populates a runtime containing `wtorcs.exe`, `human.dll`, and `berniw.dll`.
+- [ ] PyInstaller produces a working `Apex.exe` on Windows and `makensis`
+  compiles `installer/apexstudy.nsi`.
+- [ ] An installed build finds its bundled runtime, launches the pinned preset
+  through `-R`, and records a participant lap.
+
+**Verification:**
+
+- [x] `patch --dry-run` for both Windows patches against the verified archive.
+- [x] `QT_QPA_PLATFORM=offscreen pytest -q tests/test_torcs_runtime.py`
+- [x] `QT_QPA_PLATFORM=offscreen pytest -q` and `ruff check .`
+- [x] All `integrations/torcs-1.3.9/verify-*.sh` scripts.
+- [x] Workflow YAML parses and the Release configuration links the static CRT
+  (`RuntimeLibrary=MultiThreaded`), so no Visual C++ redistributable is needed.
+- [ ] Run the `windows-installer` workflow and install the artifact on a real
+  Windows machine.
+
+**Dependencies:** Task 26
+
+**Blocked on:** one run on Windows hardware, nothing else. The archive is no
+longer a gate: upstream's published `torcs-1.3.9.tar.bz2` is byte-identical to
+the pinned archive (SHA-256 `f9c69e86…` verified against the SourceForge
+download), so the workflow fetches it with no configuration. Everything that can
+be checked from a Linux host is done; the MSVC, PyInstaller, NSIS, and installed
+behaviour boxes need the workflow to actually run.
+
+**Files likely touched:**
+
+- `integrations/torcs-1.3.9/build-windows.ps1`
+- `integrations/torcs-1.3.9/installer/apexstudy.nsi`
+- `integrations/torcs-1.3.9/patches/windows-graphical-race.patch`
+- `integrations/torcs-1.3.9/patches/windows-vcxproj-telemetry.patch`
+- `.github/workflows/windows-installer.yml`
+- `src/racecoach/telemetry/torcs_runtime.py`, `tests/test_torcs_runtime.py`
+- `integrations/torcs-1.3.9/README.md`, `docs/HUMAN_TELEMETRY_CAPTURE.md`
+
+**Estimated scope:** Large (new build/packaging path across native, Python, CI)

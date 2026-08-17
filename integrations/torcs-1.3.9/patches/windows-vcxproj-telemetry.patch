@@ -1,0 +1,40 @@
+--- a/src/drivers/human/human.vcxproj
++++ b/src/drivers/human/human.vcxproj
+@@ -331,6 +331,8 @@
+     </ProjectReference>
+   </ItemDefinitionGroup>
+   <ItemGroup>
++    <ClCompile Include="apex_human_telemetry.cpp" />
++    <ClCompile Include="apex_human_telemetry_writer.cpp" />
+     <ClCompile Include="human.cpp" />
+     <ClCompile Include="pref.cpp" />
+   </ItemGroup>
+@@ -338,6 +340,8 @@
+     <None Include="human.def" />
+   </ItemGroup>
+   <ItemGroup>
++    <ClInclude Include="apex_human_telemetry.h" />
++    <ClInclude Include="apex_human_telemetry_writer.h" />
+     <ClInclude Include="pref.h" />
+   </ItemGroup>
+   <ItemGroup>
+--- a/src/drivers/berniw/berniw.vcxproj
++++ b/src/drivers/berniw/berniw.vcxproj
+@@ -331,6 +331,8 @@
+     </PostBuildEvent>
+   </ItemDefinitionGroup>
+   <ItemGroup>
++    <ClCompile Include="apex_robot_telemetry.cpp" />
++    <ClCompile Include="apex_robot_telemetry_writer.cpp" />
+     <ClCompile Include="berniw.cpp" />
+     <ClCompile Include="mycar.cpp" />
+     <ClCompile Include="pathfinder.cpp" />
+@@ -341,6 +343,8 @@
+     <None Include="berniw.def" />
+   </ItemGroup>
+   <ItemGroup>
++    <ClInclude Include="apex_robot_telemetry.h" />
++    <ClInclude Include="apex_robot_telemetry_writer.h" />
+     <ClInclude Include="berniw.h" />
+     <ClInclude Include="linalg.h" />
+     <ClInclude Include="mycar.h" />

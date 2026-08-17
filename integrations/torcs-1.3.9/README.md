@@ -78,6 +78,74 @@ different temporary or persistent location is required.
 The build defaults to one job because TORCS 1.3.9's generated-header phase is
 not parallel-safe.
 
+## 3a. Windows study installer
+
+Driving over a remote desktop adds enough input latency to invalidate a driving
+session, so participants on Windows need a local build. The pinned archive
+carries a maintained Visual Studio 2022 solution (`TORCS.sln`, per-module
+`.vcxproj`) and prebuilt Win32/Win64 dependency libraries under
+`src/windows/lib64` and `src/windows/dll64`, so this path uses MSVC instead of
+autotools and needs no dependency bootstrap.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File integrations\torcs-1.3.9\build-windows.ps1
+```
+
+Requirements on the build machine: Visual Studio 2022 with the C++ desktop
+workload, Python 3.12, NSIS, and Git for Windows (for `patch.exe`; the script
+falls back to `git apply`). Pass `-Action prepare|build|stage|install` to stop
+early. The result is a per-user installer:
+
+```text
+%TEMP%\apex-torcs-win\dist\ApexStudySetup.exe
+```
+
+It installs `Apex.exe` plus `torcs-runtime\wtorcs.exe` into `%LOCALAPPDATA%\Apex`,
+which is exactly where `default_torcs_binary()` looks for a packaged simulator,
+so the participant runs **Collect Data** with no configuration. Installing needs
+no administrator rights, and the Release configuration links the static CRT
+(`/MT`), so no Visual C++ redistributable is required.
+
+Nobody needs a local Windows machine to produce it: the `windows-installer`
+GitHub Actions workflow runs the same script on `windows-latest` and uploads
+`ApexStudySetup.exe` as an artifact. It is `workflow_dispatch`-only.
+
+Because `.gitignore` excludes the 563 MiB archive from the repository, the
+workflow has to fetch it, and needs no configuration to do so: upstream's
+published `torcs-1.3.9.tar.bz2` is byte-identical to the archive this repository
+pins, confirmed by SHA-256, so the job downloads it from SourceForge by default.
+Two overrides exist for when that stops being true — set the repository variable
+`TORCS_ARCHIVE_URL` to a mirror, or attach the pinned archive to a release and
+pass its tag as the `archive_tag` input, which downloads through the job's own
+`GITHUB_TOKEN` and therefore works while this repository is private. Whichever
+source is used, the archive is verified against the pinned hash before anything
+is built, so a moved or substituted tree fails the job with a clear error.
+
+The upstream 1.3.9 folder also publishes `torcs_1.3.9_setup.exe`, a stock
+Windows installer built from the same tree. It is useful for confirming that a
+participant's machine can run TORCS at all, but it cannot record telemetry: the
+Apex patches land in five separate binaries — `human.dll` and `berniw.dll` (the
+recorders), `raceengine.dll` (`ReRunRaceOnGUI`), `tgfclient.dll` (initial screen
+size), and `wtorcs.exe` (`-R` and `APEX_TORCS_LOCAL_DIR`) — so a stock install
+would have to be replaced almost entirely, mixing build toolchains across C++
+DLL boundaries. Building all of it from the pinned source is both simpler and
+safer, which is what this workflow does.
+
+Three differences from the Linux runtime are deliberate:
+
+- **Layout.** `src/windows/main.cpp` derives both `DataDir` and the fallback
+  `LocalDir` from the folder holding `wtorcs.exe`, so presets live in
+  `<install>\torcs-runtime\config\raceman\` rather than under
+  `share/games/torcs/`. `racecoach.telemetry.torcs_runtime` owns that rule for
+  both platforms.
+- **Graphical preset entry.** Stock `src/windows/main.cpp` understands only
+  `-r`. `patches/windows-graphical-race.patch` adds the same `-R` contract the
+  Linux build has, plus `APEX_TORCS_LOCAL_DIR` support so each session gets its
+  own TORCS profile directory instead of inheriting the participant's settings.
+- **No Granite Bridge.** Its UDP socket code is POSIX-only, and the live-coach
+  path is not part of the study workflow, so the module is absent from the
+  Windows build. Human and synthetic capture are unaffected.
+
 ## 4. Run a race
 
 For a multi-user server, set the same private token in the terminals that
