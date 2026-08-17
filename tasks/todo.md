@@ -567,3 +567,52 @@ which the Linux path never exercises:
 - `integrations/torcs-1.3.9/README.md`, `docs/HUMAN_TELEMETRY_CAPTURE.md`
 
 **Estimated scope:** Large (new build/packaging path across native, Python, CI)
+
+# Participant Experience (from the first real Windows session)
+
+Raised after a participant completed the assignment on Windows. The capture
+itself worked; everything below is what the run exposed.
+
+## Task 28: Data correctness from a real session
+
+- [x] Five driven laps imported as five. The splitter closed a final lap only on
+  `race_finished` or `capture_lap_closed`, and the human recorder emits neither:
+  it runs in the driver callback, which the race engine stops calling at the
+  finish line, so the last lap had no closing distance reset either. Every human
+  capture silently lost its last lap. Distance coverage now closes it, which is
+  the same 98% rule the SCR path already used, and a part-driven lap still
+  imports as an incomplete fragment.
+- [x] The Collect Data failure line stated the capture directory twice: the
+  exception message already ends with it and the view appended it again.
+- [x] Lap column shows the bare lap number, not the imported file stem.
+
+## Task 29: Study identity through to the Garage
+
+- [x] Carry participant id, study phase, and the assigned setup from the capture
+  into the run store and into each lap file's own header, so a lap keeps saying
+  who drove it wherever the file ends up.
+- [x] Garage columns: Lap, Driver, Time, delta to best, status; status reads
+  `SESSION BEST` or `ANALYSE · N findings`.
+
+## Task 30: What the participant sees after driving
+
+- [x] Register the run in the Garage automatically when a session finishes. The
+  completion screen stays put rather than navigating away, so the hand-over
+  instruction is still on the screen the participant ends on.
+- [x] Tell them where their data is and what to hand to the researchers.
+- [ ] Idea, not scheduled: upload finished runs to a study server automatically.
+  Recorded here so it is not lost; needs its own decision on hosting, consent,
+  and what leaves the participant's machine.
+
+## Task 31: Coaching a driver can act on
+
+- [ ] The current coach output is built for researchers reading traces. A
+  participant needs the specific stretches of track they lost time on, replayed
+  with a plain-language conclusion per stretch.
+
+## Task 32: Granite without a terminal
+
+- [ ] The app must start and manage the model itself. Participants cannot run a
+  server from a command line, so today the coaching path is unreachable for them.
+  Delivery method is an open decision: bundling the weights would take the
+  installer from 380 MB to several GB.

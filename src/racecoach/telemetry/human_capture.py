@@ -20,6 +20,7 @@ from typing import Protocol
 
 import pandas as pd
 
+from f1coach_core.lap import StudyIdentity
 from f1coach_core.torcs import is_torcs_export
 from f1coach_core.workspace import workspace_root
 from racecoach.telemetry.run_store import import_run
@@ -293,7 +294,15 @@ def capture_human_runs(
     run_dirs = []
     run_records = []
     for path, frame in non_empty:
-        run_dir = import_run(path, capture="human-driver")
+        run_dir = import_run(
+            path,
+            capture="human-driver",
+            identity=StudyIdentity(
+                driver=config.participant_id,
+                phase=config.phase,
+                setup=None if config.preset is None else config.preset.preset_id,
+            ),
+        )
         run_dirs.append(run_dir)
         run_records.append(
             {

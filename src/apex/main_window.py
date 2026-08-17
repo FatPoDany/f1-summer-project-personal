@@ -5,6 +5,7 @@ Dropping or opening a canonical lap CSV goes straight to Lap Analysis;
 a TORCS run export is split into laps and lands as a session in the Garage.
 """
 
+import json
 import os
 from pathlib import Path
 
@@ -27,11 +28,13 @@ from apex.synthetic_capture_view import SyntheticCaptureView
 from f1coach_core import (
     Lap,
     Session,
+    StudyIdentity,
     TelemetrySchemaError,
     import_telemetry,
     is_torcs_export,
     load_telemetry_csv,
 )
+from f1coach_core.lap import NO_IDENTITY
 
 
 class MainWindow(QMainWindow):
@@ -96,6 +99,11 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(summary)
 
     def _capture_completed(self, _capture_dir: str, run_dirs: list[str]) -> None:
+        # Register the laps in the Garage straight away. A participant should not
+        # have to know that a further click is what makes their drive appear, and
+        # a run that is never opened is a run the researchers never receive.
+        # Navigation is left alone so the hand-over instructions stay on screen.
+        self._open_captured_runs(run_dirs, navigate=False)
         self.statusBar().showMessage(
             f"Driving data saved — {len(run_dirs)} validated run"
             f"{'s' if len(run_dirs) != 1 else ''} ready for analysis"
@@ -107,7 +115,7 @@ class MainWindow(QMainWindow):
             f"{'s' if len(run_dirs) != 1 else ''} ready for analysis"
         )
 
-    def _open_captured_runs(self, run_dirs: list[str]) -> None:
+    def _open_captured_runs(self, run_dirs: list[str], navigate: bool = True) -> None:
         summaries = []
         selected = None
         for value in run_dirs:
@@ -118,14 +126,21 @@ class MainWindow(QMainWindow):
                 continue
             telemetry = run_dir / "telemetry.csv"
             try:
-                summaries.append(import_telemetry(telemetry, session_name=run_dir.name))
+                summaries.append(
+                    import_telemetry(
+                        telemetry,
+                        session_name=run_dir.name,
+                        identity=_run_identity(run_dir),
+                    )
+                )
             except (TelemetrySchemaError, OSError) as exc:
                 QMessageBox.critical(self, "Can't open captured laps", str(exc))
                 return
             self._opened_capture_runs.add(run_dir)
         self._garage.refresh_sessions(select=selected)
-        self.show_garage()
-        self.statusBar().showMessage(" · ".join(summaries))
+        if navigate:
+            self.show_garage()
+            self.statusBar().showMessage(" · ".join(summaries))
 
     def _session_deleted(self, path: str) -> None:
         deleted = Path(path)
@@ -291,3 +306,21 @@ class MainWindow(QMainWindow):
 def _research_mode_enabled() -> bool:
     value = os.environ.get("APEX_RESEARCH_MODE", "")
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _run_identity(run_dir: Path) -> StudyIdentity:
+    """Read the study identity a captured run recorded for itself.
+
+    Read from the run's own meta.json rather than the Collect Data form, so
+    opening a run later — or one captured by someone else — still shows who
+    drove it. A run from outside the study workflow simply carries nothing.
+    """
+    try:
+        meta = json.loads((run_dir / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return NO_IDENTITY
+    if not isinstance(meta, dict):
+        return NO_IDENTITY
+    return StudyIdentity(
+        driver=meta.get("driver"), phase=meta.get("phase"), setup=meta.get("setup")
+    )

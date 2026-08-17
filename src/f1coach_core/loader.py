@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from f1coach_core.lap import Lap
+from f1coach_core.lap import Lap, StudyIdentity
 from f1coach_core.schema import (
     CANONICAL_ORDER,
     REQUIRED_COLUMNS,
@@ -30,9 +30,10 @@ def load_telemetry_csv(path: str | Path) -> Lap:
         raise TelemetrySchemaError(f"No such telemetry file: {path}")
 
     try:
-        version = _read_schema_version(path)
+        header = _read_header_fields(path)
     except OSError as exc:
         raise TelemetrySchemaError(f"{path.name} can't be read: {exc}") from exc
+    version = _read_schema_version(header, path)
     if version not in SUPPORTED_VERSIONS:
         supported = ", ".join(str(v) for v in SUPPORTED_VERSIONS)
         raise TelemetrySchemaError(
@@ -87,23 +88,49 @@ def load_telemetry_csv(path: str | Path) -> Lap:
     extra = [c for c in df.columns if c not in ordered]
     df = df[ordered + extra]
 
-    return Lap(df=df, source=path, schema_version=version, dist_derived=dist_derived)
+    return Lap(
+        df=df,
+        source=path,
+        schema_version=version,
+        dist_derived=dist_derived,
+        lap_number=_read_lap_number(header),
+        identity=StudyIdentity(
+            driver=header.get("driver"),
+            phase=header.get("phase"),
+            setup=header.get("setup"),
+        ),
+    )
 
 
-def _read_schema_version(path: Path) -> int:
-    """Parse the leading '# key: value' metadata lines; only schema_version so far."""
+def _read_header_fields(path: Path) -> dict[str, str]:
+    """Collect the leading '# key: value' metadata lines."""
+    fields: dict[str, str] = {}
     with open(path, encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
             if not line.startswith("#"):
                 break
-            key, _, value = line.lstrip("# ").partition(":")
-            if key.strip() == "schema_version":
-                try:
-                    return int(value.strip())
-                except ValueError as exc:
-                    raise TelemetrySchemaError(
-                        f"{path.name}: unreadable schema_version {value.strip()!r} "
-                        "(want an integer)."
-                    ) from exc
-    return SCHEMA_VERSION
+            key, sep, value = line.lstrip("# ").partition(":")
+            if sep:
+                fields.setdefault(key.strip(), value.strip())
+    return fields
+
+
+def _read_schema_version(fields: dict[str, str], path: Path) -> int:
+    raw = fields.get("schema_version")
+    if raw is None:
+        return SCHEMA_VERSION
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise TelemetrySchemaError(
+            f"{path.name}: unreadable schema_version {raw!r} (want an integer)."
+        ) from exc
+
+
+def _read_lap_number(fields: dict[str, str]) -> int | None:
+    """A malformed lap number is cosmetic, so it degrades to unknown."""
+    try:
+        return int(fields["lap"])
+    except (KeyError, ValueError):
+        return None

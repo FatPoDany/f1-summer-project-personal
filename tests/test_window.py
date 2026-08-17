@@ -1,5 +1,7 @@
 """Shell smoke tests — run offscreen on Mac/Linux CI (QT_QPA_PLATFORM=offscreen)."""
 
+import json
+
 import pytest
 
 from apex.main_window import MainWindow
@@ -45,7 +47,7 @@ def test_garage_lists_sample_session_and_opens_laps(qtbot):
     garage = window._garage
     assert garage.session is not None and len(garage.session.laps) == 3
     assert garage._table.rowCount() == 3
-    assert garage._table.item(1, 3).text() == "SESSION BEST"  # lap_02
+    assert garage._table.item(1, 4).text() == "SESSION BEST"  # lap_02
 
     with qtbot.waitSignal(garage.lapOpened):
         garage._open_row(1)
@@ -188,3 +190,53 @@ def test_crash_hook_shows_a_dialog_and_never_raises(qtbot, monkeypatch):
     assert "boom in a slot" in box.setInformativeText.call_args[0][0]
     assert "RuntimeError" in box.setDetailedText.call_args[0][0]
     box.exec.assert_called_once()
+
+
+def test_finished_capture_registers_laps_without_a_further_click(qtbot, tmp_path, monkeypatch):
+    """A participant should not have to know a click is what saves their drive."""
+    monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "ws"))
+    import numpy as np
+    import pandas as pd
+
+    from f1coach_core import list_sessions
+
+    track, per_lap = 2050.0, 60
+    dist = np.concatenate(
+        [np.linspace(track - 40, track - 1, 25)]
+        + [np.linspace(0, track, per_lap, endpoint=False)] * 2
+    )
+    n = dist.size
+    run_dir = tmp_path / "ws" / "runs" / "human-P001"
+    run_dir.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "sim_time_s": 100.0 + np.arange(n) * 0.02,
+            "dist_from_start_m": dist,
+            "total_speed_mps": np.full(n, 45.0),
+            "accel_cmd": np.full(n, 0.6),
+            "brake_cmd": np.zeros(n),
+            "steer_cmd": np.zeros(n),
+            "gear": np.full(n, 4),
+            "race_lap": np.concatenate(
+                [np.full(25, 1)] + [np.full(per_lap, i + 1) for i in range(2)]
+            ),
+            "car_name": "Human, Driver",
+        }
+    ).to_csv(run_dir / "telemetry.csv", index=False)
+    (run_dir / "meta.json").write_text(
+        json.dumps({"driver": "P001", "phase": "baseline", "setup": "apex-study-v1"}),
+        encoding="utf-8",
+    )
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    assert not list_sessions()
+
+    window._capture_completed(str(run_dir), [str(run_dir)])
+
+    assert [p.name for p in list_sessions()] == ["human-P001"]
+    # ...and the identity from meta.json reached the laps themselves.
+    window._garage.refresh_sessions(select="human-P001")
+    table = window._garage._table
+    assert [table.item(r, 0).text() for r in range(table.rowCount())] == ["1", "2"]
+    assert {table.item(r, 1).text() for r in range(table.rowCount())} == {"P001"}

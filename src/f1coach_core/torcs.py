@@ -25,6 +25,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from f1coach_core.lap import NO_IDENTITY, StudyIdentity
 from f1coach_core.loader import TelemetrySchemaError
 from f1coach_core.schema import SCHEMA_VERSION
 
@@ -104,26 +105,25 @@ def split_torcs_run(path: str | Path) -> list[TorcsLap]:
         if len(canonical) < MIN_LAP_SAMPLES:  # corrupt rows got dropped in conversion
             continue
         starts_at_line = float(canonical["dist"].iloc[0]) < 0.02 * track_length
-        finish_flag = False
-        if "race_finished" in seg.columns:
-            final_flag = pd.to_numeric(seg["race_finished"], errors="coerce").iloc[-1]
-            finish_flag = bool(np.isfinite(final_flag) and final_flag >= 0.5)
-        capture_closed = False
-        if "capture_lap_closed" in seg.columns:
-            final_marker = pd.to_numeric(
-                seg["capture_lap_closed"], errors="coerce"
-            ).iloc[-1]
-            capture_closed = bool(np.isfinite(final_marker) and final_marker >= 0.5)
         covered_track = (
             float(canonical["dist"].max() - canonical["dist"].min())
             >= MIN_LAP_DISTANCE_COVERAGE * track_length
         )
-        ends_at_line = (
-            i < len(bounds) - 2  # a following reset closed this segment
-            or i == len(bounds) - 2
-            and (finish_flag or capture_closed)
-            and covered_track
-        )
+        # The final segment has no following start-line crossing to close it, so
+        # it needs separate evidence that the lap was actually driven, and
+        # distance coverage is that evidence. It must not be gated on a finish
+        # marker: the human recorder emits neither `race_finished` nor
+        # `capture_lap_closed`, because it runs inside the driver callback and
+        # the race engine stops calling that at the finish line. Requiring a
+        # marker silently discarded the last lap of every human capture -- a
+        # participant driving the assigned five laps had four imported. Those
+        # columns remain in the raw CSVs as provenance.
+        #
+        # Coverage stays necessary rather than merely one option among markers,
+        # so a session abandoned part way round is still an incomplete fragment.
+        closed_by_reset = i < len(bounds) - 2
+        final_segment = i == len(bounds) - 2
+        ends_at_line = closed_by_reset or (final_segment and covered_track)
         if "race_lap" in seg.columns:
             lap_label = int(seg["race_lap"].iloc[len(seg) // 2])
         else:
@@ -141,19 +141,41 @@ def split_torcs_run(path: str | Path) -> list[TorcsLap]:
     return laps
 
 
-def write_canonical_lap(lap: TorcsLap, dest: str | Path, source_name: str) -> None:
+def write_canonical_lap(
+    lap: TorcsLap,
+    dest: str | Path,
+    source_name: str,
+    identity: StudyIdentity = NO_IDENTITY,
+) -> None:
     """Write one split lap as a canonical v1 CSV with provenance comments."""
-    Path(dest).write_text(canonical_lap_text(lap, source_name), encoding="utf-8")
+    Path(dest).write_text(
+        canonical_lap_text(lap, source_name, identity), encoding="utf-8"
+    )
 
 
-def canonical_lap_text(lap: TorcsLap, source_name: str) -> str:
-    """Render one split lap deterministically for writing or import de-duplication."""
+def canonical_lap_text(
+    lap: TorcsLap, source_name: str, identity: StudyIdentity = NO_IDENTITY
+) -> str:
+    """Render one split lap deterministically for writing or import de-duplication.
+
+    The study fields go in as their own ``# key: value`` lines so the loader can
+    read them back: a lap file then states who drove it without depending on any
+    index that could be separated from it.
+    """
     provenance = f"source: torcs:{source_name}"
     if lap.car_name:
         provenance += f" | car: {lap.car_name}"
     provenance += f" | race_lap: {lap.lap_label} | measured_lap_time: {lap.lap_time:.3f}"
     output = StringIO(newline="")
     output.write(f"# schema_version: {SCHEMA_VERSION}\n")
+    output.write(f"# lap: {lap.lap_label}\n")
+    for key, value in (
+        ("driver", identity.driver),
+        ("phase", identity.phase),
+        ("setup", identity.setup),
+    ):
+        if value:
+            output.write(f"# {key}: {value}\n")
     output.write(f"# {provenance}\n")
     output.write("# sector: derived as thirds of track length (TORCS exports no sectors)\n")
     lap.df.to_csv(output, index=False)

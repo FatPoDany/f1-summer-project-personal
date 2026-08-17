@@ -172,8 +172,12 @@ class CaptureGuideView(QWidget):
         self._task = None
         count = len(result.run_dirs)
         noun = "run" if count == 1 else "runs"
-        self._result_summary.setText(f"Validated and registered {count} {noun}.")
-        self._result_path.setText(f"Evidence folder: {result.capture_dir}")
+        laps = "lap" if count == 1 else "laps"
+        self._result_summary.setText(
+            f"{count} {noun} validated and saved — your driving is recorded as "
+            f"individual {laps} you can review."
+        )
+        self._result_path.setText(f"Send this folder to the researchers: {result.capture_dir}")
         self._result_run_dirs = [str(path) for path in result.run_dirs]
         self._pages.setCurrentWidget(self._complete_page)
         self._new_session_button.setFocus()
@@ -199,8 +203,10 @@ class CaptureGuideView(QWidget):
             return
         self._task = None
         self._pages.setCurrentWidget(self._setup_page)
-        detail = f" Raw evidence remains in {capture_dir}." if capture_dir else ""
-        self._show_form_message(f"Collection could not finish — {message}.{detail}", error=True)
+        # `message` already names the capture directory: every failure raised by
+        # capture_human_runs ends with "raw files remain in <dir>". Appending it
+        # again printed the path twice in the one line the participant sees.
+        self._show_form_message(f"Collection could not finish — {message}.", error=True)
         self._update_start_state(keep_message=True)
         self.sessionFailed.emit(message)
 

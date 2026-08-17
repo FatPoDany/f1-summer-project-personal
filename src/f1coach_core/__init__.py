@@ -31,7 +31,7 @@ from f1coach_core.features import (
     time_delta,
 )
 from f1coach_core.granite_coach import GraniteCoach, GraniteCoachError
-from f1coach_core.lap import Lap
+from f1coach_core.lap import Lap, StudyIdentity
 from f1coach_core.llm import build_coach_prompt
 from f1coach_core.loader import TelemetrySchemaError, load_telemetry_csv
 from f1coach_core.report import render_html_report
@@ -61,6 +61,7 @@ __all__ = [
     "GraniteCoach",
     "GraniteCoachError",
     "Lap",
+    "StudyIdentity",
     "MockCoach",
     "Session",
     "TelemetrySchemaError",

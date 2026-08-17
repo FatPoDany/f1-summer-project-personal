@@ -8,6 +8,8 @@ import shutil
 from importlib.resources import as_file, files
 from pathlib import Path
 
+from f1coach_core.lap import NO_IDENTITY, StudyIdentity
+
 SAMPLE_SESSION_NAME = "sample-session"
 
 
@@ -70,13 +72,18 @@ def import_lap(src: str | Path, session_name: str) -> Path:
     return dest
 
 
-def import_telemetry(src: str | Path, session_name: str) -> str:
+def import_telemetry(
+    src: str | Path, session_name: str, identity: StudyIdentity = NO_IDENTITY
+) -> str:
     """Import any supported telemetry file; returns a human-readable summary.
 
     Canonical lap CSVs are copied as-is. TORCS run exports (Lin's exporter)
     are split at start-line crossings; each complete lap lands as its own
     canonical CSV, incomplete fragments (grid start, cut-off final lap) are
     skipped.
+
+    ``identity`` is stamped into every lap written here, so a study lap keeps
+    saying who drove it wherever the file ends up.
     """
     from f1coach_core.torcs import canonical_lap_text, is_torcs_export, split_torcs_run
 
@@ -94,7 +101,7 @@ def import_telemetry(src: str | Path, session_name: str) -> str:
     imported = 0
     already_present = 0
     for lap in complete:
-        content = canonical_lap_text(lap, src.name)
+        content = canonical_lap_text(lap, src.name, identity)
         encoded = content.encode("utf-8")
         if encoded in existing_contents:
             already_present += 1

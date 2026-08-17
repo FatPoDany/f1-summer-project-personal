@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from f1coach_core.lap import NO_IDENTITY, StudyIdentity
 from f1coach_core.torcs import (
     MIN_LAP_DISTANCE_COVERAGE,
     SIGNATURE_COLUMNS,
@@ -44,6 +45,10 @@ class RunMeta:
     sim_time_span_s: float
     cadence_hz: float | None  # None when the time channel is degenerate
     capture: str  # "torcs-exporter" | "scr-client" | "human-driver" | "synthetic-robot"
+    # Study identity, absent on runs imported outside the participant workflow.
+    driver: str | None = None  # pseudonymous participant id, never a name
+    phase: str | None = None
+    setup: str | None = None  # assigned preset id
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -61,6 +66,10 @@ class RunMeta:
             sim_time_span_s=float(data["sim_time_span_s"]),
             cadence_hz=None if data["cadence_hz"] is None else float(data["cadence_hz"]),
             capture=data["capture"],
+            # Runs written before study identity existed simply have none.
+            driver=data.get("driver"),
+            phase=data.get("phase"),
+            setup=data.get("setup"),
         )
 
 
@@ -75,7 +84,12 @@ def runs_root() -> Path:
     return workspace_root() / "runs"
 
 
-def import_run(src: str | Path, *, capture: str = "torcs-exporter") -> Path:
+def import_run(
+    src: str | Path,
+    *,
+    capture: str = "torcs-exporter",
+    identity: StudyIdentity = NO_IDENTITY,
+) -> Path:
     """Copy an exporter CSV into the store; returns the new run directory."""
     src = Path(src)
     if not src.is_file():
@@ -88,7 +102,9 @@ def import_run(src: str | Path, *, capture: str = "torcs-exporter") -> Path:
         )
     df = _read_frame(src)
     run_dir = new_run_dir(src.stem)
-    meta = _build_meta(df, run_id=run_dir.name, source_file=src.name, capture=capture)
+    meta = _build_meta(
+        df, run_id=run_dir.name, source_file=src.name, capture=capture, identity=identity
+    )
     shutil.copy2(src, run_dir / TELEMETRY_NAME)
     (run_dir / META_NAME).write_text(
         json.dumps(meta.to_dict(), indent=2), encoding="utf-8"
@@ -143,7 +159,14 @@ def _read_frame(path: Path) -> pd.DataFrame:
         raise RunImportError(f"{path.name} is not parseable CSV: {exc}") from exc
 
 
-def _build_meta(df: pd.DataFrame, *, run_id: str, source_file: str, capture: str) -> RunMeta:
+def _build_meta(
+    df: pd.DataFrame,
+    *,
+    run_id: str,
+    source_file: str,
+    capture: str,
+    identity: StudyIdentity = NO_IDENTITY,
+) -> RunMeta:
     sim_time = pd.to_numeric(df.get("sim_time_s"), errors="coerce").dropna()
     span = float(sim_time.max() - sim_time.min()) if len(sim_time) else 0.0
     steps = sim_time.diff().dropna()
@@ -164,6 +187,9 @@ def _build_meta(df: pd.DataFrame, *, run_id: str, source_file: str, capture: str
         sim_time_span_s=round(span, 3),
         cadence_hz=cadence,
         capture=capture,
+        driver=identity.driver,
+        phase=identity.phase,
+        setup=identity.setup,
     )
 
 

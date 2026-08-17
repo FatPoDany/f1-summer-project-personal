@@ -189,15 +189,19 @@ class CaptureCompletePage(QWidget):
         self.result_path = QLabel()
         self.result_path.setWordWrap(True)
         self.result_path.setStyleSheet(f"color: {theme.TEXT_DIM};")
+        # The participant is the one holding the only copy at this point, so the
+        # hand-over instruction has to be on the screen they actually end on.
         next_steps = QLabel(
-            "The raw evidence and integrity manifest are preserved. The registered "
-            "run is ready for lap analysis and coaching."
+            "Your laps are already in the Garage on this computer — nothing further "
+            "is needed to save them.\n\n"
+            "To pass them to the research team, send them the whole folder shown "
+            "above. It holds the raw recording and its integrity manifest."
         )
         next_steps.setWordWrap(True)
         buttons = QHBoxLayout()
         self.new_session_button = QPushButton("Collect another session")
         self.new_session_button.setMinimumHeight(44)
-        self.open_results_button = QPushButton("Open captured laps")
+        self.open_results_button = QPushButton("View my laps")
         self.open_results_button.setMinimumHeight(44)
         buttons.addWidget(self.new_session_button)
         buttons.addWidget(self.open_results_button)

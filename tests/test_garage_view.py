@@ -1,4 +1,4 @@
-"""Garage: the mockup status column — SESSION BEST / COACHED · n / NEW."""
+"""Garage: the status column — SESSION BEST / ANALYSE · n / NEW."""
 
 import json
 
@@ -24,7 +24,7 @@ def isolated(tmp_path, monkeypatch):
 def statuses(view: GarageView) -> dict[str, str]:
     table = view._table
     return {
-        table.item(row, 0).text(): table.item(row, 3).text() for row in range(table.rowCount())
+        table.item(row, 0).text(): table.item(row, 4).text() for row in range(table.rowCount())
     }
 
 
@@ -56,7 +56,7 @@ def test_status_column_speaks_the_mockup_vocabulary(qtbot):
 
     got = statuses(view)
     assert got[best.source.stem] == "SESSION BEST"
-    assert got[coach_me.source.stem] == f"COACHED · {len(report.findings)} findings"
+    assert got[coach_me.source.stem] == f"ANALYSE · {len(report.findings)} findings"
     assert got[fresh.source.stem] == "NEW — just captured"
 
     # opening the fresh lap consumes its NEW tag
@@ -122,3 +122,43 @@ def test_confirmed_delete_refreshes_the_garage(qtbot, monkeypatch):
     assert view.session is None
     assert view._session_list.count() == 0
     assert statuses == ["Deleted session 'sample-session' from the Apex workspace"]
+
+
+def test_study_laps_show_their_lap_number_and_driver(qtbot, tmp_path):
+    """A researcher must be able to tell whose laps these are from the table."""
+    import numpy as np
+    import pandas as pd
+
+    from f1coach_core import StudyIdentity, import_telemetry
+
+    track, n_per_lap = 2050.0, 60
+    dist = np.concatenate(
+        [np.linspace(track - 40, track - 1, 25)]
+        + [np.linspace(0, track, n_per_lap, endpoint=False)] * 2
+    )
+    n = dist.size
+    run = tmp_path / "human-1.csv"
+    pd.DataFrame(
+        {
+            "sim_time_s": 100.0 + np.arange(n) * 0.02,
+            "dist_from_start_m": dist,
+            "total_speed_mps": np.full(n, 45.0),
+            "accel_cmd": np.full(n, 0.6),
+            "brake_cmd": np.zeros(n),
+            "steer_cmd": np.zeros(n),
+            "gear": np.full(n, 4),
+            "race_lap": np.concatenate(
+                [np.full(25, 1)] + [np.full(n_per_lap, i + 1) for i in range(2)]
+            ),
+            "car_name": "Human, Driver",
+        }
+    ).to_csv(run, index=False)
+    import_telemetry(run, "P001-baseline", StudyIdentity(driver="P001", phase="baseline"))
+
+    view = GarageView()
+    qtbot.addWidget(view)
+    view.refresh_sessions(select="P001-baseline")
+
+    table = view._table
+    assert [table.item(r, 0).text() for r in range(table.rowCount())] == ["1", "2"]
+    assert {table.item(r, 1).text() for r in range(table.rowCount())} == {"P001"}

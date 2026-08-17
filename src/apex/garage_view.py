@@ -32,7 +32,9 @@ from f1coach_core import (
     load_session,
 )
 
-TABLE_HEADERS = ("Lap", "Time", "Δ best", "Status")
+# Driver sits beside Lap so a researcher collecting several participants can
+# tell whose laps these are without opening the files.
+TABLE_HEADERS = ("Lap", "Driver", "Time", "Δ best", "Status")
 
 
 class GarageView(QWidget):
@@ -148,7 +150,8 @@ class GarageView(QWidget):
             is_best = lap is best
             status, status_color = self._lap_status(lap.source.stem, is_best, coached)
             cells = (
-                lap.source.stem,
+                lap.label,
+                lap.identity.driver or "—",
                 f"{lap.lap_time:.3f} s",
                 "—" if is_best else f"+{delta:.3f}",
                 status,
@@ -157,12 +160,12 @@ class GarageView(QWidget):
                 item = QTableWidgetItem(text)
                 if is_best:
                     item.setForeground(QColor(theme.PURPLE))
-                elif col == 3 and status_color:
+                elif col == len(TABLE_HEADERS) - 1 and status_color:
                     item.setForeground(QColor(status_color))
                 self._table.setItem(row, col, item)
         for i, (name, message) in enumerate(session.problems):
             row = len(session.laps) + i
-            cells = (Path(name).stem, "", "", "unreadable")
+            cells = (Path(name).stem, "", "", "", "unreadable")
             for col, text in enumerate(cells):
                 item = QTableWidgetItem(text)
                 item.setForeground(QColor(theme.RED))
@@ -175,7 +178,9 @@ class GarageView(QWidget):
             return "SESSION BEST", theme.PURPLE
         if stem in coached:
             n = coached[stem]
-            return (f"COACHED · {n} finding{'s' if n != 1 else ''}" if n else "COACHED · clean"), ""
+            return (
+                f"ANALYSE · {n} finding{'s' if n != 1 else ''}" if n else "ANALYSE · clean"
+            ), ""
         if stem in self._fresh:
             return "NEW — just captured", theme.GREEN
         return "", ""

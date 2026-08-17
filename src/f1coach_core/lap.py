@@ -7,6 +7,28 @@ import pandas as pd
 
 
 @dataclass(frozen=True)
+class StudyIdentity:
+    """Who drove a lap, under which study conditions.
+
+    Travels in the lap file's own header rather than a side table, so a lap
+    handed to a researcher still says where it came from. Every field is
+    optional: laps that predate the study workflow, and any lap imported from a
+    loose CSV, simply carry nothing.
+    """
+
+    driver: str | None = None  # pseudonymous participant id, never a name
+    phase: str | None = None
+    setup: str | None = None  # the assigned preset id
+
+    def __bool__(self) -> bool:
+        return any((self.driver, self.phase, self.setup))
+
+
+# Frozen and shared: the "this lap says nothing about who drove it" default.
+NO_IDENTITY = StudyIdentity()
+
+
+@dataclass(frozen=True)
 class Lap:
     """One lap of validated telemetry.
 
@@ -18,10 +40,17 @@ class Lap:
     source: Path
     schema_version: int
     dist_derived: bool  # True when the loader had to integrate speed to get dist
+    lap_number: int | None = None  # the race lap this was, not a file ordinal
+    identity: StudyIdentity = NO_IDENTITY
 
     @property
     def name(self) -> str:
         return self.source.name
+
+    @property
+    def label(self) -> str:
+        """What a lap column should show: the lap number when it is known."""
+        return str(self.lap_number) if self.lap_number is not None else self.source.stem
 
     @property
     def n_samples(self) -> int:
