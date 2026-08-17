@@ -210,9 +210,13 @@ Task 15 synthetic contract
 - [x] Task 27 (build): the `windows-installer` workflow produces a 380.2 MB
   `ApexStudySetup.exe` whose runtime carries the study's own track, car, and
   presets, checked per asset rather than by "the binaries exist".
-- [ ] Task 27 (qualification): install that artifact and drive a lap. The `-R`
-  entry, per-session profile isolation, and the recorder writing a CSV on Windows
-  are unproven until someone runs it; a Linux host cannot perform this.
+- [x] Task 27 (runtime): the installed build launches through `-R`, seeds a fresh
+  per-session profile, and writes a CSV on Windows. The one crash found —
+  `0xC0000005` from TORCS resolving `data/fonts/*` against the working directory —
+  is fixed by `torcs_launch_cwd()` and confirmed by A/B.
+- [ ] Task 27 (qualification): drive the full five-lap assignment from Apex and
+  register a SAVED run. Needs the installer rebuilt so `Apex.exe` carries the
+  working-directory fix.
 
 ## Verification Checkpoints
 

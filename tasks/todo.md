@@ -496,10 +496,12 @@ per-user installer produced by CI.
 - [x] PyInstaller produces `Apex.exe` and `makensis` compiles
   `installer/apexstudy.nsi` into a 380.2 MB `ApexStudySetup.exe`, against 369 MB
   for the stock upstream installer of the same archive.
-- [ ] An installed build finds its bundled runtime, launches the pinned preset
-  through `-R`, and records a participant lap. Nothing has run the installer yet:
-  the `-R` entry, the `APEX_TORCS_LOCAL_DIR` profile isolation, and the recorder
-  writing a CSV on Windows are all still unproven at runtime.
+- [x] The installed build runs: `-R` opens the pinned preset, a fresh
+  `APEX_TORCS_LOCAL_DIR` profile is seeded with all eight race managers including
+  both Apex presets, and the recorder writes a CSV on Windows.
+- [ ] A participant drives the full five-lap assignment from Apex's Collect Data
+  and the run registers as SAVED. Only a header-plus-few-rows CSV has been
+  written so far, so the writer is proven but a lap's worth of data is not.
 
 **Verification:**
 
@@ -541,6 +543,18 @@ which the Linux path never exercises:
    `client.def` is CRLF and a diff over it cannot survive `eol=lf`.
 6. Track and car data were absent entirely — a separate 3218-line script carries
    them. The build was green and the installer 64.7 MB instead of 380 MB.
+7. TORCS was launched with no working directory, so it died with
+   `0xC0000005`/`3221225477` before the race began. Stock TORCS resolves several
+   paths against the current directory, fatally `data/fonts/%s` in
+   `tgfclient/guifont.cpp:77`: the font fails to load, `create()`'s result is
+   never checked, and the first text draw dereferences it. The Linux launcher
+   script exports absolute directories, so nothing here is reachable from Linux,
+   and this is upstream behaviour rather than something the Apex patches added —
+   the `-R` entry merely made TORCS start from somewhere it never had before.
+   Confirmed by A/B with the same fresh profile and only the working directory
+   differing: correct directory runs, wrong directory reproduces the exit code.
+   `torcs_launch_cwd()` now supplies it on both capture paths, asserted by tests,
+   because the fakes took `**kwargs` and a missing `cwd` had raised nothing.
 
 **Files likely touched:**
 
