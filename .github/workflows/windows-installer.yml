@@ -43,6 +43,7 @@ jobs:
     timeout-minutes: 120
     env:
       TORCS_SHA256: f9c69e86d290295467451b01d7838d85005ba613644a6fe8a3f85a7c6a03cd4c
+      TORCS_BYTES: "589989689"
       ARCHIVE_PATH: ${{ github.workspace }}\torcs-1.3.9.tar.bz2
       ARCHIVE_NAME: torcs-1.3.9.tar.bz2
       UPSTREAM_URL: https://downloads.sourceforge.net/project/torcs/all-in-one/1.3.9/torcs-1.3.9.tar.bz2
@@ -50,9 +51,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cache the pinned TORCS archive
+      # Restore and save are split so that only a verified archive is ever
+      # cached. A single cache step would store whatever landed on disk, and one
+      # bad download would then be restored by every later run.
+      - name: Restore the pinned TORCS archive
         id: archive-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ${{ env.ARCHIVE_PATH }}
           key: torcs-archive-${{ env.TORCS_SHA256 }}
@@ -67,10 +71,25 @@ jobs:
           ARCHIVE_TAG: ${{ inputs.archive_tag }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # curl.exe rather than Invoke-WebRequest, and this is not a style
+          # choice: SourceForge sniffs the user agent. It answers PowerShell's
+          # with a ~130 KB HTML download page as HTTP 200 -- no redirect, no
+          # error -- so Invoke-WebRequest cheerfully writes the page over the
+          # archive path. curl's own agent gets the mirror redirect and the real
+          # payload. Windows Server ships curl.exe in System32.
+          function Get-Archive($uri) {
+            & curl.exe --location --fail --show-error --silent `
+              --retry 3 --retry-delay 5 `
+              --output $env:ARCHIVE_PATH $uri
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "::error::curl failed with exit code $LASTEXITCODE for $uri"
+              exit 1
+            }
+          }
+
           if ($env:TORCS_ARCHIVE_URL) {
             Write-Host 'Fetching the archive from TORCS_ARCHIVE_URL'
-            Invoke-WebRequest -Uri $env:TORCS_ARCHIVE_URL `
-              -OutFile $env:ARCHIVE_PATH -MaximumRedirection 5
+            Get-Archive $env:TORCS_ARCHIVE_URL
           } elseif ($env:ARCHIVE_TAG) {
             # gh is preinstalled on GitHub runners and authenticates with
             # GITHUB_TOKEN, so this also works while the repository is private.
@@ -86,14 +105,27 @@ jobs:
             }
           } else {
             Write-Host 'Fetching the archive from upstream SourceForge'
-            # SourceForge answers with a mirror redirect before the payload.
-            Invoke-WebRequest -Uri $env:UPSTREAM_URL `
-              -OutFile $env:ARCHIVE_PATH -MaximumRedirection 5
+            Get-Archive $env:UPSTREAM_URL
           }
 
       - name: Verify the archive hash
         shell: pwsh
         run: |
+          # Check the size first: it distinguishes "the host served something
+          # else entirely" from "the archive really did change", which a bare
+          # hash mismatch cannot.
+          $size = (Get-Item -LiteralPath $env:ARCHIVE_PATH).Length
+          $expected = [long]$env:TORCS_BYTES
+          if ($size -ne $expected) {
+            Write-Host "::error::Downloaded $size bytes, expected $expected."
+            if ($size -lt 10MB) {
+              Write-Host 'Far too small to be the archive: the host almost certainly served an'
+              Write-Host 'error or download page instead of the file. First 200 bytes:'
+              Write-Host (Get-Content -LiteralPath $env:ARCHIVE_PATH -TotalCount 3 -ErrorAction SilentlyContinue)
+            }
+            exit 1
+          }
+
           $actual = (Get-FileHash -LiteralPath $env:ARCHIVE_PATH -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actual -ne $env:TORCS_SHA256) {
             Write-Host "::error::Archive hash mismatch. Expected $env:TORCS_SHA256, got $actual"
@@ -102,6 +134,13 @@ jobs:
             exit 1
           }
           Write-Host "Archive verified: $env:TORCS_SHA256"
+
+      - name: Cache the verified archive
+        if: steps.archive-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.ARCHIVE_PATH }}
+          key: torcs-archive-${{ env.TORCS_SHA256 }}
 
       - uses: actions/setup-python@v5
         with:
