@@ -204,6 +204,29 @@ if (-not (Test-Marker 'src\drivers\human\human.vcxproj' 'apex_human_telemetry.cp
     Invoke-Patch 'windows-vcxproj-telemetry.patch'
 }
 
+# wtorcs.exe imports from client.dll, and client.dll's exports are listed by
+# hand in client.def. ReRunRaceOnGUI is defined in raceinit.cpp right next to
+# ReRunRaceOnConsole, which is exported there -- so without a matching entry the
+# -R call added to src/windows/main.cpp cannot link (LNK2019). Nothing on the
+# Linux side needs this: the autotools build exports everything.
+#
+# Edited in place rather than shipped as a patch because client.def uses CRLF
+# throughout, and a diff over a CRLF file cannot survive the eol=lf
+# normalisation that .gitattributes applies to the patches.
+Write-Step 'Exporting ReRunRaceOnGUI from client.dll'
+$clientDef = Join-Path $SourceDir 'src\libs\client\client.def'
+$defText = [System.IO.File]::ReadAllText($clientDef)
+if ($defText.Contains('ReRunRaceOnGUI')) {
+    Write-Host 'client.def already exports ReRunRaceOnGUI'
+} else {
+    $anchor = "`tReRunRaceOnConsole`r`n"
+    if (-not $defText.Contains($anchor)) {
+        throw "client.def has no ReRunRaceOnConsole export to anchor against: $clientDef"
+    }
+    [System.IO.File]::WriteAllText($clientDef, $defText.Replace($anchor, $anchor + "`tReRunRaceOnGUI`r`n"))
+    Write-Host 'Added ReRunRaceOnGUI to client.def'
+}
+
 if ($Action -eq 'prepare') {
     Write-Host "Prepared source: $SourceDir"
     exit 0
