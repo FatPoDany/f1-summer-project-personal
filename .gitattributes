@@ -1,0 +1,9 @@
+# The patches are applied by GNU patch against sources extracted from the
+# pinned tarball, which uses LF throughout. Git for Windows defaults to
+# core.autocrlf=true and would rewrite these files to CRLF on checkout, leaving
+# every context line with a trailing CR: hunks then apply "with fuzz", meaning
+# patch guessed at the location, or fail outright. Pin them.
+*.patch text eol=lf
+
+# Verification and build scripts run under bash, which does not tolerate CRLF.
+*.sh text eol=lf

@@ -185,7 +185,26 @@ if ($Action -eq 'prepare') {
     exit 0
 }
 
-# --- 4. Compile the solution ------------------------------------------------
+# --- 4. Export headers, stage data, then compile ----------------------------
+
+# This has to happen BEFORE msbuild, not after. setup_win32_generic.bat is not
+# only the data-install step its name suggests: it publishes every public header
+# into export/include (82 copies, including the SOLID/3D tree) and creates
+# export/lib, which is exactly what the .vcxproj files put on their include and
+# library paths. It reads nothing from a build directory, so it is purely a
+# prepare step -- running it afterwards leaves the compile with no headers and
+# fails with a wall of C1083.
+Write-Step 'Exporting headers and staging the TORCS runtime data'
+Push-Location $SourceDir
+try {
+    & cmd /c "setup_win32_generic.bat $RuntimeDirName"
+    if ($LASTEXITCODE -ne 0) { throw "setup_win32_generic.bat failed with exit code $LASTEXITCODE" }
+} finally { Pop-Location }
+
+$exportedHeader = Join-Path $SourceDir 'export\include\car.h'
+if (-not (Test-Path -LiteralPath $exportedHeader)) {
+    throw "Header export did not produce $exportedHeader; the compile would fail with C1083."
+}
 
 $msbuild = Resolve-MSBuild
 Write-Step "Building TORCS.sln ($Configuration|$Platform) with $msbuild"
@@ -199,13 +218,6 @@ $msbuildLog = Join-Path $BuildRoot 'msbuild.log'
 if ($LASTEXITCODE -ne 0) {
     throw "msbuild failed with exit code $LASTEXITCODE. Full log: $msbuildLog"
 }
-
-Write-Step 'Populating the TORCS runtime with game data'
-Push-Location $SourceDir
-try {
-    & cmd /c "setup_win32_generic.bat $RuntimeDirName"
-    if ($LASTEXITCODE -ne 0) { throw "setup_win32_generic.bat failed with exit code $LASTEXITCODE" }
-} finally { Pop-Location }
 
 # setup_win32_generic.bat copies a fixed list of stock race managers, so the
 # two Apex presets are installed here instead of patching that 1000-line file.
