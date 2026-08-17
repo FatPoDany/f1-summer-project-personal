@@ -68,9 +68,11 @@ void fillWheels(ApexHumanTelemetrySample *sample, tCarElt *car) {
         target.brakeTemperatureRatio = source.brakeTemp;
         target.slipSideMps = source.slipSide;
         target.slipAccelMps = source.slipAccel;
-        target.forceXN = source.Fx;
-        target.forceYN = source.Fy;
-        target.forceZN = source.Fz;
+        /* car->_reaction[wheel], not source.Fz: TORCS 1.3.9 declares
+         * tWheelState::Fx/Fy/Fz but no simulation module ever writes them, so
+         * reading them yields a constant zero column. simuv2 and simuv3 both
+         * publish the vertical ground-contact load through priv.reaction. */
+        target.forceZN = car->_reaction[wheel];
         target.tireWear = source.currentWear;
         target.tireTemperatureC = source.currentTemperature - 273.15;
         target.tirePressureKpa = source.currentPressure / 1000.0;

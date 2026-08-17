@@ -9,8 +9,11 @@ struct ApexRobotWheelTelemetry {
     double brakeTemperatureRatio;
     double slipSideMps;
     double slipAccelMps;
-    double forceXN;
-    double forceYN;
+    /* Vertical ground-contact load in N. TORCS publishes it as
+     * tCarElt::priv.reaction[wheel]; the tWheelState::Fx/Fy/Fz members that
+     * look like the obvious source are declared but never written by any
+     * 1.3.9 simulation module, so no longitudinal or lateral tyre force is
+     * observable from a driver module. */
     double forceZN;
     double tireWear;
     double tireTemperatureC;

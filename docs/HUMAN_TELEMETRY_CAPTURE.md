@@ -95,7 +95,7 @@ Validated copies used by analysis are stored under `~/Apex/runs/`. Set
 
 ## What is recorded
 
-Each CSV declares `schema_version=apex-human-v1` and includes more than 100 raw
+Each CSV declares `schema_version=apex-human-v2` and includes more than 100 raw
 or directly exposed TORCS channels:
 
 - simulation time/delta, sample number, car/track identity and race type;
@@ -105,12 +105,24 @@ or directly exposed TORCS channels:
 - engine angular speed in rad/s plus the explicit rpm conversion and fuel in L;
 - track offset/width, normalized position, heading angle, segment geometry and
   surface properties;
-- per-wheel spin, brake-temperature ratio, slip velocities, forces in N, tyre
-  wear, temperature in °C, pressure in kPa and graining.
+- per-wheel spin, brake-temperature ratio, slip velocities, vertical
+  ground-contact load in N, tyre wear, temperature in °C, pressure in kPa and
+  graining.
 
 Wheel order is front-right, front-left, rear-right, rear-left. `track_to_start_m`
 converts TORCS' curve-segment arc to distance; no radian value is mislabeled as
-metres. Text values use CSV quoting, and the writer flushes about once per second
+metres.
+
+`*_force_z_n` is the vertical load TORCS publishes as `priv.reaction[i]`
+(`simuv2/wheel.cpp:368`). It is the only per-wheel force a driver module can
+observe: 1.3.9 declares `tWheelState::Fx/Fy/Fz` but no simulation module writes
+them, so no longitudinal or lateral tyre force exists to record. Schema
+`apex-human-v1` read those dead members and therefore emitted constant-zero
+`*_force_x_n`, `*_force_y_n` and `*_force_z_n` columns for all four wheels;
+`apex-human-v2` drops the two unobtainable columns and sources `*_force_z_n`
+from the published channel. The synthetic `berniw` recorder changed identically,
+from `apex-robot-v1` to `apex-robot-v2`. Files captured under the v1 schemas
+keep their zero columns and are not upgraded in place. Text values use CSV quoting, and the writer flushes about once per second
 so an abnormal simulator exit loses at most a short tail under normal cadence.
 
 The callback pairs the current observable car state with the human control

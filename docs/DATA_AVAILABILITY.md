@@ -37,7 +37,7 @@ retained as the full exporter-versus-SCR comparison; see
 **Synthetic reference capture (implemented subset).** A second opt-in recorder
 observes the pinned built-in `berniw` driver at index 9. It writes the same
 analysis-facing control, vehicle, track, collision and wheel channels as the
-human recorder with schema `apex-robot-v1`, plus the independently validated
+human recorder with schema `apex-robot-v2`, plus the independently validated
 `driver_index=9` and `race_finished` fields. The frozen unattended preset uses
 `g-track-1`, stock `car7-trb1`, and three laps. Python rejects mismatched
 module/index/car/track/schema evidence and requires exactly three complete
@@ -67,7 +67,7 @@ Fields the client and spec asked about, plus the candidate list. "A" = exporter 
 | race position | **yes** | **yes** | `race_pos` | `racePos` — `scr_server.cpp:491` | rank | context |
 | clutch | **yes** | **yes** (cmd) | `clutch_cmd` + `clutch_transfer` | actuator echo | 0..1 (`car.h:348`) | launch/shift analysis |
 | wheel spin | **yes** | **yes** | `{fr,fl,rr,rl}_spin_vel_rad_s` ← `tWheel.spinVel` | `wheelSpinVel[4]` — `scr_server.cpp:498` | rad/s | wheelspin / lock-up |
-| tyre wear / temperature / pressure / graining | **partial** | **yes** | exporter has detailed tyre physics but not all four new 1.3.9 names | Granite Bridge reads `tPrivWheel.currentWear/currentTemperature/currentPressure/currentGraining` | ratio, °C, kPa, ratio | tyre preservation and strategy |
+| tyre wear / temperature / pressure / graining | **gated** | **gated** | `{fr,fl,rr,rl}_tire_{wear,temp_c,pressure_kpa,graining}` ← `tPrivWheel.currentWear/currentTemperature/currentPressure/currentGraining`; TORCS updates them **only when the driver's skill level is `pro` and the race `tire factor` > 0** (`simuv2/wheel.cpp:422`) | same `tPrivWheel` fields, identical gate | ratio, °C, kPa, ratio | tyre preservation and strategy |
 | z (height) | **yes** | **yes** | `pos_z_m` | `z` — `scr_server.cpp:499` | m | kerb/jump detection |
 | off-track event | **derived** | **derived** | \|`track_to_middle_m`\| > `track_seg_width_m`/2 | \|`trackPos`\| > 1 | — | rule-based alert & event log |
 | crash event | **derived** | **derived** | `damage` delta > 0 or `collision` bit set | `damage` delta | — | risk events |
@@ -75,6 +75,35 @@ Fields the client and spec asked about, plus the candidate list. "A" = exporter 
 | track rangefinder `track[19]` | **no** | **yes** | not exported | `scr_server.cpp:496` | m | (B-only) distance-to-edge beams |
 | `opponents[36]` | **no** (direct) | **yes** | derivable across per-car rows when several cars run | `scr_server.cpp:490` | m | traffic awareness |
 | `focus[5]` | no | **placeholder only** | — | TORCS 1.3.9 has no focus API; bridge returns five `-1` values | m | unavailable in this build |
+
+### Tyre-model gate (measured)
+
+`SimWheelUpdateTire` returns immediately unless `rulesTireFactor > 0` **and**
+`skillLevel == 3` (`simuv2/wheel.cpp:422`). Skill level is per driver: TORCS reads
+`skill level` from the driver's own XML and falls back to the race-level
+`skill level default`, which itself defaults to `semi-pro` (`raceinit.cpp:606,673`).
+When the gate is closed the four tyre channels hold their initial values for the
+whole session — they are present in every row but carry no information.
+
+Measured on `g-track-1` with `car7-trb1`, three laps, identical car and track:
+
+| driver skill level | `fr_tire_wear` | `fr_tire_temp_c` | `fr_tire_pressure_kpa` | `fr_tire_graining` |
+|---|---|---|---|---|
+| `semi-pro` (gate closed) | 0 constant | 20.0 constant | 275.6 constant | 0 constant |
+| `pro` (gate open) | 0 → 0.0209 | 20.0 → 66.6 | 275.6 → 319.4 | 0 → 0.0047 |
+
+Skill level is not a logging switch: it also selects `simSkidFactor`
+(a slip-proportional grip bonus of up to +60 % at `rookie`, +45 % at `semi-pro`,
+none at `pro`) and `simDammageFactor` (×0.0 at `rookie` … ×1.0 at `pro`), and it
+gates race penalties (`categories.cpp:30-32`, `raceengine.cpp:498`). Changing it
+changes vehicle behaviour, so a change of skill level is a protocol change and
+requires a new preset id.
+
+Current state: `apex-robot-study-v2` sets `skill level default = pro`, so
+synthetic reference runs carry live tyre channels. The human study preset
+`apexstudy.xml` is unaffected, because `drivers/human/human.xml` sets
+`skill level = rookie` explicitly and that per-driver value overrides the race
+default — participant captures therefore still record constant tyre channels.
 
 ## 3. Beyond the brief (Path A bonus fields)
 
@@ -96,6 +125,7 @@ Full catalogue: appendix A (251 fields).
 | `opponents[36]` proximity array | A | idem | join other cars' rows by `sim_time_s` (all cars are exported) |
 | direct `angle` column | A | not in exporter schema | one-line derivation, same formula as `scr_server.cpp:390` |
 | slip/force/suspension detail | B | SCR packet is fixed & minimal by design | Path A, or accept reduced evidence on B |
+| per-wheel longitudinal/lateral tyre force | human & `berniw` recorders | 1.3.9 declares `tWheelState::Fx/Fy/Fz` (`car.h:258-260`) but no simulation module ever writes them; the tyre forces stay inside simuv2's private `tCar`/`tWheel` structs | none from a driver module — only the vertical load is published, as `priv.reaction[i]` (`simuv2/wheel.cpp:368`, `simuv3/wheel.cpp:221`), which the recorders now export as `*_force_z_n`; longitudinal/lateral force needs a Path A-style simu patch |
 | exporter patch source | — | the teammate's 249-column simuv2 patch remains unavailable | use the implemented human-driver recorder for the coaching/study subset; request the original patch only if private simuv2 channels are required |
 | original 5 exporter CSVs | — | the raw controller files are not tracked in the shared repository, although derived data and their audit metadata exist | generate new human CSVs with `racecoach capture-human`; keep the controller audit separate from participant evidence |
 

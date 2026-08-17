@@ -2,9 +2,9 @@
 
 <!DOCTYPE params SYSTEM "../params.dtd">
 
-<params name="Apex Robot Study v1" type="param" mode="mw">
+<params name="Apex Robot Study v2" type="param" mode="mw">
     <section name="Header">
-        <attstr name="name" val="Apex Robot Study v1"/>
+        <attstr name="name" val="Apex Robot Study v2"/>
         <attstr name="description" val="Controlled Apex synthetic reference session"/>
         <attnum name="priority" val="1"/>
         <attstr name="menu image" val="data/img/splash-practice.png"/>
@@ -51,6 +51,7 @@
 
     <section name="Drivers">
         <attnum name="maximum number" val="1"/>
+        <attstr name="skill level default" val="pro"/>
         <attstr name="focused module" val="berniw"/>
         <attnum name="focused idx" val="9"/>
         <section name="1">

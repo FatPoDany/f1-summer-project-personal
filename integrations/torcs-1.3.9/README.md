@@ -117,7 +117,16 @@ Granite Bridge controls its own robot car, so its CSV is not human-study data.
 The build overlay also adds a separate opt-in recorder to TORCS' normal `human`
 driver. It observes the human callback without changing any command and writes
 the canonical analysis signature plus vehicle, track, collision and four-wheel
-channels.
+channels. Its schema is `apex-human-v2`; the synthetic `berniw` recorder below
+uses `apex-robot-v2`.
+
+Both recorders expose exactly one per-wheel force, `*_force_z_n`, the vertical
+ground-contact load TORCS publishes as `priv.reaction[i]`. TORCS 1.3.9 declares
+`tWheelState::Fx/Fy/Fz` but never writes them from any simulation module, so the
+v1 schemas recorded three constant-zero force columns per wheel. The v2 schemas
+drop the unobtainable `*_force_x_n`/`*_force_y_n` columns and read the published
+channel instead; longitudinal and lateral tyre force would require patching
+simuv2 itself and is out of scope for an observe-only driver module.
 
 ```bash
 integrations/torcs-1.3.9/verify-human-capture.sh
@@ -172,7 +181,7 @@ Each TORCS process receives `-r apexrobotstudy.xml` and exits after one fixed
 three-lap `g-track-1` practice assignment. Sessions run sequentially so they do
 not contend for the simulator runtime. Raw files and atomic manifests live
 under `<workspace>/captures/synthetic/`; registered run metadata uses
-`capture="synthetic-robot"`. The CSV schema is `apex-robot-v1` and includes
+`capture="synthetic-robot"`. The CSV schema is `apex-robot-v2` and includes
 `driver_module=berniw`, `driver_index=9`, the stock car id, track id, raw lap
 state, and a final `race_finished` marker. Registration requires exactly three
 complete distance-aligned laps and rejects all outputs before importing any if

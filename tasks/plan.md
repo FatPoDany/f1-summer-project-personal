@@ -144,57 +144,63 @@ Task 15 synthetic contract
 
 ### Phase 1: Evidence contract
 
-- [ ] Task 15: Implement the fail-closed synthetic capture contract.
+- [x] Task 15: Implement the fail-closed synthetic capture contract.
 
 ### Checkpoint: Contract
 
-- [ ] Invalid identity, phase, count, paths, and provenance fail before launch;
+- [x] Invalid identity, phase, count, paths, and provenance fail before launch;
   valid evidence is atomic and cannot be labelled human.
 
 ### Phase 2: Pinned TORCS reference
 
-- [ ] Task 16: Add and contract-test the GNU++98 robot CSV writer.
-- [ ] Task 17: Hook the opt-in recorder into `berniw` index 9 without changing control.
-- [ ] Task 18: Ship and verify the unattended three-lap robot preset.
+- [x] Task 16: Add and contract-test the GNU++98 robot CSV writer.
+- [x] Task 17: Hook the opt-in recorder into `berniw` index 9 without changing control.
+- [x] Task 18: Ship and verify the unattended three-lap robot preset.
 
 ### Checkpoint: Native reference
 
-- [ ] Exact-archive preparation is idempotent, source/native verifiers pass,
+- [x] Exact-archive preparation is idempotent, source/native verifiers pass,
   other robots remain unrecorded, and the human preset is unchanged.
 
 ### Phase 3: Validated collection
 
-- [ ] Task 19: Validate the installed robot preset from Python before launch.
-- [ ] Task 20: Complete one synthetic session through validation and run registration.
-- [ ] Task 21: Add sequential batches, cancellation, audit summaries, and CLI recovery.
+- [x] Task 19: Validate the installed robot preset from Python before launch.
+- [x] Task 20: Complete one synthetic session through validation and run registration.
+- [x] Task 21: Add sequential batches, cancellation, audit summaries, and CLI recovery.
 
 ### Checkpoint: Collection slice
 
-- [ ] Fake-process tests cover three successes, failure isolation, cancellation,
+- [x] Fake-process tests cover three successes, failure isolation, cancellation,
   malformed/mismatched CSV, and zero output without registering invalid runs.
 
 ### Phase 4: Facilitator workflow
 
-- [ ] Task 22: Add the cancellable research batch worker and visible pilot page.
-- [ ] Task 23: Gate navigation and open completed runs through existing Garage plumbing.
+- [x] Task 22: Add the cancellable research batch worker and visible pilot page.
+- [x] Task 23: Gate navigation and open completed runs through existing Garage plumbing.
 
 ### Checkpoint: Desktop slice
 
-- [ ] Offscreen Qt automation uses the visible controls for a default batch of
+- [x] Offscreen Qt automation uses the visible controls for a default batch of
   three, remains responsive, and rejects stale results.
 
 ### Phase 5: Evidence and qualification
 
-- [ ] Task 24: Document the synthetic protocol, provenance boundary, commands, and recovery.
-- [ ] Task 25: Run all automated checks and the real three-session TORCS/UI smoke gate.
+- [x] Task 24: Document the synthetic protocol, provenance boundary, commands, and recovery.
+- [x] Task 25: Run all automated checks and the real three-session TORCS/UI smoke gate.
 
 ### Checkpoint: Complete
 
-- [ ] Focused tests, full pytest, Ruff, archive checksum, native verifiers,
+- [x] Focused tests, full pytest, Ruff, archive checksum, native verifiers,
   offscreen Qt runtime inspection, and final diff review pass.
-- [ ] Three real unattended sessions each produce exactly one distinct,
+- [x] Three real unattended sessions each produce exactly one distinct,
   validated three-lap synthetic run, or the unavailable environment gate is
   reported explicitly without claiming qualification.
+
+### Phase 6: Recorder defect fixes
+
+- [x] Task 26: Record the vertical wheel load TORCS actually publishes and drop
+  the two force columns the driver ABI cannot supply (`apex-human-v2`,
+  `apex-robot-v2`).
 
 ## Verification Checkpoints
 
@@ -233,5 +239,10 @@ Task 15 synthetic contract
 
 ## Open Questions
 
-- No design decision is currently open. Availability of a buildable/runnable
-  TORCS environment is an execution gate, not permission to weaken the tests.
+- No design decision is currently open. The TORCS environment on this machine is
+  built and qualified, so it is no longer an execution gate for the synthetic
+  path; the human participant lap in Phase 4 remains the one open gate.
+- Longitudinal and lateral per-wheel tyre force stay unavailable. Recording them
+  would mean patching simuv2 to publish its private `tWheel` forces, which turns
+  the observe-only driver-module recorder into a physics-engine change. Raise it
+  as a separate decision if coaching evidence ever needs those channels.

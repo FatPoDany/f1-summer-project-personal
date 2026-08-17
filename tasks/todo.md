@@ -89,17 +89,17 @@ manifest values plus safe synthetic storage and atomic provenance persistence.
 
 **Acceptance criteria:**
 
-- [ ] Only `berniw` index 9, `car7-trb1`, `g-track-1`, three laps,
+- [x] Only `berniw` index 9, `car7-trb1`, `g-track-1`, three laps,
   `reference-pilot`, `SIM-BERNIW9-NNN`, and batch counts 1–20 are accepted.
-- [ ] Synthetic paths cannot resolve into `captures/human`; manifests and
+- [x] Synthetic paths cannot resolve into `captures/human`; manifests and
   registered metadata cannot use `human-driver` or human phase labels.
-- [ ] Manifest writes are atomic and retain timestamps, arguments, preset id,
+- [x] Manifest writes are atomic and retain timestamps, arguments, preset id,
   robot identity, CSV hash, sample count, and run id.
 
 **Verification:**
 
-- [ ] `QT_QPA_PLATFORM=offscreen pytest -q tests/test_synthetic_capture.py`
-- [ ] `ruff check src/racecoach/telemetry/synthetic_capture.py tests/test_synthetic_capture.py`
+- [x] `QT_QPA_PLATFORM=offscreen pytest -q tests/test_synthetic_capture.py`
+- [x] `ruff check src/racecoach/telemetry/synthetic_capture.py tests/test_synthetic_capture.py`
 
 **Dependencies:** None
 
@@ -112,8 +112,8 @@ manifest values plus safe synthetic storage and atomic provenance persistence.
 
 ## Checkpoint: Synthetic contract
 
-- [ ] Valid inputs round-trip through typed values and atomic JSON.
-- [ ] Every invalid/provenance-conflicting input fails before a subprocess or run-store write.
+- [x] Valid inputs round-trip through typed values and atomic JSON.
+- [x] Every invalid/provenance-conflicting input fails before a subprocess or run-store write.
 
 ## Task 16: Native robot CSV writer
 
@@ -122,15 +122,15 @@ standalone contract test without yet changing the `berniw` callbacks.
 
 **Acceptance criteria:**
 
-- [ ] The writer emits the approved robot schema, SI units, required telemetry
+- [x] The writer emits the approved robot schema, SI units, required telemetry
   fields, safe CSV quoting, periodic flush, and independent close behavior.
-- [ ] Missing/invalid output configuration disables recording without throwing
+- [x] Missing/invalid output configuration disables recording without throwing
   across the TORCS ABI.
-- [ ] The native test checks header, representative row, quoting, flush, and close.
+- [x] The native test checks header, representative row, quoting, flush, and close.
 
 **Verification:**
 
-- [ ] `integrations/torcs-1.3.9/verify-reference-recorder.sh`
+- [x] `integrations/torcs-1.3.9/verify-reference-recorder.sh`
 
 **Dependencies:** Task 15
 
@@ -150,16 +150,16 @@ start/record/stop hooks for index 9 only, observing rather than changing control
 
 **Acceptance criteria:**
 
-- [ ] Only enabled `berniw` index 9 starts a recorder; all other indices and
+- [x] Only enabled `berniw` index 9 starts a recorder; all other indices and
   ordinary launches create no Apex robot CSV.
-- [ ] Hooks are present exactly once and do not add or modify actuator assignments.
-- [ ] Re-running source preparation neither duplicates hooks nor changes output.
+- [x] Hooks are present exactly once and do not add or modify actuator assignments.
+- [x] Re-running source preparation neither duplicates hooks nor changes output.
 
 **Verification:**
 
-- [ ] `sha256sum -c integrations/torcs-1.3.9/SHA256SUMS`
-- [ ] `integrations/torcs-1.3.9/verify-reference-recorder.sh`
-- [ ] Run `integrations/torcs-1.3.9/build.sh prepare` twice and inspect both passes.
+- [x] `sha256sum -c integrations/torcs-1.3.9/SHA256SUMS`
+- [x] `integrations/torcs-1.3.9/verify-reference-recorder.sh`
+- [x] Run `integrations/torcs-1.3.9/build.sh prepare` twice and inspect both passes.
 
 **Dependencies:** Task 16
 
@@ -180,17 +180,17 @@ installation ships exactly one `berniw` index-9 entry for three laps.
 
 **Acceptance criteria:**
 
-- [ ] The preset fixes `g-track-1`, `berniw` index 9, and three laps and resolves
+- [x] The preset fixes `g-track-1`, `berniw` index 9, and three laps and resolves
   the expected `car7-trb1` assignment.
-- [ ] It is launched only via an argument-list `-r <preset>` path and remains
+- [x] It is launched only via an argument-list `-r <preset>` path and remains
   distinct from the graphical human `apexstudy.xml` preset.
-- [ ] Source and installed-runtime verification fail on any assignment drift.
+- [x] Source and installed-runtime verification fail on any assignment drift.
 
 **Verification:**
 
-- [ ] `integrations/torcs-1.3.9/verify-robot-study-preset.sh`
-- [ ] `integrations/torcs-1.3.9/build.sh install` when the native environment is available.
-- [ ] `integrations/torcs-1.3.9/verify-study-preset.sh`
+- [x] `integrations/torcs-1.3.9/verify-robot-study-preset.sh`
+- [x] `integrations/torcs-1.3.9/build.sh install` when the native environment is available.
+- [x] `integrations/torcs-1.3.9/verify-study-preset.sh`
 
 **Dependencies:** Task 17
 
@@ -204,9 +204,9 @@ installation ships exactly one `berniw` index-9 entry for three laps.
 
 ## Checkpoint: Native reference
 
-- [ ] Archive checksum and reference recorder/preset verifiers pass.
-- [ ] Prepared source is idempotent and human capture/preset verifiers still pass.
-- [ ] Recorder code has no model, network, or actuator-control path.
+- [x] Archive checksum and reference recorder/preset verifiers pass.
+- [x] Prepared source is idempotent and human capture/preset verifiers still pass.
+- [x] Recorder code has no model, network, or actuator-control path.
 
 ## Task 19: Python preset preflight
 
@@ -215,14 +215,14 @@ configuration and reject missing or drifted XML before launching TORCS.
 
 **Acceptance criteria:**
 
-- [ ] Preflight validates preset id/file, track, module/index, car source, and three laps.
-- [ ] Launch arguments are a sequence containing `-r` and an exact resolved path,
+- [x] Preflight validates preset id/file, track, module/index, car source, and three laps.
+- [x] Launch arguments are a sequence containing `-r` and an exact resolved path,
   never a shell command.
-- [ ] Preset identity is frozen into session evidence.
+- [x] Preset identity is frozen into session evidence.
 
 **Verification:**
 
-- [ ] `QT_QPA_PLATFORM=offscreen pytest -q tests/test_synthetic_capture.py`
+- [x] `QT_QPA_PLATFORM=offscreen pytest -q tests/test_synthetic_capture.py`
 
 **Dependencies:** Tasks 15 and 18
 
@@ -240,15 +240,15 @@ its CSV, preserve provenance, and register only complete evidence in the run sto
 
 **Acceptance criteria:**
 
-- [ ] The child receives only the unique synthetic output directory and validated arguments.
-- [ ] CSV robot/module/index/track/car/lap evidence, non-empty samples, and hash
+- [x] The child receives only the unique synthetic output directory and validated arguments.
+- [x] CSV robot/module/index/track/car/lap evidence, non-empty samples, and hash
   are validated before `capture="synthetic-robot"` registration.
-- [ ] Failure or malformed/mismatched output retains raw evidence and creates no run.
+- [x] Failure or malformed/mismatched output retains raw evidence and creates no run.
 
 **Verification:**
 
-- [ ] `QT_QPA_PLATFORM=offscreen pytest -q tests/test_synthetic_capture.py`
-- [ ] Regression: `QT_QPA_PLATFORM=offscreen pytest -q tests/test_human_capture.py tests/test_racecoach_store.py`
+- [x] `QT_QPA_PLATFORM=offscreen pytest -q tests/test_synthetic_capture.py`
+- [x] Regression: `QT_QPA_PLATFORM=offscreen pytest -q tests/test_human_capture.py tests/test_racecoach_store.py`
 
 **Dependencies:** Task 19
 
@@ -266,17 +266,17 @@ cancellation, failure isolation, atomic batch audit, and a facilitator CLI comma
 
 **Acceptance criteria:**
 
-- [ ] Default count 3 yields distinct `SIM-BERNIW9-NNN` session directories and
+- [x] Default count 3 yields distinct `SIM-BERNIW9-NNN` session directories and
   summarizes every completed/failed/cancelled outcome without silent retry.
-- [ ] Cancellation terminates the active child and prevents subsequent launches;
+- [x] Cancellation terminates the active child and prevents subsequent launches;
   completed siblings remain registered and failed raw evidence remains intact.
-- [ ] `capture-synthetic` exposes validated count/runtime/workspace options and
+- [x] `capture-synthetic` exposes validated count/runtime/workspace options and
   prints batch/session outcomes without model invocation.
 
 **Verification:**
 
-- [ ] `QT_QPA_PLATFORM=offscreen pytest -q tests/test_synthetic_capture.py`
-- [ ] `PYTHONPATH=src python -m racecoach.cli capture-synthetic --help`
+- [x] `QT_QPA_PLATFORM=offscreen pytest -q tests/test_synthetic_capture.py`
+- [x] `PYTHONPATH=src python -m racecoach.cli capture-synthetic --help`
 
 **Dependencies:** Task 20
 
@@ -290,9 +290,9 @@ cancellation, failure isolation, atomic batch audit, and a facilitator CLI comma
 
 ## Checkpoint: Collection slice
 
-- [ ] Tests simulate three successes, middle-session failure, cancellation,
+- [x] Tests simulate three successes, middle-session failure, cancellation,
   mismatched provenance, malformed CSV, and zero output.
-- [ ] Each terminal result is explicit; only valid completed sessions appear in the run store.
+- [x] Each terminal result is explicit; only valid completed sessions appear in the run store.
 
 ## Task 22: Research batch worker and page
 
@@ -301,15 +301,15 @@ confirmation, progress, cancellation, results, and explicit synthetic labelling.
 
 **Acceptance criteria:**
 
-- [ ] The page defaults to three, bounds count to 1–20, and never starts on navigation.
-- [ ] TORCS work runs off the Qt thread; Stop is responsive and progress identifies
+- [x] The page defaults to three, bounds count to 1–20, and never starts on navigation.
+- [x] TORCS work runs off the Qt thread; Stop is responsive and progress identifies
   current/total, robot, and terminal status.
-- [ ] Late signals from an older task cannot mutate the active batch.
+- [x] Late signals from an older task cannot mutate the active batch.
 
 **Verification:**
 
-- [ ] `QT_QPA_PLATFORM=offscreen pytest -q tests/test_synthetic_capture_view.py`
-- [ ] Offscreen interaction check confirms controls remain usable at 960×540.
+- [x] `QT_QPA_PLATFORM=offscreen pytest -q tests/test_synthetic_capture_view.py`
+- [x] Offscreen interaction check confirms controls remain usable at 960×540.
 
 **Dependencies:** Task 21
 
@@ -328,16 +328,16 @@ completed runs through the existing named-session/Garage flow.
 
 **Acceptance criteria:**
 
-- [ ] Research mode disabled leaves participant navigation and human collection unchanged.
-- [ ] Research mode enabled exposes one clearly labelled pilot action; opening it
+- [x] Research mode disabled leaves participant navigation and human collection unchanged.
+- [x] Research mode enabled exposes one clearly labelled pilot action; opening it
   or switching pages cannot launch TORCS.
-- [ ] Completed synthetic runs open without CSV selection and remain visibly
+- [x] Completed synthetic runs open without CSV selection and remain visibly
   distinguishable from participant sessions.
 
 **Verification:**
 
-- [ ] `QT_QPA_PLATFORM=offscreen pytest -q tests/test_synthetic_capture_view.py tests/test_window.py tests/test_garage_view.py`
-- [ ] Offscreen runtime screenshot/inspection of setup, progress, and results states.
+- [x] `QT_QPA_PLATFORM=offscreen pytest -q tests/test_synthetic_capture_view.py tests/test_window.py tests/test_garage_view.py`
+- [x] Offscreen runtime screenshot/inspection of setup, progress, and results states.
 
 **Dependencies:** Task 22
 
@@ -352,8 +352,8 @@ completed runs through the existing named-session/Garage flow.
 
 ## Checkpoint: Desktop slice
 
-- [ ] Qt automation completes the default three-session visible-control flow.
-- [ ] The UI stays responsive, cancellation works, stale callbacks are ignored,
+- [x] Qt automation completes the default three-session visible-control flow.
+- [x] The UI stays responsive, cancellation works, stale callbacks are ignored,
   and participant-mode behavior is unchanged.
 
 ## Task 24: Current-state documentation
@@ -363,15 +363,15 @@ recovery, analysis handoff, claims limits, and real qualification procedure.
 
 **Acceptance criteria:**
 
-- [ ] Commands and paths match the implemented CLI, Apex gate, TORCS preset, and manifests.
-- [ ] Documentation distinguishes synthetic pilots, fixed robot references, and
+- [x] Commands and paths match the implemented CLI, Apex gate, TORCS preset, and manifests.
+- [x] Documentation distinguishes synthetic pilots, fixed robot references, and
   human comparative-study evidence and does not claim measured coaching benefit.
-- [ ] Data fields/units and missing-channel behavior remain traceable to verified sources.
+- [x] Data fields/units and missing-channel behavior remain traceable to verified sources.
 
 **Verification:**
 
-- [ ] Follow the documented mock/test path from a clean temporary workspace.
-- [ ] `ruff check .`
+- [x] Follow the documented mock/test path from a clean temporary workspace.
+- [x] `ruff check .`
 
 **Dependencies:** Tasks 21 and 23
 
@@ -391,20 +391,20 @@ the local TORCS runtime is available.
 
 **Acceptance criteria:**
 
-- [ ] Full pytest, Ruff, checksum, bridge, human, graphical-preset, robot-recorder,
+- [x] Full pytest, Ruff, checksum, bridge, human, graphical-preset, robot-recorder,
   and robot-preset checks pass without generated artifacts entering Git.
-- [ ] A real batch yields three distinct validated three-lap synthetic runs and
+- [x] A real batch yields three distinct validated three-lap synthetic runs and
   opens them through Garage, with manifests matching raw evidence.
-- [ ] Any unavailable runtime gate is reported precisely and no effectiveness or
+- [x] Any unavailable runtime gate is reported precisely and no effectiveness or
   qualification claim is made from automated tests alone.
 
 **Verification:**
 
-- [ ] `QT_QPA_PLATFORM=offscreen pytest -q`
-- [ ] `ruff check .`
-- [ ] `sha256sum -c integrations/torcs-1.3.9/SHA256SUMS`
-- [ ] Run all `integrations/torcs-1.3.9/verify-*.sh` scripts.
-- [ ] Perform the documented real three-session Apex/TORCS smoke procedure.
+- [x] `QT_QPA_PLATFORM=offscreen pytest -q`
+- [x] `ruff check .`
+- [x] `sha256sum -c integrations/torcs-1.3.9/SHA256SUMS`
+- [x] Run all `integrations/torcs-1.3.9/verify-*.sh` scripts.
+- [x] Perform the documented real three-session Apex/TORCS smoke procedure.
 
 **Dependencies:** Task 24
 
@@ -414,6 +414,49 @@ the local TORCS runtime is available.
 
 ## Checkpoint: Synthetic pilot complete
 
-- [ ] All specification success criteria and project Definition of Done are met.
-- [ ] Final diff contains no unrelated user changes, secrets, or generated captures.
-- [ ] The fixed robot data is labelled as pipeline/reference evidence, never as a human outcome.
+- [x] All specification success criteria and project Definition of Done are met.
+- [x] Final diff contains no unrelated user changes, secrets, or generated captures.
+- [x] The fixed robot data is labelled as pipeline/reference evidence, never as a human outcome.
+
+# Recorder Defect Fixes
+
+## Task 26: Real per-wheel vertical load
+
+**Description:** Both recorders read `tWheelState::Fx/Fy/Fz`, which TORCS 1.3.9
+declares but no simulation module ever writes, so every capture carried three
+constant-zero force columns per wheel. Source the vertical load from the channel
+TORCS actually publishes and drop the two columns the driver ABI cannot supply.
+
+**Acceptance criteria:**
+
+- [x] `*_force_z_n` comes from `priv.reaction[i]` (`simuv2/wheel.cpp:368`) in
+  both the `human` and `berniw` recorders.
+- [x] `*_force_x_n` and `*_force_y_n` are removed rather than kept as zeros;
+  schemas become `apex-human-v2` and `apex-robot-v2`, and Python validates the
+  new robot version.
+- [x] The recorded load is physically correct: 11 270 N at rest against the
+  1 150 kg `car7-trb1` mass, rising to about 25 kN under aero load at speed.
+- [x] Documentation states the limitation and that v1 captures keep their zero
+  columns and are not upgraded in place.
+
+**Verification:**
+
+- [x] `integrations/torcs-1.3.9/verify-reference-recorder.sh`
+- [x] `integrations/torcs-1.3.9/verify-human-capture.sh`
+- [x] `QT_QPA_PLATFORM=offscreen pytest -q` and `ruff check .`
+- [x] Rebuilt runtime plus a real three-session batch registering `apex-robot-v2`
+  runs with non-zero four-wheel loads, opened through the Garage lap split.
+
+**Dependencies:** Task 25
+
+**Files likely touched:**
+
+- `integrations/torcs-1.3.9/overlay/src/drivers/human/apex_human_telemetry*.{h,cpp}`
+- `integrations/torcs-1.3.9/overlay/src/drivers/berniw/apex_robot_telemetry*.{h,cpp}`
+- `integrations/torcs-1.3.9/{human,robot}_telemetry_writer_test.cpp`
+- `src/racecoach/telemetry/synthetic_capture.py`, `tests/test_synthetic_capture.py`,
+  `tests/test_human_capture.py`
+- `docs/HUMAN_TELEMETRY_CAPTURE.md`, `docs/DATA_AVAILABILITY.md`,
+  `integrations/torcs-1.3.9/README.md`
+
+**Estimated scope:** Medium (schema change across native, Python, and docs)

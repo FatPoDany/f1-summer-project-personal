@@ -36,8 +36,8 @@ def robot_preset(tmp_path) -> RobotStudyPreset:
     race_config = tmp_path / "apexrobotstudy.xml"
     write_robot_preset(race_config)
     return RobotStudyPreset(
-        preset_id="apex-robot-study-v1",
-        display_name="Apex Robot Study v1",
+        preset_id="apex-robot-study-v2",
+        display_name="Apex Robot Study v2",
         track_id="g-track-1",
         track_category="road",
         car_id="car7-trb1",

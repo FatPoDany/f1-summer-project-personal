@@ -97,6 +97,17 @@ compatible with bounded filenames and buffered output.
 - Never: names/emails, credentials, invented channels, vehicle control, model
   calls in the capture loop, committing generated participant telemetry.
 
+## Decisions
+
+- `apex-human-v1` → `apex-human-v2` (raised and approved): v1 read
+  `tWheelState::Fx/Fy/Fz`, which TORCS 1.3.9 declares but never writes, so every
+  capture carried three constant-zero force columns per wheel — an invented
+  channel by the standard above. v2 sources `*_force_z_n` from the published
+  `priv.reaction[i]` and drops the two columns the driver ABI cannot supply. The
+  `berniw` recorder changed identically. v1 files keep their zero columns and are
+  not upgraded in place. No participant data exists under v1 beyond the 17.6 s
+  smoke capture, so nothing measured is affected.
+
 ## Success Criteria
 
 1. With capture enabled, a human TORCS session produces a parseable multi-lap

@@ -48,6 +48,16 @@ safe CSV escaping, no exceptions across the TORCS ABI, and no network/model work
 - Never: write when capture is disabled, mutate actuators, call Granite, block
   the drive callback, or label a row as human.
 
+## Decisions
+
+- `apex-robot-v1` → `apex-robot-v2` (raised and approved): v1 read
+  `tWheelState::Fx/Fy/Fz`, which TORCS 1.3.9 declares but never writes, so every
+  capture carried three constant-zero force columns per wheel. v2 sources
+  `*_force_z_n` from the published `priv.reaction[i]` and drops the two columns
+  the driver ABI cannot supply. The version bump is unavoidable either way,
+  because sourcing real data changes what `*_force_z_n` means. v1 files keep
+  their zero columns and are not upgraded in place.
+
 ## Success Criteria
 
 1. Ordinary TORCS and all other `berniw` indices produce no Apex robot CSV.

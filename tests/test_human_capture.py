@@ -46,9 +46,9 @@ def write_capture(
         "schema_version,sample,sim_time_s,dist_from_start_m,accel_cmd,brake_cmd,"
         "steer_cmd,gear,car_name,car_model,driver_module,track_internal_name,"
         "race_lap,remaining_laps,total_speed_mps\n"
-        f'apex-human-v1,0,0.00,0.0,0.5,0.0,0.0,1,"{car_name}",'
+        f'apex-human-v2,0,0.00,0.0,0.5,0.0,0.0,1,"{car_name}",'
         f"{car_model},{driver_module},{track_id},1,{remaining_laps},10.0\n"
-        f'apex-human-v1,1,0.02,0.2,0.6,0.0,0.1,1,"{car_name}",'
+        f'apex-human-v2,1,0.02,0.2,0.6,0.0,0.1,1,"{car_name}",'
         f"{car_model},{driver_module},{track_id},1,{remaining_laps},10.2\n",
         encoding="utf-8",
     )

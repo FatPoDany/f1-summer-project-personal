@@ -10,14 +10,14 @@ namespace {
 
 const unsigned int kFlushRows = 50;
 const int kReferenceRobotIndex = 9;
-const char *kSchemaVersion = "apex-robot-v1";
+const char *kSchemaVersion = "apex-robot-v2";
 const char *kWheelNames[4] = {"fr", "fl", "rr", "rl"};
 
 }  // namespace
 
 ApexRobotWheelTelemetry::ApexRobotWheelTelemetry()
     : spinVelocityRadS(0.0), brakeTemperatureRatio(0.0), slipSideMps(0.0),
-      slipAccelMps(0.0), forceXN(0.0), forceYN(0.0), forceZN(0.0), tireWear(0.0),
+      slipAccelMps(0.0), forceZN(0.0), tireWear(0.0),
       tireTemperatureC(0.0), tirePressureKpa(0.0), tireGraining(0.0) {}
 
 ApexRobotTelemetrySample::ApexRobotTelemetrySample()
@@ -110,8 +110,8 @@ bool ApexRobotTelemetryWriter::write(const ApexRobotTelemetrySample &sample) {
     for (int wheel = 0; wheel < 4; ++wheel) {
         const ApexRobotWheelTelemetry &value = sample.wheels[wheel];
         output_ << ',' << value.spinVelocityRadS << ',' << value.brakeTemperatureRatio << ','
-                << value.slipSideMps << ',' << value.slipAccelMps << ',' << value.forceXN
-                << ',' << value.forceYN << ',' << value.forceZN << ',' << value.tireWear
+                << value.slipSideMps << ',' << value.slipAccelMps
+                << ',' << value.forceZN << ',' << value.tireWear
                 << ',' << value.tireTemperatureC << ',' << value.tirePressureKpa << ','
                 << value.tireGraining;
     }
@@ -155,8 +155,7 @@ void ApexRobotTelemetryWriter::writeHeader() {
     for (int wheel = 0; wheel < 4; ++wheel) {
         output_ << ',' << kWheelNames[wheel] << "_spin_vel_rad_s," << kWheelNames[wheel]
                 << "_brake_temp_ratio," << kWheelNames[wheel] << "_slip_side_mps,"
-                << kWheelNames[wheel] << "_slip_accel_mps," << kWheelNames[wheel]
-                << "_force_x_n," << kWheelNames[wheel] << "_force_y_n,"
+                << kWheelNames[wheel] << "_slip_accel_mps,"
                 << kWheelNames[wheel] << "_force_z_n," << kWheelNames[wheel]
                 << "_tire_wear," << kWheelNames[wheel] << "_tire_temp_c,"
                 << kWheelNames[wheel] << "_tire_pressure_kpa," << kWheelNames[wheel]

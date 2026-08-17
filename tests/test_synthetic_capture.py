@@ -13,6 +13,7 @@ from racecoach.cli import main
 from racecoach.telemetry.run_store import list_runs, load_run
 from racecoach.telemetry.synthetic_capture import (
     REFERENCE_PHASE,
+    SYNTHETIC_TELEMETRY_SCHEMA_VERSION,
     ManagedSyntheticTorcsRunner,
     RobotIdentity,
     RobotStudyPreset,
@@ -45,8 +46,8 @@ def robot_preset(tmp_path: Path) -> RobotStudyPreset:
     race_config = tmp_path / "apexrobotstudy.xml"
     write_robot_preset(race_config)
     return RobotStudyPreset(
-        preset_id="apex-robot-study-v1",
-        display_name="Apex Robot Study v1",
+        preset_id="apex-robot-study-v2",
+        display_name="Apex Robot Study v2",
         track_id="g-track-1",
         track_category="road",
         car_id="car7-trb1",
@@ -58,7 +59,7 @@ def robot_preset(tmp_path: Path) -> RobotStudyPreset:
 def write_robot_preset(path: Path) -> None:
     path.write_text(
         """<?xml version="1.0"?>
-<params name="Apex Robot Study v1">
+<params name="Apex Robot Study v2">
   <section name="Tracks">
     <section name="1">
       <attstr name="name" val="g-track-1"/>
@@ -70,6 +71,7 @@ def write_robot_preset(path: Path) -> None:
   </section>
   <section name="Drivers">
     <attnum name="maximum number" val="1"/>
+    <attstr name="skill level default" val="pro"/>
     <attstr name="focused module" val="berniw"/>
     <attnum name="focused idx" val="9"/>
     <section name="1">
@@ -86,7 +88,7 @@ def write_robot_preset(path: Path) -> None:
 def write_robot_capture(
     path: Path,
     *,
-    schema_version: str = "apex-robot-v1",
+    schema_version: str = SYNTHETIC_TELEMETRY_SCHEMA_VERSION,
     driver_module: str = "berniw",
     driver_index: int = 9,
     car_model: str = "car7-trb1",
@@ -171,8 +173,8 @@ def test_robot_preset_rejects_drift_from_the_three_lap_assignment(
     tmp_path, field, value, message
 ):
     values = {
-        "preset_id": "apex-robot-study-v1",
-        "display_name": "Apex Robot Study v1",
+        "preset_id": "apex-robot-study-v2",
+        "display_name": "Apex Robot Study v2",
         "track_id": "g-track-1",
         "track_category": "road",
         "car_id": "car7-trb1",
@@ -227,7 +229,7 @@ def test_session_ids_are_stable_and_bounded_by_the_batch(torcs_binary, tmp_path)
 def test_default_robot_preset_resolves_from_the_torcs_runtime(torcs_binary):
     preset = default_robot_study_preset(torcs_binary)
 
-    assert preset.preset_id == "apex-robot-study-v1"
+    assert preset.preset_id == "apex-robot-study-v2"
     assert preset.laps == 3
     assert preset.race_config == (
         torcs_binary.resolve().parent.parent
@@ -258,8 +260,8 @@ def test_command_uses_validated_unattended_preset_without_a_shell(torcs_binary, 
 
 def test_missing_or_malformed_preset_fails_before_launch(torcs_binary, tmp_path):
     missing = RobotStudyPreset(
-        preset_id="apex-robot-study-v1",
-        display_name="Apex Robot Study v1",
+        preset_id="apex-robot-study-v2",
+        display_name="Apex Robot Study v2",
         track_id="g-track-1",
         track_category="road",
         car_id="car7-trb1",
@@ -277,7 +279,7 @@ def test_missing_or_malformed_preset_fails_before_launch(torcs_binary, tmp_path)
     unsafe = robot_preset(tmp_path)
     unsafe.race_config.write_text(
         '<!DOCTYPE params [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>'
-        '<params name="Apex Robot Study v1">&xxe;</params>',
+        '<params name="Apex Robot Study v2">&xxe;</params>',
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="safe XML"):
@@ -287,10 +289,15 @@ def test_missing_or_malformed_preset_fails_before_launch(torcs_binary, tmp_path)
 @pytest.mark.parametrize(
     ("before", "after", "message"),
     [
-        ('name="Apex Robot Study v1"', 'name="Other"', "name"),
+        ('name="Apex Robot Study v2"', 'name="Other"', "name"),
         ('val="g-track-1"', 'val="g-track-2"', "track"),
         ('val="road"', 'val="dirt"', "category"),
         ('name="laps" val="3"', 'name="laps" val="5"', "laps"),
+        (
+            'name="skill level default" val="pro"',
+            'name="skill level default" val="semi-pro"',
+            "skill level",
+        ),
         ('name="module" val="berniw"', 'name="module" val="human"', "module"),
         ('name="idx" val="9"', 'name="idx" val="8"', "index"),
     ],
@@ -357,7 +364,8 @@ def test_single_session_launches_without_shell_and_registers_valid_evidence(
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [
-        ({"schema_version": "apex-human-v1"}, "schema_version"),
+        ({"schema_version": "apex-human-v2"}, "schema_version"),
+        ({"schema_version": "apex-robot-v1"}, "schema_version"),
         ({"driver_module": "human"}, "driver_module"),
         ({"driver_index": 8}, "driver_index"),
         ({"car_model": "car1-trb1"}, "car_model"),

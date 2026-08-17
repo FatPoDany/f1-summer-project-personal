@@ -51,6 +51,7 @@ int main(int argc, char **argv) {
     sample.totalSpeedMps = 40.0;
     sample.raceFinished = 0;
     sample.wheels[0].tireTemperatureC = 88.5;
+    sample.wheels[1].forceZN = 3210.5;
 
     assert(writer.write(sample));
     sample.simTimeS = 12.52;
@@ -72,9 +73,15 @@ int main(int argc, char **argv) {
     assert(header.find("accel_cmd,brake_cmd,steer_cmd") != std::string::npos);
     assert(header.find("fr_tire_temp_c") != std::string::npos);
     assert(header.find("race_finished") != std::string::npos);
-    assert(row1.find("apex-robot-v1,0,12.5,0.02") == 0);
+    /* Only the vertical load is observable from a driver module, so the
+     * unwritable longitudinal/lateral columns must stay out of the schema. */
+    assert(header.find("fl_slip_accel_mps,fl_force_z_n,fl_tire_wear") != std::string::npos);
+    assert(header.find("_force_x_n") == std::string::npos);
+    assert(header.find("_force_y_n") == std::string::npos);
+    assert(row1.find("apex-robot-v2,0,12.5,0.02") == 0);
     assert(row1.find("\"berniw, \"\"9\"\"\"") != std::string::npos);
-    assert(row2.find("apex-robot-v1,1,12.52,0.02") == 0);
+    assert(row1.find(",3210.5,") != std::string::npos);
+    assert(row2.find("apex-robot-v2,1,12.52,0.02") == 0);
     assert(csvFieldCount(header) == csvFieldCount(row1));
     assert(csvFieldCount(header) == csvFieldCount(row2));
 

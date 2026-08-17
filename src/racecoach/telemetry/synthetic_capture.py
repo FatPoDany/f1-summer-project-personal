@@ -24,7 +24,7 @@ from f1coach_core.workspace import workspace_root
 from racecoach.telemetry.run_store import import_run
 
 SYNTHETIC_CAPTURE_SCHEMA_VERSION = "apex-synthetic-capture-v1"
-SYNTHETIC_TELEMETRY_SCHEMA_VERSION = "apex-robot-v1"
+SYNTHETIC_TELEMETRY_SCHEMA_VERSION = "apex-robot-v2"
 SYNTHETIC_CAPTURE_KIND = "synthetic-robot"
 REFERENCE_PHASE = "reference-pilot"
 SYNTHETIC_TELEMETRY_DIR_ENV = "APEX_SYNTHETIC_TELEMETRY_DIR"
@@ -36,7 +36,8 @@ REFERENCE_CAR_ID = "car7-trb1"
 REFERENCE_TRACK_ID = "g-track-1"
 REFERENCE_TRACK_CATEGORY = "road"
 REFERENCE_LAPS = 3
-REFERENCE_PRESET_ID = "apex-robot-study-v1"
+REFERENCE_PRESET_ID = "apex-robot-study-v2"
+REFERENCE_SKILL_LEVEL = "pro"
 _HUMAN_CAPTURE_ENV = (
     "APEX_HUMAN_TELEMETRY_DIR",
     "APEX_HUMAN_PARTICIPANT_ID",
@@ -271,7 +272,7 @@ def default_robot_study_preset(torcs_binary: str | Path) -> RobotStudyPreset:
     )
     return RobotStudyPreset(
         preset_id=REFERENCE_PRESET_ID,
-        display_name="Apex Robot Study v1",
+        display_name="Apex Robot Study v2",
         track_id=REFERENCE_TRACK_ID,
         track_category=REFERENCE_TRACK_CATEGORY,
         car_id=REFERENCE_CAR_ID,
@@ -627,6 +628,9 @@ def _validate_robot_preset_xml(preset: RobotStudyPreset) -> None:
     _require_xml_value(race, "attnum", "laps", str(preset.laps), "laps")
     drivers = _required_section(root, "Drivers")
     _require_xml_value(drivers, "attnum", "maximum number", "1", "driver count")
+    _require_xml_value(
+        drivers, "attstr", "skill level default", REFERENCE_SKILL_LEVEL, "skill level"
+    )
     _require_xml_value(
         drivers, "attstr", "focused module", REFERENCE_ROBOT_MODULE, "robot module"
     )

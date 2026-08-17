@@ -18,7 +18,7 @@ if [[ "${actual_sha256}" != "${EXPECTED_SHA256}" ]]; then
     exit 2
 fi
 
-grep -q '<params name="Apex Robot Study v1"' "${PRESET_FILE}"
+grep -q '<params name="Apex Robot Study v2"' "${PRESET_FILE}"
 grep -q '<attstr name="name" val="g-track-1"/>' "${PRESET_FILE}"
 grep -q '<attstr name="category" val="road"/>' "${PRESET_FILE}"
 grep -q '<attnum name="laps" val="3"/>' "${PRESET_FILE}"
@@ -29,6 +29,7 @@ grep -q '<attstr name="restart" val="no"/>' "${PRESET_FILE}"
 grep -q '<attnum name="fuel consumption factor" val="1"/>' "${PRESET_FILE}"
 grep -q '<attnum name="damage factor" val="1"/>' "${PRESET_FILE}"
 grep -q '<attnum name="tire factor" val="1"/>' "${PRESET_FILE}"
+grep -q '<attstr name="skill level default" val="pro"/>' "${PRESET_FILE}"
 
 check_root="$(mktemp -d "${TMPDIR:-/tmp}/robot-preset-verify.XXXXXX")"
 trap 'rm -rf "${check_root}"' EXIT
