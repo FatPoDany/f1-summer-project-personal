@@ -27,6 +27,7 @@ from racecoach.telemetry.synthetic_capture import (
     synthetic_command,
     synthetic_session_id,
 )
+from racecoach.telemetry.torcs_runtime import torcs_launch_cwd
 
 
 @pytest.fixture(autouse=True)
@@ -334,6 +335,9 @@ def test_single_session_launches_without_shell_and_registers_valid_evidence(
     assert observed["command"] == [str(torcs_binary), "-r", str(preset.race_config)]
     assert observed["kwargs"]["check"] is False
     assert "shell" not in observed["kwargs"]
+    # Same reason as the human path: TORCS resolves some paths against the
+    # current directory, so it has to start in its own data root.
+    assert observed["kwargs"]["cwd"] == str(torcs_launch_cwd(torcs_binary))
     assert "APEX_HUMAN_PARTICIPANT_ID" not in observed["kwargs"]["env"]
     assert "APEX_HUMAN_PHASE" not in observed["kwargs"]["env"]
     assert result.session_id == "SIM-BERNIW9-001"

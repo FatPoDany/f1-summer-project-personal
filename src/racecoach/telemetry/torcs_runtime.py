@@ -43,6 +43,23 @@ def torcs_raceman_dir(torcs_binary: str | Path) -> Path:
     return torcs_data_root(torcs_binary) / "config" / "raceman"
 
 
+def torcs_launch_cwd(torcs_binary: str | Path) -> Path:
+    """The working directory TORCS must be started from.
+
+    The Visual Studio build resolves some paths against the current directory
+    rather than ``DataDir``: ``prepareLocalDir`` in ``src/windows/main.cpp`` lists
+    the race managers to seed a profile with as the relative path
+    ``config/raceman``, and the same file's usage message says outright to run
+    ``wtorcs.exe`` "from the directory which contains wtorcs.exe". Launched from
+    anywhere else, a fresh profile directory silently receives no race managers.
+
+    The autotools build does not care -- its launcher script exports absolute
+    directories -- but the data root is a correct working directory there too, so
+    both platforms get one rule.
+    """
+    return torcs_data_root(torcs_binary)
+
+
 def default_torcs_binary() -> Path:
     """Find a packaged simulator first, then the developer runtime."""
     configured_prefix = os.environ.get("TORCS_PREFIX")

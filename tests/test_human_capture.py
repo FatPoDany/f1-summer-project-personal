@@ -16,6 +16,7 @@ from racecoach.telemetry.human_capture import (
     capture_human_runs,
 )
 from racecoach.telemetry.run_store import list_runs, load_run
+from racecoach.telemetry.torcs_runtime import torcs_launch_cwd
 
 
 @pytest.fixture(autouse=True)
@@ -110,6 +111,10 @@ def test_capture_launches_without_shell_and_registers_valid_csv(torcs_binary):
     assert observed["command"] == [str(torcs_binary), "-r", "practice.xml"]
     assert observed["kwargs"]["check"] is False
     assert "shell" not in observed["kwargs"]
+    # TORCS must start in its own data root: the Visual Studio build seeds a new
+    # profile from the relative path config/raceman, so launching from elsewhere
+    # leaves that profile without any race managers.
+    assert observed["kwargs"]["cwd"] == str(torcs_launch_cwd(torcs_binary))
     assert observed["kwargs"]["env"]["APEX_HUMAN_PARTICIPANT_ID"] == "P001"
     assert observed["kwargs"]["env"]["APEX_HUMAN_PHASE"] == "baseline"
 

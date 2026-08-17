@@ -207,10 +207,12 @@ Task 15 synthetic contract
 - [x] Task 27 (portability): make the overlay MSVC-clean, add the Windows `-R`
   and profile-directory patch, register the recorder sources in the Visual
   Studio projects, and centralise both runtime layouts.
-- [ ] Task 27 (qualification): run the `windows-installer` workflow and install
-  the artifact on a real Windows machine. The workflow needs no configuration —
-  upstream ships the byte-identical pinned archive — so this is gated only on a
-  Windows run, which a Linux host cannot perform.
+- [x] Task 27 (build): the `windows-installer` workflow produces a 380.2 MB
+  `ApexStudySetup.exe` whose runtime carries the study's own track, car, and
+  presets, checked per asset rather than by "the binaries exist".
+- [ ] Task 27 (qualification): install that artifact and drive a lap. The `-R`
+  entry, per-session profile isolation, and the recorder writing a CSV on Windows
+  are unproven until someone runs it; a Linux host cannot perform this.
 
 ## Verification Checkpoints
 

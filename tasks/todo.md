@@ -487,12 +487,19 @@ per-user installer produced by CI.
   with unit tests for each platform branch.
 - [x] The Linux path is unchanged: full pytest, Ruff, all five native verifiers,
   and a real three-lap synthetic session still pass.
-- [ ] `msbuild` compiles the patched solution and `setup_win32_generic.bat`
-  populates a runtime containing `wtorcs.exe`, `human.dll`, and `berniw.dll`.
-- [ ] PyInstaller produces a working `Apex.exe` on Windows and `makensis`
-  compiles `installer/apexstudy.nsi`.
+- [x] `msbuild` compiles the patched solution, including all four recorder
+  sources, and produces `wtorcs.exe`, `human.dll`, and `berniw.dll`.
+- [x] The runtime carries the assignment's own assets, not just binaries:
+  both presets, `g-track-1.xml`/`.acc`, and `car7-trb1.xml`/`.acc`, above a
+  200 MB floor. Bulk data needs `setup_win32-data-from-CVS_generic.bat`, which
+  `setup_win32_generic.bat` does not cover — it never mentions `g-track-1`.
+- [x] PyInstaller produces `Apex.exe` and `makensis` compiles
+  `installer/apexstudy.nsi` into a 380.2 MB `ApexStudySetup.exe`, against 369 MB
+  for the stock upstream installer of the same archive.
 - [ ] An installed build finds its bundled runtime, launches the pinned preset
-  through `-R`, and records a participant lap.
+  through `-R`, and records a participant lap. Nothing has run the installer yet:
+  the `-R` entry, the `APEX_TORCS_LOCAL_DIR` profile isolation, and the recorder
+  writing a CSV on Windows are all still unproven at runtime.
 
 **Verification:**
 
@@ -502,17 +509,38 @@ per-user installer produced by CI.
 - [x] All `integrations/torcs-1.3.9/verify-*.sh` scripts.
 - [x] Workflow YAML parses and the Release configuration links the static CRT
   (`RuntimeLibrary=MultiThreaded`), so no Visual C++ redistributable is needed.
-- [ ] Run the `windows-installer` workflow and install the artifact on a real
-  Windows machine.
+- [x] Run the `windows-installer` workflow: green in 16m, one `ApexStudySetup`
+  artifact.
+- [ ] Install that artifact on a real Windows machine and drive a lap.
 
 **Dependencies:** Task 26
 
-**Blocked on:** one run on Windows hardware, nothing else. The archive is no
-longer a gate: upstream's published `torcs-1.3.9.tar.bz2` is byte-identical to
-the pinned archive (SHA-256 `f9c69e86…` verified against the SourceForge
-download), so the workflow fetches it with no configuration. Everything that can
-be checked from a Linux host is done; the MSVC, PyInstaller, NSIS, and installed
-behaviour boxes need the workflow to actually run.
+**Blocked on:** installing the artifact and driving a lap. Everything up to
+producing the installer is done and green; only the on-machine behaviour is
+unproven. The archive is not a gate: upstream's published `torcs-1.3.9.tar.bz2`
+is byte-identical to the pinned archive (SHA-256 `f9c69e86…` verified against the
+SourceForge download), so the workflow needs no configuration.
+
+**Windows-only defects found and fixed while getting the build green,** each of
+which the Linux path never exercises:
+
+1. `Invoke-WebRequest` silently wrote SourceForge's 130 KB HTML download page
+   over the archive: SourceForge answers PowerShell's user agent with HTTP 200
+   and no redirect. Fetch with `curl.exe`; verify size before hash.
+2. `Get-Command patch` resolved to Strawberry Perl's GNU patch 2.5.9, which
+   aborts on an assertion. Locate Git for Windows' patch explicitly; never trust
+   PATH.
+3. `setup_win32_generic.bat` had to run *before* msbuild — it is the header
+   export step (82 copies into `export/include`), not just a data install.
+4. `graphical-race.patch` was malformed: a body line began with TAB instead of
+   the mandatory context space, so GNU patch had been guessing its position.
+   Regenerated from the pinned source against the known-good tree; now applies
+   with zero fuzz and zero offsets.
+5. `ReRunRaceOnGUI` was missing from `client.def`, whose exports are listed by
+   hand, so `wtorcs.exe` failed to link (LNK2019). Added in place, not by patch:
+   `client.def` is CRLF and a diff over it cannot survive `eol=lf`.
+6. Track and car data were absent entirely — a separate 3218-line script carries
+   them. The build was green and the installer 64.7 MB instead of 380 MB.
 
 **Files likely touched:**
 

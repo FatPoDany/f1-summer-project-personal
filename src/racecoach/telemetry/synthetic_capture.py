@@ -22,7 +22,7 @@ import pandas as pd
 from f1coach_core.torcs import is_torcs_export, split_torcs_run
 from f1coach_core.workspace import workspace_root
 from racecoach.telemetry.run_store import import_run
-from racecoach.telemetry.torcs_runtime import torcs_raceman_dir
+from racecoach.telemetry.torcs_runtime import torcs_launch_cwd, torcs_raceman_dir
 
 SYNTHETIC_CAPTURE_SCHEMA_VERSION = "apex-synthetic-capture-v1"
 SYNTHETIC_TELEMETRY_SCHEMA_VERSION = "apex-robot-v2"
@@ -75,9 +75,14 @@ class ManagedSyntheticTorcsRunner:
         self._process = None
 
     def __call__(
-        self, command: list[str], *, env: dict[str, str], check: bool = False
+        self,
+        command: list[str],
+        *,
+        env: dict[str, str],
+        check: bool = False,
+        cwd: str | None = None,
     ) -> subprocess.CompletedProcess:
-        process = self._popen_factory(command, env=env)
+        process = self._popen_factory(command, env=env, cwd=cwd)
         with self._lock:
             self._process = process
             stop_now = self._stop_requested.is_set()
@@ -363,7 +368,12 @@ def _capture_synthetic_session(
         / session_id
     )
     try:
-        completed = runner(command, env=environment, check=False)
+        completed = runner(
+            command,
+            env=environment,
+            check=False,
+            cwd=str(torcs_launch_cwd(config.torcs_binary)),
+        )
     except OSError as exc:
         manifest.update(status="launch_failed", error=str(exc))
         _finish_manifest(capture_dir, manifest)
