@@ -246,6 +246,16 @@ Push-Location $SourceDir
 try {
     & cmd /c "setup_win32_generic.bat $RuntimeDirName"
     if ($LASTEXITCODE -ne 0) { throw "setup_win32_generic.bat failed with exit code $LASTEXITCODE" }
+
+    # A second, separate script carries the bulk game data. Despite the name,
+    # setup_win32_generic.bat installs no tracks and no car models at all: it
+    # never mentions g-track-1 and never touches data\cars. Without this call the
+    # build still succeeds and still produces an installer -- it is simply an
+    # installer whose TORCS cannot load the study's track or car.
+    & cmd /c "setup_win32-data-from-CVS_generic.bat $RuntimeDirName"
+    if ($LASTEXITCODE -ne 0) {
+        throw "setup_win32-data-from-CVS_generic.bat failed with exit code $LASTEXITCODE"
+    }
 } finally { Pop-Location }
 
 $exportedHeader = Join-Path $SourceDir 'export\include\car.h'
@@ -277,13 +287,37 @@ foreach ($preset in @('apexstudy.xml', 'apexrobotstudy.xml')) {
     Copy-Item -LiteralPath $source -Destination (Join-Path $racemanDir $preset) -Force
 }
 
-$exe = Join-Path $RuntimeDir 'wtorcs.exe'
-if (-not (Test-Path -LiteralPath $exe)) { throw "Expected simulator not built: $exe" }
-foreach ($module in @('human', 'berniw')) {
-    $dll = Join-Path $RuntimeDir "drivers\$module\$module.dll"
-    if (-not (Test-Path -LiteralPath $dll)) { throw "Expected driver module not built: $dll" }
+# Check the assets the study assignment actually needs, not just that something
+# was built. Binaries alone passed this gate once while the runtime held no
+# tracks and no cars, which would only have surfaced as a participant staring at
+# a simulator that cannot start the race.
+$required = @(
+    'wtorcs.exe',
+    'drivers\human\human.dll',
+    'drivers\berniw\berniw.dll',
+    'config\raceman\apexstudy.xml',
+    'config\raceman\apexrobotstudy.xml',
+    'tracks\road\g-track-1\g-track-1.xml',
+    'tracks\road\g-track-1\g-track-1.acc',
+    'cars\car7-trb1\car7-trb1.xml',
+    'cars\car7-trb1\car7-trb1.acc'
+)
+$missing = @($required | Where-Object { -not (Test-Path -LiteralPath (Join-Path $RuntimeDir $_)) })
+if ($missing.Count -gt 0) {
+    throw "The TORCS runtime is incomplete; missing:`n  " + ($missing -join "`n  ")
 }
-Write-Host "TORCS runtime ready: $RuntimeDir"
+
+# A coarse net under the per-asset checks above: those would still pass if only
+# the study's own track and car copied (about 20 MB together) while the other 14
+# tracks and 41 car models silently did not. The equivalent Linux runtime holds
+# 465 MB of tracks and 82 MB of cars, so 200 MB is well clear of a good build and
+# far above the roughly 50 MB a data-less runtime comes to.
+$runtimeMB = [math]::Round((Get-ChildItem -LiteralPath $RuntimeDir -Recurse -File |
+    Measure-Object -Property Length -Sum).Sum / 1MB, 1)
+Write-Host "TORCS runtime ready: $RuntimeDir ($runtimeMB MB)"
+if ($runtimeMB -lt 200) {
+    throw "The runtime is only $runtimeMB MB; expected several hundred MB of track and car data."
+}
 
 if ($Action -eq 'build') { exit 0 }
 
