@@ -14,9 +14,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       QT_QPA_PLATFORM: offscreen
-      APEX_WORKSPACE: ${{ runner.temp }}/apex-workspace
     steps:
       - uses: actions/checkout@v4
+
+      # RUNNER_TEMP keeps the test workspace out of the checkout. It has to be
+      # set here rather than in the job's env block: the runner context is not
+      # available at that level, which made this whole file invalid.
+      - name: Point the test workspace at the runner temp directory
+        shell: bash
+        run: echo "APEX_WORKSPACE=$RUNNER_TEMP/apex-workspace" >> "$GITHUB_ENV"
 
       - uses: actions/setup-python@v5
         with:
