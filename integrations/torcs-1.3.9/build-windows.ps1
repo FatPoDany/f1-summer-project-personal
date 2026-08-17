@@ -114,13 +114,38 @@ if (-not (Test-Path -LiteralPath $extractMarker)) {
 Write-Step 'Applying the Apex source overlay'
 Copy-Tree (Join-Path $ScriptDir 'overlay') $SourceDir
 
-$patchExe = $null
-try {
-    $patchExe = Resolve-Tool 'patch' @(
+function Resolve-Patch {
+    # Deliberately does NOT trust whatever `patch` sits on PATH. The GitHub
+    # Windows image ships Strawberry Perl, and its bundled GNU patch 2.5.9 (2002)
+    # aborts on these files with an assertion failure -- "Expression: hunk",
+    # patch.c line 354 -- rather than reporting a normal error. Git for Windows
+    # carries a modern GNU patch, so locate that one specifically, relative to
+    # wherever git actually is.
+    $candidates = @(
         (Join-Path $env:ProgramFiles 'Git\usr\bin\patch.exe'),
         (Join-Path ${env:ProgramFiles(x86)} 'Git\usr\bin\patch.exe')
-    ) ''
-} catch { $patchExe = $null }
+    )
+    $git = Get-Command git -ErrorAction SilentlyContinue
+    if ($git) {
+        # <install>\cmd\git.exe or <install>\bin\git.exe -> <install>\usr\bin\patch.exe
+        $gitRoot = Split-Path -Parent (Split-Path -Parent $git.Source)
+        $candidates += (Join-Path $gitRoot 'usr\bin\patch.exe')
+    }
+    foreach ($candidate in $candidates) {
+        if ($candidate -and (Test-Path -LiteralPath $candidate)) { return $candidate }
+    }
+    return $null
+}
+
+$patchExe = Resolve-Patch
+if ($patchExe) {
+    Write-Step "Using patch: $patchExe"
+} else {
+    # git performed the checkout, so `git apply` is always available. It is
+    # stricter than patch -- no fuzz -- which is what we want: the patches carry
+    # eol=lf in .gitattributes precisely so their context matches exactly.
+    Write-Step 'No Git patch.exe found; falling back to git apply'
+}
 
 function Invoke-Patch($name) {
     $patch = Join-Path $ScriptDir "patches\$name"
@@ -129,7 +154,6 @@ function Invoke-Patch($name) {
     if ($patchExe) {
         & $patchExe --batch --forward --directory=$SourceDir --strip=1 --input=$patch
     } else {
-        # Git for Windows is always present on a machine that cloned this repo.
         Push-Location $SourceDir
         try { & git apply --whitespace=nowarn -p1 $patch } finally { Pop-Location }
     }

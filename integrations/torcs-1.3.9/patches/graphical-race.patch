@@ -1,7 +1,6 @@
-diff --git a/src/libs/raceengineclient/raceinit.cpp b/src/libs/raceengineclient/raceinit.cpp
 --- a/src/libs/raceengineclient/raceinit.cpp
 +++ b/src/libs/raceengineclient/raceinit.cpp
-@@ -156,6 +156,33 @@ static void reSelectRaceman(void *params)
+@@ -156,6 +156,33 @@
  }
  
  
@@ -35,10 +34,9 @@ diff --git a/src/libs/raceengineclient/raceinit.cpp b/src/libs/raceengineclient/
  void ReRunRaceOnConsole(const char* raceconfig)
  {
  	ReInfo = (tRmInfo *)calloc(1, sizeof(tRmInfo));
-diff --git a/src/libs/raceengineclient/raceinit.h b/src/libs/raceengineclient/raceinit.h
 --- a/src/libs/raceengineclient/raceinit.h
 +++ b/src/libs/raceengineclient/raceinit.h
-@@ -38,6 +38,7 @@ extern void ReRaceCleanDrivers(void);
+@@ -39,6 +39,7 @@
  extern const char *ReGetCurrentRaceName(void);
  extern const char *ReGetPrevRaceName(void);
  extern void ReRunRaceOnConsole(const char* raceconfig);
@@ -46,10 +44,10 @@ diff --git a/src/libs/raceengineclient/raceinit.h b/src/libs/raceengineclient/ra
  
  extern tModList *ReRaceModList;
  
-diff --git a/src/linux/main.cpp b/src/linux/main.cpp
 --- a/src/linux/main.cpp
 +++ b/src/linux/main.cpp
-@@ -30,6 +30,7 @@ extern bool bKeepModules;
+@@ -30,7 +30,8 @@
+ extern bool bKeepModules;
  
  static void
 -init_args(int argc, char **argv, const char **raceconfig)
@@ -58,9 +56,10 @@ diff --git a/src/linux/main.cpp b/src/linux/main.cpp
  {
  	int i;
  	char *buf;
-@@ -78,2 +79,16 @@ init_args(int argc, char **argv, const char **raceconfig)
-	 		bKeepModules = true;
--#ifndef FREEGLUT
+@@ -76,6 +77,20 @@
+ 			// Keep modules in memory (for valgrind)
+ 			printf("Unloading modules disabled, just intended for valgrind runs.\n");
+ 			bKeepModules = true;
 +		} else if(strcmp(argv[i], "-R") == 0) {
 +			i++;
 +			*graphicalraceconfig = "";
@@ -75,21 +74,22 @@ diff --git a/src/linux/main.cpp b/src/linux/main.cpp
 +				printf("Please specify a race configuration xml when using -R\n");
 +				exit(1);
 +			}
-+#ifndef FREEGLUT
-@@ -99,6 +114,11 @@ init_args(int argc, char **argv, const char **raceconfig)
- 			i++;		/* ignore bad args */
+ #ifndef FREEGLUT
+ 		} else if(strncmp(argv[i], "-m", 2) == 0) {
+ 			i++;
+@@ -99,6 +114,11 @@
  		}
  	}
-+
+ 
 +	if((strlen(*raceconfig) != 0) && (strlen(*graphicalraceconfig) != 0)) {
 +		printf("Use only one of -r or -R\n");
 +		exit(1);
 +	}
- 
++
  #ifdef FREEGLUT
  	GfuiMouseSetHWPresent(); /* allow the hardware cursor (freeglut pb ?) */
-@@ -124,15 +144,19 @@ init_args(int argc, char **argv, const char **raceconfig)
- int
+ #endif
+@@ -124,13 +144,17 @@
  main(int argc, char *argv[])
  {
  	const char *raceconfig = "";
@@ -108,11 +108,15 @@ diff --git a/src/linux/main.cpp b/src/linux/main.cpp
  		glutMainLoop();			/* event loop of glut */
  	} else {
  		// Run race from console, no Window, no OpenGL/OpenAL etc.
- 		// Thought for blind scripted AI training
-diff --git a/src/linux/torcs.in b/src/linux/torcs.in
+@@ -140,4 +164,3 @@
+ 
+ 	return 0;					/* just for the compiler, never reached */
+ }
+-
 --- a/src/linux/torcs.in
 +++ b/src/linux/torcs.in
-@@ -33,6 +33,6 @@ DATADIR=$DATAROOTDIR/games/torcs
+@@ -27,7 +27,7 @@
+ DATADIR=$DATAROOTDIR/games/torcs
  VARDIR=@localstatedir@/games/torcs
  
 -LOCAL_CONF=$HOME/.torcs
