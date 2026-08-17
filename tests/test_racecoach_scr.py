@@ -8,8 +8,10 @@ lock-step: one state out, one action back — so the test is deterministic.
 import base64
 import json
 import re
+import select
 import socket
 import threading
+import time
 
 import pytest
 
@@ -395,6 +397,25 @@ def test_capture_stop_request_saves_received_rows_and_sends_safe_brake():
     assert "(accel 0)" in stub.actions[-1] and "(brake 1)" in stub.actions[-1]
 
 
+def _await_queued_datagrams(sock: socket.socket, settle_s: float = 0.2) -> None:
+    """Block until sent loopback datagrams have actually reached ``sock``.
+
+    ``_receive_latest`` drains with a zero-timeout ``select``, which is right for
+    a live loop: it takes the newest packet already queued and returns. That
+    makes it sensitive to when the kernel delivers, and ``sendto`` on loopback is
+    not synchronous — on macOS the last datagram of a burst can still be in
+    flight. Waiting here keeps the assertion exact while testing the drain rather
+    than the host's delivery timing. There is no portable way to count queued
+    datagrams, so this settles instead of counting.
+    """
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        if select.select((sock,), (), (), 0.1)[0]:
+            time.sleep(settle_s)
+            return
+    raise AssertionError("no datagram reached the receiver within 5s")
+
+
 def test_connected_udp_drops_foreign_packets_and_drains_to_the_newest_state():
     with (
         socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender,
@@ -407,6 +428,12 @@ def test_connected_udp_drops_foreign_packets_and_drains_to_the_newest_state():
         foreign.sendto(make_state(999.0, 1.0).encode("ascii"), receiver.getsockname())
         for dist in (10.0, 20.0, 30.0):
             sender.sendto(make_state(dist, 1.0).encode("ascii"), receiver.getsockname())
+        # Send from the foreign address last as well. A leading foreign packet
+        # alone proves nothing here — the drain keeps the newest, so it would be
+        # discarded whether or not connect() filtered it. Arriving last, an
+        # unfiltered packet would become the drain's result and fail the assert.
+        foreign.sendto(make_state(999.0, 1.0).encode("ascii"), receiver.getsockname())
+        _await_queued_datagrams(receiver)
 
         newest = scr.parse_state(_receive_latest(receiver))
         assert newest["distFromStart"] == 30.0
