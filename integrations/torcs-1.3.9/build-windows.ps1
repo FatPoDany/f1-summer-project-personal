@@ -189,10 +189,16 @@ if ($Action -eq 'prepare') {
 
 $msbuild = Resolve-MSBuild
 Write-Step "Building TORCS.sln ($Configuration|$Platform) with $msbuild"
+# Keep a full-verbosity log beside the build: the console stays readable at
+# minimal, but a first failure on an unfamiliar machine needs the detail.
+$msbuildLog = Join-Path $BuildRoot 'msbuild.log'
 & $msbuild (Join-Path $SourceDir 'TORCS.sln') `
     "/p:Configuration=$Configuration" "/p:Platform=$Platform" `
-    '/m' '/nologo' '/verbosity:minimal'
-if ($LASTEXITCODE -ne 0) { throw "msbuild failed with exit code $LASTEXITCODE" }
+    '/m' '/nologo' '/verbosity:minimal' `
+    '/fileLogger' "/fileLoggerParameters:LogFile=$msbuildLog;Verbosity=normal;Encoding=UTF-8"
+if ($LASTEXITCODE -ne 0) {
+    throw "msbuild failed with exit code $LASTEXITCODE. Full log: $msbuildLog"
+}
 
 Write-Step 'Populating the TORCS runtime with game data'
 Push-Location $SourceDir

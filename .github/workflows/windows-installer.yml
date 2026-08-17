@@ -127,6 +127,17 @@ jobs:
             -BuildRoot $env:BUILD_ROOT `
             -Configuration $env:BUILD_CONFIGURATION
 
+      # The MSVC build cannot be rehearsed on Linux, so keep its log retrievable
+      # when the job fails instead of leaving only scrolled console output.
+      - name: Upload build logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build-logs
+          path: ${{ runner.temp }}\apex-torcs-win\msbuild.log
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Report installer size
         shell: pwsh
         run: |
