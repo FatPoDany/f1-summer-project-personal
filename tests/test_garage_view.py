@@ -1,4 +1,4 @@
-"""Garage: the status column — SESSION BEST / ANALYSE · n / NEW."""
+"""Garage: the status column — SESSION BEST / ANALYSED · n / NEW."""
 
 import json
 
@@ -56,7 +56,7 @@ def test_status_column_speaks_the_mockup_vocabulary(qtbot):
 
     got = statuses(view)
     assert got[best.source.stem] == "SESSION BEST"
-    assert got[coach_me.source.stem] == f"ANALYSE · {len(report.findings)} findings"
+    assert got[coach_me.source.stem] == f"ANALYSED · {len(report.findings)} findings"
     assert got[fresh.source.stem] == "NEW — just captured"
 
     # opening the fresh lap consumes its NEW tag

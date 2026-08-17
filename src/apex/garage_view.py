@@ -173,13 +173,15 @@ class GarageView(QWidget):
                 self._table.setItem(row, col, item)
 
     def _lap_status(self, stem: str, is_best: bool, coached: dict[str, int]) -> tuple[str, str]:
-        """Mockup vocabulary: SESSION BEST beats COACHED beats NEW beats blank."""
+        """Status vocabulary: SESSION BEST beats ANALYSED beats NEW beats blank."""
         if is_best:
             return "SESSION BEST", theme.PURPLE
         if stem in coached:
             n = coached[stem]
+            # Past tense: the lap has been analysed, and N is how many
+            # conclusions the model returned for it.
             return (
-                f"ANALYSE · {n} finding{'s' if n != 1 else ''}" if n else "ANALYSE · clean"
+                f"ANALYSED · {n} finding{'s' if n != 1 else ''}" if n else "ANALYSED · clean"
             ), ""
         if stem in self._fresh:
             return "NEW — just captured", theme.GREEN

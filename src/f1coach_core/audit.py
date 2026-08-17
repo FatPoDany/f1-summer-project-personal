@@ -143,7 +143,7 @@ def _report_has_unique_claims_and_citations(report: CoachingReport) -> bool:
 def latest_coaching_outcomes(session_path: str | Path) -> dict[str, int]:
     """Lap name -> findings count, from each lap's newest successful audit.
 
-    Drives the Garage's "COACHED · n findings" status. Timestamped filenames
+    Drives the Garage's "ANALYSED · n findings" status. Timestamped filenames
     make lexical order chronological, so later records win; unreadable or
     failed records are skipped rather than surfaced — this is a status hint,
     not the audit trail itself."""
