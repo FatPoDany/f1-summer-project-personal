@@ -604,6 +604,24 @@ itself worked; everything below is what the run exposed.
   Recorded here so it is not lost; needs its own decision on hosting, consent,
   and what leaves the participant's machine.
 
+## Task 33: A window a participant can actually drive in
+
+- [x] The study session fixes the TORCS render size (1280x720 by default)
+  in its own profile's `config/screen.xml`, written immediately before
+  launch. TORCS ships 640x480, which is too small to place a car, and
+  maximising the window does not help: `Reshape` in `tgfclient/screen.cpp`
+  keeps the viewport at the configured view size and only re-centres it,
+  while the race renderer caches `scrx/scry/scrw/scrh` from race start and
+  reuses them every frame. A maximised window therefore drew the race in a
+  small box offset toward the bottom-left, black elsewhere.
+- [x] The size is part of the frozen assignment and appears in the capture
+  manifest: a different render size is a different condition to drive under.
+- [ ] In-place resizing still leaves the viewport behind. Fixing that means
+  patching the renderer's cached viewport, which cannot be verified from a
+  Linux host; TORCS itself answers a resolution change by restarting the
+  process (`GfScrReinit`). Revisit only if a participant needs to resize
+  mid-session.
+
 ## Task 31: Coaching a driver can act on
 
 - [ ] The current coach output is built for researchers reading traces. A

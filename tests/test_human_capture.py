@@ -163,6 +163,8 @@ def test_study_preset_launches_graphical_race_and_records_context(tmp_path, torc
         "car_id": "car7-trb1",
         "laps": 5,
         "race_config": str(preset.race_config),
+        "window_width": preset.window_width,
+        "window_height": preset.window_height,
     }
     assert manifest["command"] == [
         str(torcs_binary),
@@ -368,3 +370,66 @@ def test_all_outputs_are_validated_before_any_run_is_registered(torcs_binary):
             runner=runner,
         )
     assert list_runs() == []
+
+
+def test_study_session_fixes_the_torcs_window_size_before_launch(tmp_path, torcs_binary):
+    """640x480 is too small to place a car, and maximising it does not work."""
+    # Lay out a runtime the way the autotools install does, with TORCS's own
+    # screen.xml as the source to be adapted.
+    data_root = torcs_binary.parent.parent / "share" / "games" / "torcs"
+    (data_root / "config" / "raceman").mkdir(parents=True)
+    (data_root / "config" / "screen.xml").write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<params name="screen" type="params" mode="mw">\n'
+        '  <section name="Screen Properties">\n'
+        '    <attnum name="x" val="640"/>\n'
+        '    <attnum name="y" val="480"/>\n'
+        '    <attstr name="fullscreen" in="yes,no" val="no"/>\n'
+        "  </section>\n"
+        '  <section name="Menu Font">\n'
+        '    <attnum name="size big" val="16"/>\n'
+        "  </section>\n"
+        "</params>\n",
+        encoding="utf-8",
+    )
+    preset = study_preset(tmp_path)
+
+    def runner(_command, **kwargs):
+        output_dir = Path(kwargs["env"]["APEX_HUMAN_TELEMETRY_DIR"])
+        write_capture(output_dir / "human-study.csv")
+        return SimpleNamespace(returncode=0)
+
+    capture_human_runs(
+        HumanCaptureConfig("P011", "baseline", torcs_binary, preset=preset),
+        runner=runner,
+    )
+
+    from f1coach_core.workspace import workspace_root
+
+    written = (
+        workspace_root() / "torcs-profiles" / preset.preset_id / "config" / "screen.xml"
+    ).read_text(encoding="utf-8")
+    assert f'<attnum name="x" val="{preset.window_width}"/>' in written
+    assert f'<attnum name="y" val="{preset.window_height}"/>' in written
+    # Only the window size changes; the rest of TORCS's configuration survives.
+    assert '<attnum name="size big" val="16"/>' in written
+    assert 'name="fullscreen" in="yes,no" val="no"' in written
+
+
+def test_a_missing_screen_config_never_costs_a_participant_their_session(
+    tmp_path, torcs_binary
+):
+    """No runtime screen.xml to adapt: run anyway, at TORCS's own default size."""
+    preset = study_preset(tmp_path)
+
+    def runner(_command, **kwargs):
+        output_dir = Path(kwargs["env"]["APEX_HUMAN_TELEMETRY_DIR"])
+        write_capture(output_dir / "human-study.csv")
+        return SimpleNamespace(returncode=0)
+
+    result = capture_human_runs(
+        HumanCaptureConfig("P013", "baseline", torcs_binary, preset=preset),
+        runner=runner,
+    )
+
+    assert len(result.run_dirs) == 1

@@ -102,6 +102,15 @@ class TorcsStudyPreset:
     car_id: str
     laps: int
     race_config: Path
+    # TORCS ships a 640x480 window. That is too small to place a car accurately,
+    # and enlarging it by hand does not work: the renderer keeps its viewport at
+    # the configured view size and simply re-centres it, so a maximised window
+    # shows the race in a small box with black around it. Fixing the size here
+    # gives every participant the same usable window and removes the reason to
+    # touch the window at all. Frozen into the manifest with the rest of the
+    # assignment, because a different render size is a different condition.
+    window_width: int = 1280
+    window_height: int = 720
 
     def __post_init__(self) -> None:
         _validate_slug(self.preset_id, "preset id")
@@ -117,6 +126,12 @@ class TorcsStudyPreset:
             raise ValueError("display name must be 1-128 visible characters")
         if isinstance(self.laps, bool) or not isinstance(self.laps, int) or self.laps < 1:
             raise ValueError("laps must be a positive integer")
+        for name, value in (
+            ("window width", self.window_width),
+            ("window height", self.window_height),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or not 320 <= value <= 7680:
+                raise ValueError(f"{name} must be an integer from 320 to 7680")
         race_config = Path(self.race_config)
         if race_config.suffix.lower() != ".xml":
             raise ValueError("race configuration must be an XML file")
@@ -131,6 +146,8 @@ class TorcsStudyPreset:
             "car_id": self.car_id,
             "laps": self.laps,
             "race_config": str(self.race_config),
+            "window_width": self.window_width,
+            "window_height": self.window_height,
         }
 
 
@@ -231,9 +248,9 @@ def capture_human_runs(
     environment[PARTICIPANT_ENV] = config.participant_id
     environment[PHASE_ENV] = config.phase
     if config.preset is not None:
-        environment[TORCS_LOCAL_DIR_ENV] = str(
-            workspace_root() / "torcs-profiles" / config.preset.preset_id
-        )
+        profile_dir = workspace_root() / "torcs-profiles" / config.preset.preset_id
+        environment[TORCS_LOCAL_DIR_ENV] = str(profile_dir)
+        _write_screen_config(profile_dir, binary, config.preset)
     try:
         completed = runner(
             command,
@@ -392,6 +409,53 @@ def _validate_preset_frame(
             f"{path.name} has initial {laps_column}={observed!r}; expected {preset.laps}",
             path.parent,
         )
+
+
+_SCREEN_ATTR = re.compile(
+    r'(<attnum\s+name="(?P<name>x|y)"\s+val=")(?P<value>[^"]*)(")'
+)
+
+
+def _write_screen_config(
+    profile_dir: Path, torcs_binary: Path, preset: TorcsStudyPreset
+) -> None:
+    """Fix the render size in the session's own TORCS profile, before launch.
+
+    TORCS reads ``config/screen.xml`` from its local directory, which for a
+    study session is the per-preset profile Apex owns. Writing it here rather
+    than patching the simulator survives both launchers, though for different
+    reasons, and both depend on this running immediately before launch:
+
+    * ``src/windows/main.cpp`` seeds a profile with ``copyFileIfNotExists``, so
+      a file already present is left alone.
+    * ``setup_linux.sh`` re-copies its own screen.xml when the installed one is
+      *newer* than the profile's. Ours is written seconds before launch, so it
+      always wins.
+
+    A failure here must not cost a participant their session: the window would
+    merely open at the stock 640x480, so the capture still runs.
+    """
+    destination = profile_dir / "config" / "screen.xml"
+    source = torcs_raceman_dir(torcs_binary).parent / "screen.xml"
+    try:
+        if destination.exists():
+            text = destination.read_text(encoding="utf-8")
+        else:
+            text = source.read_text(encoding="utf-8")
+    except OSError:
+        return
+
+    sizes = {"x": preset.window_width, "y": preset.window_height}
+    updated, count = _SCREEN_ATTR.subn(
+        lambda m: f"{m.group(1)}{sizes[m.group('name')]}{m.group(4)}", text, count=2
+    )
+    if count != 2:  # an unfamiliar screen.xml: leave TORCS's own defaults alone
+        return
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(updated, encoding="utf-8")
+    except OSError:
+        return
 
 
 def _write_manifest(capture_dir: Path, manifest: dict) -> None:
