@@ -23,6 +23,7 @@ from f1coach_core.coach import (
     coaching_report_from_dict,
     get_provider,
 )
+from f1coach_core.debrief import DebriefPoint, debrief_summary, lap_debrief
 from f1coach_core.features import (
     build_evidence_summary,
     corner_table,
@@ -60,8 +61,11 @@ __all__ = [
     "Finding",
     "GraniteCoach",
     "GraniteCoachError",
+    "DebriefPoint",
     "Lap",
     "StudyIdentity",
+    "debrief_summary",
+    "lap_debrief",
     "MockCoach",
     "Session",
     "TelemetrySchemaError",

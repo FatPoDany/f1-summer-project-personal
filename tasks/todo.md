@@ -624,9 +624,34 @@ itself worked; everything below is what the run exposed.
 
 ## Task 31: Coaching a driver can act on
 
-- [ ] The current coach output is built for researchers reading traces. A
-  participant needs the specific stretches of track they lost time on, replayed
-  with a plain-language conclusion per stretch.
+- [x] Deterministic half: `f1coach_core.debrief` ranks the stretches where a lap
+  lost time to a reference and names the largest measured difference over the
+  same stretch. Metres and km/h are ranked against their own reporting
+  thresholds so different units stay comparable.
+- [x] It stops at measurement. A stretch where nothing moved far enough is shown
+  with its time loss and no explanation, rather than an invented one, and no
+  point claims the difference caused the loss.
+- [x] Surfaced above the corner table in Lap Analysis: a one-line summary plus up
+  to three clickable stretches that zoom the strips onto themselves. Needs no
+  model, so it works with Task 32 deferred.
+- [x] Replay proper: `x`/`y` now travel through to canonical laps as optional
+  columns, carried only when every kept row has a finite pair, so the track can
+  be drawn. Double-clicking a stretch opens a replay window that draws the lap's
+  own shape, picks out that stretch, and runs a marker along it at the elapsed
+  time the driver actually took, with speed, pedals and gear alongside. Laps
+  without a position channel say so and keep the numbers.
+
+## Task 34: berniw commands more throttle than the actuator has
+
+- [ ] `accel_cmd` reaches 1.253 in the reference captures, above the 0..1 the
+  actuator accepts (`car.h:345-349`), in over half the rows. The simulator
+  clamps it, so the car never did what the number says. The stored channel is
+  left exactly as recorded, and the participant-facing replay clamps only its
+  display. The researcher-facing corner table still reports `exit_throttle_pct`
+  straight from the channel and can therefore print above 100; decide whether
+  that column should say "commanded" or clamp too.
+- [ ] Let a model narrate these points once Task 32 lands. The points are already
+  the evidence it would be given.
 
 ## Task 32: Granite without a terminal
 

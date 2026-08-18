@@ -73,3 +73,36 @@ def test_returning_to_single_lap_keeps_the_table_visible(qtbot):
     assert view._ref_combo.currentText() == "Single-lap analysis"
     assert not view._corners.isHidden()
     assert view._corner_rows
+
+
+def test_debrief_names_where_time_went_and_zooms_to_it(qtbot):
+    """The participant-facing half of the screen, independent of any model."""
+    session = load_sample_session()
+    best = session.best_lap
+    slowest = max(session.laps, key=lambda lap: lap.lap_time)
+
+    view = AnalysisView()
+    qtbot.addWidget(view)
+    view.set_context(slowest, session)
+    view._ref_combo.setCurrentIndex(view._ref_combo.findData(best))
+
+    assert view._debrief.isVisible() or view._debrief.count()
+    assert "off your best lap" in view._debrief_heading.text()
+    assert view._debrief.count() == len(view._debrief_points)
+    assert view._debrief.count() >= 1
+
+    # Clicking a stretch zooms the strips onto exactly that span.
+    zoomed = []
+    view._show_evidence = lambda d0, d1: zoomed.append((d0, d1))
+    view._zoom_debrief_item(view._debrief.item(0))
+    assert zoomed == [view._debrief_points[0].span_m]
+
+
+def test_debrief_is_absent_without_a_reference_lap(qtbot):
+    """Nothing to compare against means nothing to say about where time went."""
+    view = AnalysisView()
+    qtbot.addWidget(view)
+    view.set_context(load_sample_session().best_lap, None)
+
+    assert view._debrief.count() == 0
+    assert not view._debrief_heading.isVisible()

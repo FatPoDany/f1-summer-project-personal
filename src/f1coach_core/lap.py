@@ -48,6 +48,15 @@ class Lap:
         return self.source.name
 
     @property
+    def has_track_map(self) -> bool:
+        """Whether this lap carries world position, so a track can be drawn.
+
+        Optional: laps from sources without a position channel are complete and
+        analysable, they simply cannot be shown on a map.
+        """
+        return "x" in self.df.columns and "y" in self.df.columns
+
+    @property
     def label(self) -> str:
         """What a lap column should show: the lap number when it is known."""
         return str(self.lap_number) if self.lap_number is not None else self.source.stem

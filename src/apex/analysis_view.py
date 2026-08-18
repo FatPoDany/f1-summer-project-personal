@@ -10,6 +10,8 @@ from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -19,11 +21,15 @@ from PySide6.QtWidgets import (
 
 from apex import theme
 from apex.coach_panel import CoachPanel
+from apex.widgets.replay_window import ReplayWindow
 from apex.widgets.strip_stack import StripStack
 from f1coach_core import (
+    DebriefPoint,
     Lap,
     Session,
     corner_table,
+    debrief_summary,
+    lap_debrief,
     render_html_report,
     sector_times,
     single_lap_corner_table,
@@ -109,6 +115,23 @@ class AnalysisView(QWidget):
         self._corners.cellClicked.connect(self._zoom_corner_row)
         self._corners.hide()
 
+        # A participant reads this, not the corner table: the few stretches that
+        # cost time, in plain language. Clicking one zooms the strips onto it.
+        self._debrief_heading = QLabel()
+        self._debrief_heading.setWordWrap(True)
+        self._debrief_heading.setStyleSheet("font-weight: 600;")
+        self._debrief_heading.hide()
+        self._debrief = QListWidget()
+        self._debrief.setMaximumHeight(96)
+        self._debrief.setToolTip(
+            "Click a stretch to zoom the strips onto it, double-click to replay it"
+        )
+        self._debrief.itemClicked.connect(self._zoom_debrief_item)
+        self._debrief.itemDoubleClicked.connect(self._replay_debrief_item)
+        self._debrief.hide()
+        self._debrief_points: list[DebriefPoint] = []
+        self._replay_window: ReplayWindow | None = None
+
         self._panel = CoachPanel(self)
         self._panel.setMinimumWidth(300)
         self._panel.evidenceRequested.connect(self._show_evidence)
@@ -119,6 +142,8 @@ class AnalysisView(QWidget):
         charts_layout.setContentsMargins(0, 0, 0, 0)
         charts_layout.setSpacing(4)
         charts_layout.addWidget(self._stack, stretch=1)
+        charts_layout.addWidget(self._debrief_heading)
+        charts_layout.addWidget(self._debrief)
         charts_layout.addWidget(self._corners)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -187,11 +212,62 @@ class AnalysisView(QWidget):
         self._stack.set_lap(self._lap, self._sector_colors(reference))
         self._stack.set_reference(reference)
         self._panel.set_context(self._lap, reference)
+        self._populate_debrief(reference)
         self._populate_corners(reference)
 
     def _show_evidence(self, d0: float, d1: float) -> None:
         self._stack.highlight_span(d0, d1)
         self._stack.zoom_to_span(d0, d1)
+
+    # -- driver debrief ----------------------------------------------------
+
+    def _populate_debrief(self, reference: Lap | None) -> None:
+        """Deterministic, and independent of whether a model ever runs."""
+        self._debrief_points = []
+        self._debrief.clear()
+        if self._lap is None or reference is None or reference is self._lap:
+            self._debrief_heading.hide()
+            self._debrief.hide()
+            return
+        try:
+            points = lap_debrief(self._lap, reference)
+        except ValueError:  # laps too short to share a distance grid
+            points = []
+        self._debrief_heading.setText(debrief_summary(self._lap, reference, points))
+        self._debrief_heading.show()
+        self._debrief_points = points
+        for point in points:
+            text = point.headline
+            if point.difference:
+                text += f"  —  {point.difference}"
+            item = QListWidgetItem(text)
+            if point.detail:
+                item.setToolTip(point.detail)
+            self._debrief.addItem(item)
+        self._debrief.setVisible(bool(points))
+
+    def _zoom_debrief_item(self, item: QListWidgetItem) -> None:
+        row = self._debrief.row(item)
+        if 0 <= row < len(self._debrief_points):
+            d0, d1 = self._debrief_points[row].span_m
+            self._show_evidence(d0, d1)
+
+    def _replay_debrief_item(self, item: QListWidgetItem) -> None:
+        """Play the stretch back on the track, in its own window.
+
+        A separate window rather than another panel: the analysis screen is
+        already dense, and a participant watching a replay is not reading traces
+        at the same time.
+        """
+        row = self._debrief.row(item)
+        if self._lap is None or not 0 <= row < len(self._debrief_points):
+            return
+        point = self._debrief_points[row]
+        # Keep the traces showing the same stretch that is being replayed.
+        self._show_evidence(*point.span_m)
+        if self._replay_window is None:
+            self._replay_window = ReplayWindow(self)
+        self._replay_window.show_stretch(self._lap, point)
 
     # -- corner table ------------------------------------------------------
 

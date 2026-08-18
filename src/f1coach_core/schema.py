@@ -11,7 +11,9 @@ A telemetry file is one lap: CSV (parquet later), one row per sample.
     ...
 
 * Leading lines starting with ``#`` are metadata, formatted ``key: value``.
-  ``schema_version`` is the only defined key so far; if absent, 1 is assumed.
+  ``schema_version`` is assumed to be 1 when absent. ``lap`` carries the race
+  lap number, and ``driver``/``phase``/``setup`` the study identity, so a lap
+  handed to a researcher still states where it came from. All are optional.
 * Units are SI in the file; front ends convert for display (km/h etc.).
 * Unknown extra columns are preserved, not rejected (forward compatibility).
 
@@ -26,11 +28,15 @@ brake     0..1
 steer     -1..1   negative = left
 gear      int     -1 reverse, 0 neutral
 sector    1|2|3   OPTIONAL until M2's exporter lands
+x, y      m       world position; OPTIONAL, present together or not at all.
+                  Distance alone cannot draw a track, so the replay needs
+                  these; laps from a source without a position channel stay
+                  fully analysable and simply cannot be mapped.
 """
 
 SCHEMA_VERSION = 1
 SUPPORTED_VERSIONS = (1,)
 
 REQUIRED_COLUMNS = ("t", "speed", "throttle", "brake", "steer", "gear")
-OPTIONAL_COLUMNS = ("dist", "sector")
+OPTIONAL_COLUMNS = ("dist", "sector", "x", "y")  # x/y: world position, for the track map
 CANONICAL_ORDER = ("t", "dist", "speed", "throttle", "brake", "steer", "gear", "sector")

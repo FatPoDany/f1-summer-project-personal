@@ -16,6 +16,8 @@ Field reference: M_Lin/torcs_highfreq_field_cheatsheet.csv (249 columns).
     steer    <- steer_cmd
     gear     <- gear
     sector   <- derived: thirds of the observed track length (TORCS has none)
+    x, y     <- pos_x_m, pos_y_m; optional, present only when every kept row
+                has a finite pair. Distance cannot draw a track; these can.
 """
 
 from dataclasses import dataclass
@@ -198,7 +200,7 @@ def _to_canonical(seg: pd.DataFrame, speed_col: str, track_length: float) -> pd.
     if frame.empty:
         return frame.reindex(columns=[*frame.columns, "sector"])
     sector = 1 + np.minimum((frame["dist"] / (track_length / 3.0)).astype(int), 2)
-    return pd.DataFrame(
+    canonical = pd.DataFrame(
         {
             "t": (frame["t"] - frame["t"].iloc[0]).round(4).to_numpy(),
             "dist": frame["dist"].round(3).to_numpy(),
@@ -210,3 +212,25 @@ def _to_canonical(seg: pd.DataFrame, speed_col: str, track_length: float) -> pd.
             "sector": sector.to_numpy(),
         }
     )
+    return _with_track_position(canonical, seg, frame.index)
+
+
+def _with_track_position(
+    canonical: pd.DataFrame, seg: pd.DataFrame, kept: pd.Index
+) -> pd.DataFrame:
+    """Carry world position through as optional `x`/`y`, when it is trustworthy.
+
+    Distance alone cannot draw a track, so a replay needs these. They are added
+    only when every kept row has a finite pair: a partial position channel would
+    otherwise either shorten the lap or leave gaps in the drawn line, and a lap
+    without a map degrades to the distance-based view rather than a broken one.
+    """
+    if "pos_x_m" not in seg.columns or "pos_y_m" not in seg.columns:
+        return canonical
+    x = pd.to_numeric(seg["pos_x_m"], errors="coerce").reindex(kept)
+    y = pd.to_numeric(seg["pos_y_m"], errors="coerce").reindex(kept)
+    if not (np.isfinite(x).all() and np.isfinite(y).all()):
+        return canonical
+    canonical["x"] = x.round(3).to_numpy()
+    canonical["y"] = y.round(3).to_numpy()
+    return canonical
