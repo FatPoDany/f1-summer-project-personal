@@ -278,7 +278,7 @@ def test_study_preset_requires_xml_and_cannot_be_overridden_by_torcs_args(
         )
 
 
-def test_nonzero_torcs_exit_preserves_failed_manifest_without_registering(torcs_binary):
+def test_a_crash_that_produced_nothing_still_fails_and_registers_nothing(torcs_binary):
     def runner(_command, **_kwargs):
         return SimpleNamespace(returncode=7)
 
@@ -289,8 +289,61 @@ def test_nonzero_torcs_exit_preserves_failed_manifest_without_registering(torcs_
         )
 
     manifest = json.loads((failure.value.capture_dir / "manifest.json").read_text("utf-8"))
-    assert manifest["status"] == "simulator_failed" and manifest["returncode"] == 7
+    assert manifest["status"] == "no_data" and manifest["returncode"] == 7
     assert list_runs() == []
+
+
+def test_a_crash_on_the_way_out_does_not_discard_a_completed_drive(torcs_binary):
+    """TORCS can die closing its windows after the participant drove everything.
+
+    0xC0000005 at shutdown says nothing about whether the laps were driven, and
+    the telemetry is the evidence. Losing a participant's session to it is the
+    expensive failure, so the data decides and the abnormal exit is recorded.
+    """
+
+    def runner(_command, **kwargs):
+        output_dir = Path(kwargs["env"]["APEX_HUMAN_TELEMETRY_DIR"])
+        write_capture(output_dir / "human-1.csv")
+        return SimpleNamespace(returncode=3221225477)  # STATUS_ACCESS_VIOLATION
+
+    result = capture_human_runs(
+        HumanCaptureConfig("Y001", "baseline", torcs_binary),
+        runner=runner,
+    )
+
+    assert len(result.run_dirs) == 1
+    (meta,) = list_runs()
+    assert meta.capture == "human-driver" and meta.driver == "Y001"
+
+    manifest = json.loads((result.capture_dir / "manifest.json").read_text("utf-8"))
+    assert manifest["status"] == "complete_after_abnormal_exit"
+    assert manifest["returncode"] == 3221225477
+    assert manifest["runs"][0]["run_id"] == meta.run_id
+
+
+def test_a_crash_part_way_through_is_still_rejected(torcs_binary):
+    """Salvaging data must not mean accepting a drive that did not happen."""
+    preset = None
+
+    def runner(_command, **kwargs):
+        output_dir = Path(kwargs["env"]["APEX_HUMAN_TELEMETRY_DIR"])
+        (output_dir / "human-1.csv").write_text(
+            "schema_version,sample,sim_time_s,dist_from_start_m,accel_cmd,brake_cmd,"
+            "steer_cmd,gear,car_name,car_model,driver_module,track_internal_name,"
+            "race_lap,remaining_laps,total_speed_mps\n",
+            encoding="utf-8",
+        )
+        return SimpleNamespace(returncode=3221225477)
+
+    with pytest.raises(HumanCaptureError, match="status 3221225477") as failure:
+        capture_human_runs(
+            HumanCaptureConfig("Y002", "baseline", torcs_binary, preset=preset),
+            runner=runner,
+        )
+
+    assert list_runs() == []
+    manifest = json.loads((failure.value.capture_dir / "manifest.json").read_text("utf-8"))
+    assert manifest["status"] == "no_data"
 
 
 def test_requested_stop_is_recorded_as_cancelled_not_simulator_failure(torcs_binary):
@@ -433,3 +486,50 @@ def test_a_missing_screen_config_never_costs_a_participant_their_session(
     )
 
     assert len(result.run_dirs) == 1
+
+
+def test_recovering_a_capture_a_crash_left_behind(torcs_binary, tmp_path):
+    """The folder on disk plus its manifest is enough to complete the session."""
+    from racecoach.telemetry.human_capture import finish_capture, human_captures_root
+
+    capture_dir = human_captures_root() / "Y001-baseline-20260819-085225"
+    capture_dir.mkdir(parents=True)
+    write_capture(capture_dir / "human-1.csv")
+    (capture_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "participant_id": "Y001",
+                "phase": "baseline",
+                "study_preset": {"preset_id": "apex-study-v1"},
+                "returncode": 3221225477,
+                "status": "simulator_failed",
+                "runs": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = finish_capture(capture_dir)
+
+    assert len(result.run_dirs) == 1
+    (meta,) = list_runs()
+    # The identity is recovered from the manifest, not re-typed by a facilitator.
+    assert meta.driver == "Y001" and meta.phase == "baseline"
+    assert meta.setup == "apex-study-v1"
+    manifest = json.loads((capture_dir / "manifest.json").read_text("utf-8"))
+    assert manifest["status"] == "complete_after_recovery"
+    assert manifest["runs"][0]["run_id"] == meta.run_id
+
+
+def test_recovery_refuses_a_folder_with_nothing_to_register(torcs_binary, tmp_path):
+    from racecoach.telemetry.human_capture import finish_capture, human_captures_root
+
+    capture_dir = human_captures_root() / "Y003-baseline-20260819-090000"
+    capture_dir.mkdir(parents=True)
+    (capture_dir / "manifest.json").write_text(
+        json.dumps({"participant_id": "Y003", "phase": "baseline"}), encoding="utf-8"
+    )
+
+    with pytest.raises(HumanCaptureError, match="no usable telemetry"):
+        finish_capture(capture_dir)
+    assert list_runs() == []

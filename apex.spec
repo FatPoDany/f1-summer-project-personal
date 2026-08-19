@@ -18,13 +18,14 @@
 
 import sys
 
-a = Analysis(
-    ["scripts/pyinstaller_entry.py"],
+_COMMON = dict(
     pathex=["src"],
     datas=[("src/f1coach_core/data", "f1coach_core/data")],
     hiddenimports=[],
     excludes=["ibm_watsonx_ai", "IPython", "matplotlib", "tkinter"],
 )
+
+a = Analysis(["scripts/pyinstaller_entry.py"], **_COMMON)
 pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
@@ -33,7 +34,22 @@ exe = EXE(
     name="Apex",
     console=False,
 )
-coll = COLLECT(exe, a.binaries, a.datas, name="Apex")
+
+# The CLI ships beside the app. Every documented racecoach workflow -- and in
+# particular recovering a capture that a crashed simulator left unregistered --
+# is otherwise unreachable on a machine that only ran the installer. console=True
+# because it is a terminal program and needs somewhere to print.
+cli = Analysis(["scripts/pyinstaller_racecoach.py"], **_COMMON)
+cli_pyz = PYZ(cli.pure)
+cli_exe = EXE(
+    cli_pyz,
+    cli.scripts,
+    exclude_binaries=True,
+    name="racecoach",
+    console=True,
+)
+
+coll = COLLECT(exe, a.binaries, a.datas, cli_exe, cli.binaries, cli.datas, name="Apex")
 
 if sys.platform == "darwin":
     app = BUNDLE(

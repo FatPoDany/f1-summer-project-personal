@@ -6,6 +6,7 @@
     racecoach bob-analyze [files]  IBM Bob Shell code analysis -> docs/bob/exports/
     racecoach run                  drive through the TORCS Granite/SCR bridge
     racecoach capture-human        record a human TORCS session without controlling it
+    racecoach recover-capture      register laps a crashed session left unregistered
     racecoach capture-synthetic    run pinned unattended robot reference sessions
     racecoach report               render the post-race report
 
@@ -110,6 +111,16 @@ def main(argv: list[str] | None = None) -> int:
         help="served Granite model alias (or GRANITE_MODEL)",
     )
     from racecoach.telemetry.torcs_runtime import default_torcs_binary
+
+    recover_cmd = commands.add_parser(
+        "recover-capture",
+        help="register the laps in a capture folder that was never finalised",
+    )
+    recover_cmd.add_argument(
+        "capture_dir",
+        type=Path,
+        help="a captures/human/<id>-<phase>-<timestamp> folder",
+    )
 
     human_cmd = commands.add_parser(
         "capture-human",
@@ -295,6 +306,14 @@ def _dispatch(args: argparse.Namespace) -> int:
                 print("Warning: Granite worker did not stop before its timeout", file=sys.stderr)
         print(f"Next: racecoach analyze {run_dir.name} · racecoach coach {run_dir.name}"
               f" · racecoach report --run {run_dir.name}")
+        return 0
+    if args.command == "recover-capture":
+        from racecoach.telemetry.human_capture import finish_capture
+
+        result = finish_capture(args.capture_dir)
+        print(f"Recovered from {result.capture_dir}")
+        for run_dir in result.run_dirs:
+            print(f"Registered run {run_dir.name} -> {run_dir}")
         return 0
     if args.command == "capture-human":
         from racecoach.telemetry.human_capture import HumanCaptureConfig, capture_human_runs

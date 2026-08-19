@@ -334,8 +334,10 @@ try {
 } finally { Pop-Location }
 
 $apexDist = Join-Path $BuildRoot 'apex-dist\Apex'
-if (-not (Test-Path -LiteralPath (Join-Path $apexDist 'Apex.exe'))) {
-    throw "Expected Apex.exe under $apexDist"
+foreach ($produced in @('Apex.exe', 'racecoach.exe')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $apexDist $produced))) {
+        throw "PyInstaller did not produce $produced under $apexDist"
+    }
 }
 
 Write-Step "Staging the installer payload in $StageDir"

@@ -272,15 +272,13 @@ def capture_human_runs(
             f"capture stopped by the user; raw files remain in {capture_dir}",
             capture_dir,
         )
-    if completed.returncode != 0:
-        manifest["status"] = "simulator_failed"
-        manifest["finished_at"] = datetime.now(UTC).isoformat(timespec="seconds")
-        _write_manifest(capture_dir, manifest)
-        raise HumanCaptureError(
-            f"TORCS exited with status {completed.returncode}; raw files remain in {capture_dir}",
-            capture_dir,
-        )
-
+    # A non-zero exit is recorded but does not decide the outcome on its own.
+    # TORCS can die while closing its windows -- 0xC0000005 on Windows -- long
+    # after the participant has driven the whole assignment, and the evidence of
+    # a good session is the telemetry on disk, not the code the simulator
+    # happened to return. Judging on the exit code first threw away complete,
+    # validated laps. A crash that actually cost data still fails, because the
+    # validation below sees short or malformed telemetry.
     csv_files = sorted(capture_dir.glob("*.csv"))
     try:
         frames = [_validated_frame(path) for path in csv_files]
@@ -302,11 +300,14 @@ def capture_human_runs(
             finished_at=datetime.now(UTC).isoformat(timespec="seconds"),
         )
         _write_manifest(capture_dir, manifest)
-        raise HumanCaptureError(
-            f"TORCS produced no non-empty telemetry CSV in {capture_dir}. "
-            "Select a human driver and complete a Practice or Quick Race session.",
-            capture_dir,
+        reason = (
+            f"TORCS exited with status {completed.returncode} and produced no "
+            f"usable telemetry in {capture_dir}."
+            if completed.returncode
+            else f"TORCS produced no non-empty telemetry CSV in {capture_dir}. "
+            "Select a human driver and complete a Practice or Quick Race session."
         )
+        raise HumanCaptureError(reason, capture_dir)
 
     run_dirs = []
     run_records = []
@@ -330,7 +331,66 @@ def capture_human_runs(
             }
         )
     manifest.update(
-        status="complete",
+        # The distinction is kept in the audit trail: the laps are complete and
+        # validated either way, but a session whose simulator crashed on the way
+        # out is not the same event as a clean one.
+        status="complete" if completed.returncode == 0 else "complete_after_abnormal_exit",
+        finished_at=datetime.now(UTC).isoformat(timespec="seconds"),
+        runs=run_records,
+    )
+    _write_manifest(capture_dir, manifest)
+    return HumanCaptureResult(capture_dir=capture_dir, run_dirs=tuple(run_dirs))
+
+
+def finish_capture(capture_dir: str | Path) -> HumanCaptureResult:
+    """Register the laps in a capture directory that was never finished.
+
+    A session whose simulator crashed before this build treated the exit code as
+    the verdict and left validated telemetry on disk unregistered. The manifest
+    beside it still holds who drove and under which assignment, so the run can be
+    completed from the evidence rather than asking a participant to drive again.
+
+    Re-running on an already finished directory is safe: the same laps import as
+    fresh runs only if they are not already in the store, and the manifest is
+    rewritten from what is actually there.
+    """
+    capture_dir = Path(capture_dir)
+    manifest_path = capture_dir / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise HumanCaptureError(
+            f"{capture_dir} has no readable capture manifest: {exc}", capture_dir
+        ) from exc
+
+    preset = manifest.get("study_preset") or {}
+    identity = StudyIdentity(
+        driver=manifest.get("participant_id"),
+        phase=manifest.get("phase"),
+        setup=preset.get("preset_id"),
+    )
+    csv_files = sorted(capture_dir.glob("*.csv"))
+    frames = [_validated_frame(path) for path in csv_files]
+    non_empty = [(path, frame) for path, frame in zip(csv_files, frames, strict=True) if len(frame)]
+    if not non_empty:
+        raise HumanCaptureError(
+            f"{capture_dir} holds no usable telemetry to register.", capture_dir
+        )
+
+    run_dirs, run_records = [], []
+    for path, frame in non_empty:
+        run_dir = import_run(path, capture="human-driver", identity=identity)
+        run_dirs.append(run_dir)
+        run_records.append(
+            {
+                "file": path.name,
+                "sha256": _sha256(path),
+                "samples": len(frame),
+                "run_id": run_dir.name,
+            }
+        )
+    manifest.update(
+        status="complete_after_recovery",
         finished_at=datetime.now(UTC).isoformat(timespec="seconds"),
         runs=run_records,
     )
