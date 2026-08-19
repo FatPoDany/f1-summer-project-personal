@@ -211,7 +211,10 @@ def main() -> int:
                 t0 = time.perf_counter()
                 result = GraniteClient().generate(snap)
                 latency = time.perf_counter() - t0
-                print(f"  live granite: {result.model} {latency:.2f}s — {result.advice.message[:50]}")
+                print(
+                    f"  live granite: {result.model} {latency:.2f}s"
+                    f" — {result.advice.message[:50]}"
+                )
                 live._render_advice(snap, result, latency)
             except Exception as exc:  # server down: leave the honest idle state
                 print("  live granite unavailable:", exc)
