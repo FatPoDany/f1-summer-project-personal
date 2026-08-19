@@ -659,3 +659,106 @@ itself worked; everything below is what the run exposed.
   server from a command line, so today the coaching path is unreachable for them.
   Delivery method is an open decision: bundling the weights would take the
   installer from 380 MB to several GB.
+
+## Task 35: TORCS exits 0xC0000005 after a normal quit on Windows
+
+- [ ] NOT ruled out as ours. An earlier version of this entry claimed the A/B
+  cleared our code; that was wrong and is corrected here. The Windows event log
+  names the faulting module as `client.dll`, same offset `0x49335` on all three
+  crashes, across two builds and two install locations. On Windows `client.dll`
+  compiles `src/libs/client/*` **and** `src/libs/raceengineclient/*`, and
+  `graphical-race.patch` adds `ReRunRaceOnGUI` to `raceinit.cpp` -- so our code
+  is inside the faulting module. Worse, `ReInit()` has exactly one caller in the
+  whole 1.3.9 tree (`raceinit.cpp:161`, inside our function): upstream never
+  calls it, so our `-R` path is the only thing that has ever executed it.
+- [x] Reproduced deterministically in 80 seconds (2026-08-19). The trigger is
+  **finishing the race**, not session length and not lap count. With a one-lap
+  copy of `apexstudy.xml`, alternating runs gave:
+
+      finish the lap, let the race end   -1073740771, -1073741819, -1073741819
+      abort part way through              0, 0, 0
+
+  Fifteen earlier short runs that all aborted mid-race were clean, which is why
+  the first A/B saw nothing: shortening the runs removed the trigger. The two
+  distinct codes (0xC000041D fatal app exit, 0xC0000005 access violation) are
+  two faces of the same failure. Recipe: copy the raceman with `laps` set to 1,
+  pass it with `-R`, cross the line, quit from the results screen.
+- [x] Root cause found and fixed (2026-08-19). It is ours. `ReInit()` callocs
+  `ReInfo`, leaving `_reMenuScreen` NULL; upstream's menu route sets it on the
+  next line (`singleplayer.cpp:41-44`) and `ReRunRaceOnGUI` never did. Finishing
+  a race goes `RE_STATE_SHUTDOWN` -> `RE_STATE_CONFIG` (`racestate.cpp:153`) ->
+  `ReRacemanMenu`, which wires "Back to Main" and escape to that pointer with
+  `GfuiScreenActivate` as the callback (`racemanmenu.cpp:291,350,352`). Quitting
+  then called `GfuiScreenActivate(NULL)`, which assigns the argument to
+  `GfuiScreen` (`gui.cpp:471`) and dereferences it unconditionally at
+  `gui.cpp:482`. On Windows `client.vcproj` compiles `..\tgfclient\gui.cpp` into
+  `client.dll`, which is why the event log named that module. Aborting never
+  reaches the raceman menu, so only completed races died.
+
+  Fix: `ReInfo->_reMenuScreen = ReSinglePlayerInit(NULL);` in `ReRunRaceOnGUI`
+  -- the same screen the menu route uses, already built by `TorcsEntry()`, which
+  both main.cpp paths run first. `graphical-race.patch` regenerated against the
+  pristine archive: applies with zero fuzz and zero offsets, and the file
+  compiles and links on Linux with `ReSinglePlayerInit` resolving from
+  `singleplayer.o` in the same library.
+- [ ] Unverified end to end. The fix is a one-line assignment plus a same-folder
+  include, but nobody has yet driven a completed race on a build that contains
+  it. Acceptance is the 80-second recipe above: three finished one-lap races
+  through `-R`, all exiting 0.
+- [x] Attribution settled by the missing arm being run: run the same one-lap
+  race **through the menus** with no `-R`. Both paths reach the same
+  race-completion code, so a menu race that also crashes puts this upstream and
+  clears `ReRunRaceOnGUI`.
+- [ ] Hypothesis, not a conclusion: `ReInit()` loads the track and graphic
+  modules into the static `reEventModList` (`raceinit.cpp:82-89`) and
+  `ReShutdown()` unloads that whole list (`raceinit.cpp:113`). If the GUI still
+  holds pointers into those modules, unloading them faults -- in `client.dll`,
+  during shutdown, intermittently, which is what is observed. Confirming it
+  needs a debugger with symbols.
+- [ ] The A/B has a missing arm, which is why it proved less than it looked.
+  Every crash so far happened on a run that passed `-R` (our path); the only
+  clean arm, `0-menu-only`, also never started a race, so race-vs-no-race and
+  ours-vs-stock are confounded. The decisive arm is a race started **through the
+  menus with no `-R`**, repeated -- clean menu races against crashing `-R` races
+  would implicate `ReRunRaceOnGUI`.
+- [x] What the A/B did establish (2026-08-19). The recorder is
+  gated entirely on `APEX_HUMAN_TELEMETRY_DIR` (`apex_human_telemetry.cpp:89`
+  returns before opening anything when it is unset), so the same `wtorcs.exe`
+  runs both code paths. Results, quitting the same way each time:
+
+      0-menu-only    exit 0        (no race started)
+      1-race-norec   exit -1073741819   <- recorder inert, crashed anyway
+      1-race-norec   exit 0             (repeat)
+      2-race-rec     exit 0        x2, CSVs written
+
+  The crash reproduces with the recorder writing nothing, so the recording path
+  is not the cause. It is also intermittent: the same test passed on repeat, and
+  the two runs with the recorder on happened not to trigger it. "Recorder on
+  exited cleanly" is therefore not evidence of innocence; the crash with the
+  recorder inert is the evidence that matters.
+- [x] Handled so it costs no data. `capture_human_runs` validates the telemetry
+  before consulting the exit code, registers a session whose laps are complete,
+  and records `status: complete_after_abnormal_exit` in the manifest. Both study
+  captures so far (Y001 08:52, A001 10:42) exited 3221225477 and both hold five
+  complete laps, verified against TORCS's own `last_lap_time_s`.
+- [x] `racecoach recover-capture <dir>` registers a folder an earlier build
+  abandoned, taking the identity from its manifest. Used to rescue Y001, whose
+  manifest now reads `complete_after_recovery`.
+- [ ] Root cause still unknown. Cheapest next step needs no reproduction: the
+  Application event log already holds an Application Error entry per crash naming
+  the faulting module.
+
+      Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='Application Error'} -MaxEvents 40 |
+        Where-Object { $_.Message -match 'wtorcs' } |
+        ForEach-Object { "--- $($_.TimeCreated)"; ($_.Message -split "`r?`n")[0..7] }
+
+  A faulting module of `human.dll` would put our code back in scope; an OpenGL
+  or GLUT module would close it.
+- [ ] One residual doubt the A/B cannot settle: `gWriters[]` is a static array
+  linked into `human.dll` whichever way the environment is set, so its teardown
+  runs in both arms. Excluding that needs a build without the overlay, which is
+  why the faulting module is worth reading first.
+- [ ] Watch whether crash frequency tracks session length. Both crashing study
+  captures were full five-lap sessions of roughly six and a half minutes; the
+  clean manual runs were shorter. Five samples support no conclusion, only the
+  question.

@@ -258,6 +258,10 @@ Task 15 synthetic contract
 - No design decision is currently open. The TORCS environment on this machine is
   built and qualified, so it is no longer an execution gate for the synthetic
   path; the human participant lap in Phase 4 remains the one open gate.
+- Why TORCS exits 0xC0000005 on Windows after a normal quit is open, but it is
+  no longer an execution gate: an A/B on the study PC reproduced it with the
+  recorder inert, and capture now judges a session on its telemetry rather than
+  the simulator's exit code (Task 35).
 - Longitudinal and lateral per-wheel tyre force stay unavailable. Recording them
   would mean patching simuv2 to publish its private `tWheel` forces, which turns
   the observe-only driver-module recorder into a physics-engine change. Raise it

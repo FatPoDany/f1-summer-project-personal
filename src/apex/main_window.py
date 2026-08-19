@@ -20,7 +20,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QFileDialog, QMainWindow, QMessageBox, QStackedWidget
 
 from apex.analysis_view import AnalysisView
-from apex.capture_view import CaptureGuideView
+from apex.capture_view import CaptureGuideView, _saved_summary
 from apex.compare_view import CompareView
 from apex.garage_view import GarageView
 from apex.live_view import LivePitWallView
@@ -104,10 +104,7 @@ class MainWindow(QMainWindow):
         # a run that is never opened is a run the researchers never receive.
         # Navigation is left alone so the hand-over instructions stay on screen.
         self._open_captured_runs(run_dirs, navigate=False)
-        self.statusBar().showMessage(
-            f"Driving data saved — {len(run_dirs)} validated run"
-            f"{'s' if len(run_dirs) != 1 else ''} ready for analysis"
-        )
+        self.statusBar().showMessage(f"Driving data saved — {_saved_summary(run_dirs)}")
 
     def _synthetic_completed(self, _batch_dir: str, run_dirs: list[str]) -> None:
         self.statusBar().showMessage(

@@ -1,5 +1,6 @@
 """Guided, no-terminal workflow for collecting human TORCS telemetry."""
 
+import json
 from pathlib import Path
 
 from PySide6.QtCore import QThreadPool, Signal
@@ -23,6 +24,41 @@ from racecoach.telemetry.human_capture import (
     default_study_preset,
 )
 from racecoach.telemetry.torcs_runtime import default_torcs_binary
+
+
+def _completed_laps(run_dirs) -> int | None:
+    """How many full laps this session put in the Garage, or None if unknown.
+
+    Counted from each run's own meta.json rather than from the number of
+    recordings: one drive is a single file, so counting files would tell a
+    participant "1 run" no matter how far they drove. laps_seen holds the labels
+    that covered a whole track distance, which is the same judgement the Garage
+    lists and the number the participant is actually asking about.
+    """
+    total = 0
+    for run_dir in run_dirs:
+        try:
+            meta = json.loads((Path(run_dir) / "meta.json").read_text("utf-8"))
+            total += len(meta["laps_seen"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+    return total
+
+
+def _saved_summary(run_dirs) -> str:
+    laps = _completed_laps(run_dirs)
+    if laps is None:
+        # The laps are saved either way; only the count is unavailable.
+        return "Your driving is saved and split into individual laps you can review."
+    if laps == 0:
+        return (
+            "The recording is saved, but it holds no complete lap — a lap counts "
+            "only once the whole track has been driven."
+        )
+    return (
+        f"{laps} complete {'lap' if laps == 1 else 'laps'} saved — each one is in "
+        "the Garage for you to review."
+    )
 
 
 class CaptureGuideView(QWidget):
@@ -170,13 +206,7 @@ class CaptureGuideView(QWidget):
         if not self._is_current(token):
             return
         self._task = None
-        count = len(result.run_dirs)
-        noun = "run" if count == 1 else "runs"
-        laps = "lap" if count == 1 else "laps"
-        self._result_summary.setText(
-            f"{count} {noun} validated and saved — your driving is recorded as "
-            f"individual {laps} you can review."
-        )
+        self._result_summary.setText(_saved_summary(result.run_dirs))
         self._result_path.setText(f"Send this folder to the researchers: {result.capture_dir}")
         self._result_run_dirs = [str(path) for path in result.run_dirs]
         self._pages.setCurrentWidget(self._complete_page)

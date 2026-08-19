@@ -1,5 +1,6 @@
 """The participant-facing human telemetry collection guide."""
 
+import json
 import os
 import threading
 import time
@@ -89,6 +90,9 @@ def test_capture_runs_off_the_gui_thread_and_shows_registered_result(
     run_dir = tmp_path / "runs" / "human-1"
     capture_dir.mkdir()
     run_dir.mkdir(parents=True)
+    # The participant is told how many laps they completed, so the run has to
+    # carry the same lap record the Garage reads.
+    (run_dir / "meta.json").write_text(json.dumps({"laps_seen": [1, 2, 3, 4, 5]}), "utf-8")
 
     def fake_capture(config, *, runner, stop_requested):
         del runner, stop_requested
@@ -112,7 +116,7 @@ def test_capture_runs_off_the_gui_thread_and_shows_registered_result(
     assert capture_threads and capture_threads != [gui_thread]
     assert finished.args == [str(capture_dir), [str(run_dir)]]
     assert view._pages.currentWidget() is view._complete_page
-    assert "1 run" in view._result_summary.text()
+    assert "5 complete laps" in view._result_summary.text()
     assert str(capture_dir) in view._result_path.text()
     assert view._new_session_button.isEnabled()
 
@@ -187,3 +191,34 @@ def test_missing_study_preset_disables_start_with_facilitator_message(
     assert not view._start_button.isEnabled()
     assert "preset" in view._simulator_status.text().lower()
     assert "facilitator" in view._simulator_help.text().lower()
+
+
+def test_the_saved_summary_counts_laps_not_recordings(tmp_path):
+    """One drive is one file; the participant asked how many laps they finished."""
+    from apex.capture_view import _saved_summary
+
+    run_dir = tmp_path / "human-1"
+    run_dir.mkdir()
+    (run_dir / "meta.json").write_text(json.dumps({"laps_seen": [1, 2, 3, 4, 5]}), "utf-8")
+    assert "5 complete laps" in _saved_summary([run_dir])
+
+    (run_dir / "meta.json").write_text(json.dumps({"laps_seen": [1]}), "utf-8")
+    assert "1 complete lap " in _saved_summary([run_dir])
+
+
+def test_the_saved_summary_does_not_claim_laps_that_were_never_finished(tmp_path):
+    from apex.capture_view import _saved_summary
+
+    run_dir = tmp_path / "human-1"
+    run_dir.mkdir()
+    (run_dir / "meta.json").write_text(json.dumps({"laps_seen": []}), "utf-8")
+    assert "no complete lap" in _saved_summary([run_dir])
+
+
+def test_the_saved_summary_stays_useful_when_the_count_is_unreadable(tmp_path):
+    """An unreadable meta.json must not hide the fact that the data is saved."""
+    from apex.capture_view import _saved_summary
+
+    run_dir = tmp_path / "human-1"
+    run_dir.mkdir()
+    assert "saved" in _saved_summary([run_dir])

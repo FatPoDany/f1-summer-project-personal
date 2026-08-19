@@ -1,12 +1,34 @@
 --- a/src/libs/raceengineclient/raceinit.cpp
 +++ b/src/libs/raceengineclient/raceinit.cpp
-@@ -156,6 +156,33 @@
+@@ -45,6 +45,7 @@
+ #include "racegl.h"
+ #include "raceresults.h"
+ 
++#include "singleplayer.h"
+ #include "raceinit.h"
+ 
+ static const char *level_str[] = { ROB_VAL_ROOKIE, ROB_VAL_AMATEUR, ROB_VAL_SEMI_PRO, ROB_VAL_PRO };
+@@ -156,6 +157,47 @@
  }
  
  
 +void ReRunRaceOnGUI(const char* raceconfig)
 +{
 +	ReInit();
++
++	/* Reached through the menus, singlePlayerMenuActivate sets this straight
++	   after ReInit (singleplayer.cpp). Reached through -R nothing had, so the
++	   calloc in ReInit left it NULL -- and finishing a race returns to the
++	   raceman menu, which wires its "Back to Main" button and the escape key to
++	   this pointer with GfuiScreenActivate as the callback (racemanmenu.cpp).
++	   Quitting from there then reached GfuiScreenActivate(NULL), which assigns
++	   the argument to GfuiScreen and dereferences it unconditionally two lines
++	   later (gui.cpp), so the process died on 0xC0000005 every time a race was
++	   driven to the end. Aborting part way through never returns to that menu,
++	   which is why only completed races crashed. ReSinglePlayerInit returns the
++	   screen it already built during TorcsEntry, which both main.cpp paths run
++	   before calling us. */
++	ReInfo->_reMenuScreen = ReSinglePlayerInit(NULL);
 +
 +	const char *s, *e, *m;
 +
