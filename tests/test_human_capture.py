@@ -488,6 +488,49 @@ def test_a_missing_screen_config_never_costs_a_participant_their_session(
     assert len(result.run_dirs) == 1
 
 
+def test_a_simulator_that_never_started_tells_the_participant_to_retry(
+    torcs_binary, tmp_path
+):
+    """No file at all means it never reached a race, which is a retry, not a redo."""
+
+    def runner(_command, **_kwargs):
+        return SimpleNamespace(returncode=3221225477)  # died before any race
+
+    with pytest.raises(HumanCaptureError) as caught:
+        capture_human_runs(
+            HumanCaptureConfig("A001", "baseline", torcs_binary), runner=runner
+        )
+    message = str(caught.value)
+    assert "start the session again" in message
+    assert "Nothing was lost" in message
+    # The exit code still travels, for whoever has to diagnose it later.
+    assert "3221225477" in message
+    assert list_runs() == []
+
+
+def test_a_simulator_that_ran_but_recorded_nothing_says_so_instead(
+    torcs_binary, tmp_path
+):
+    """An empty file means TORCS ran; the participant has to actually drive."""
+
+    def runner(_command, **kwargs):
+        output_dir = Path(kwargs["env"]["APEX_HUMAN_TELEMETRY_DIR"])
+        # Header but no samples: TORCS started the recorder and nothing drove.
+        (output_dir / "human-1.csv").write_text(
+            "schema_version,sample,sim_time_s,dist_from_start_m,accel_cmd,brake_cmd,"
+            "steer_cmd,gear,car_name,car_model,driver_module,track_internal_name,"
+            "race_lap,remaining_laps,total_speed_mps\n",
+            encoding="utf-8",
+        )
+        return SimpleNamespace(returncode=0)
+
+    with pytest.raises(HumanCaptureError) as caught:
+        capture_human_runs(
+            HumanCaptureConfig("A002", "baseline", torcs_binary), runner=runner
+        )
+    assert "Select a human driver" in str(caught.value)
+
+
 def test_recovering_a_capture_a_crash_left_behind(torcs_binary, tmp_path):
     """The folder on disk plus its manifest is enough to complete the session."""
     from racecoach.telemetry.human_capture import finish_capture, human_captures_root

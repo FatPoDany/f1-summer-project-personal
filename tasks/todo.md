@@ -762,3 +762,64 @@ itself worked; everything below is what the run exposed.
   captures were full five-lap sessions of roughly six and a half minutes; the
   clean manual runs were shorter. Five samples support no conclusion, only the
   question.
+
+## Task 36: TORCS sometimes dies within a second of launching
+
+- [x] Distinct from Task 35, on the evidence: same module, different fault
+  address. `client.dll` offset `0x1875d1` here against `0x49335` for the
+  end-of-race crash, and this one happens about a second after launch, before
+  any race. The `client.dll` timestamp in the report (`0x6a863061`) is the build
+  that carries the Task 35 fix, which also confirms the three clean acceptance
+  runs were made against a fixed build.
+- [x] Costs no data and is not a study blocker. The failed attempt registered
+  `status: no_data` with an empty `runs` list; retrying immediately produced a
+  normal five-lap capture. Seen once so far.
+- [x] The message now tells the participant what to do. No CSV at all means the
+  recorder never opened its file, so the simulator never reached a race -- a
+  retry, not a redo. That is now said in those words, while a file with a header
+  and no samples still says to select a human driver and drive a session. The
+  exit code travels in both.
+- [ ] Root cause unknown. `client.dll` also compiles `libs/musicplayer`
+  (including `OpenALMusicPlayer.cpp`), and `startMenuMusic()` is the last thing
+  `TorcsEntry()` does, which fits the timing -- but `isEnabled()` defaults to
+  disabled, so read `torcs-profiles/apex-study-v1/config/sound.xml` before
+  believing it. Watch the frequency; one occurrence justifies no more than that.
+
+## Task 37: the in-race minimap draws the car but not the track
+
+- [x] Mechanism identified. `cGrTrackMap`'s constructor draws the track into the
+  back buffer and bakes it into a texture with
+  `glReadPixels(0, 0, texturesize, texturesize, GL_RGBA, GL_BYTE, ...)`
+  (`grtrackmap.cpp:336`), where `texturesize` is the largest power of two not
+  above `MIN(grWinw, grWinh)`. The car dots are drawn live every frame. So an
+  outline that never appears while the dot does means the one-time bake came
+  back blank -- it is not a view-mode problem, since `TRACK_MAP_NONE` would draw
+  nothing at all.
+- [x] Not the driver. A menu-started race on the same machine draws the outline
+  in full; only `-R` loses it. That also clears the `GL_BYTE` readback, which was
+  the earlier suspect.
+- [x] Root cause and fix. `main.cpp` calls `ReRunRaceOnGUI` *before*
+  `glutMainLoop()`, and `ReStateManage` runs the chain synchronously, so
+  `ReRaceStart` -> the graphic module's `initView` (`grmain.cpp:255`) ->
+  `initBoard` -> `new cGrTrackMap` all executed against a window that had never
+  drawn a frame, and the bake read an undrawn back buffer. Started from the menus
+  the same chain runs inside a GLUT callback with a realised window. Fixed by
+  handing the start to `glutTimerFunc`, so it happens inside the event loop where
+  the menu route has always run it. Patch applies to the pristine archive with no
+  fuzz, and compiles and links on Linux.
+- [ ] Unverified visually. The headless Linux runtime never renders the live race
+  view -- captures only ever show loading, the pre-race screen and the results --
+  so the outline has to be confirmed on Windows: run a capture session and look
+  at the top right.
+- [ ] Not a study blocker. Apex's own replay draws the track from the recorded
+  `x`/`y`, so participants still get a map; this is the simulator's HUD only.
+
+## Task 38: -R only strips forward slashes from the race config path
+
+- [ ] `ReRunRaceOnGUI` derives `_reFilename` with `strstr(s, "/")`, copied from
+  upstream's `ReRunRaceOnConsole`. On Windows the configuration is passed as
+  `D:\Apex\...\apexstudy.xml`, so nothing is stripped and `_reFilename` keeps
+  the whole path. `racemanmenu.cpp:214` builds `results/<_reFilename>/<file>`
+  from it, which cannot be a sane path. No observed symptom yet -- results saving
+  may simply never be exercised in the study flow -- and it was deliberately left
+  out of the Task 35/37 fix so that acceptance measures one change at a time.

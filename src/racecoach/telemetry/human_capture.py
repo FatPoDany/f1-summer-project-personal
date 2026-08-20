@@ -300,13 +300,29 @@ def capture_human_runs(
             finished_at=datetime.now(UTC).isoformat(timespec="seconds"),
         )
         _write_manifest(capture_dir, manifest)
-        reason = (
-            f"TORCS exited with status {completed.returncode} and produced no "
-            f"usable telemetry in {capture_dir}."
-            if completed.returncode
-            else f"TORCS produced no non-empty telemetry CSV in {capture_dir}. "
-            "Select a human driver and complete a Practice or Quick Race session."
-        )
+        # The recorder creates its file when a race starts, so no file at all
+        # means the simulator never got that far -- a failure to launch, not a
+        # failure to drive. Those need opposite things from the person sitting
+        # there: one is "press start again", the other is "you have to actually
+        # drive a session". Telling a participant only the exit code leaves them
+        # stuck in front of a red line with nothing to act on.
+        if not csv_files and completed.returncode:
+            reason = (
+                "The simulator closed before it recorded anything. Nothing was "
+                "lost and nothing needs saving -- start the session again. If "
+                "it keeps happening, tell the study team and pass on "
+                f"{capture_dir} (exit status {completed.returncode})."
+            )
+        elif completed.returncode:
+            reason = (
+                f"TORCS exited with status {completed.returncode} and produced no "
+                f"usable telemetry in {capture_dir}."
+            )
+        else:
+            reason = (
+                f"TORCS produced no non-empty telemetry CSV in {capture_dir}. "
+                "Select a human driver and complete a Practice or Quick Race session."
+            )
         raise HumanCaptureError(reason, capture_dir)
 
     run_dirs = []

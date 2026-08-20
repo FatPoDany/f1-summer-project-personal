@@ -8,11 +8,14 @@
  #include "raceinit.h"
  
  static const char *level_str[] = { ROB_VAL_ROOKIE, ROB_VAL_AMATEUR, ROB_VAL_SEMI_PRO, ROB_VAL_PRO };
-@@ -156,6 +157,47 @@
+@@ -156,6 +157,69 @@
  }
  
  
-+void ReRunRaceOnGUI(const char* raceconfig)
++static char gApexRaceConfig[1024];
++
++
++static void apexStartRace(int /* value */)
 +{
 +	ReInit();
 +
@@ -32,9 +35,9 @@
 +
 +	const char *s, *e, *m;
 +
-+	ReInfo->params = GfParmReadFile(raceconfig, GFPARM_RMODE_STD);
++	ReInfo->params = GfParmReadFile(gApexRaceConfig, GFPARM_RMODE_STD);
 +	if (ReInfo->params == 0) {
-+		GfError("Could not open file: %s\n", raceconfig);
++		GfError("Could not open file: %s\n", gApexRaceConfig);
 +		exit(1);
 +	}
 +
@@ -50,6 +53,25 @@
 +
 +	ReInitResults();
 +	ReStateApply((void *) RE_STATE_EVENT_INIT);
++}
++
++
++void ReRunRaceOnGUI(const char* raceconfig)
++{
++	/* Deferred into the GLUT event loop rather than run here. main.cpp calls this
++	   before glutMainLoop(), so starting the race directly ran the whole chain --
++	   ReRaceStart, the graphic module's initView, initBoard -- against a window
++	   that had never drawn a frame. cGrTrackMap's constructor bakes the minimap
++	   outline by drawing the track into the back buffer and reading it back with
++	   glReadPixels (grtrackmap.cpp), so it read an undrawn buffer and the outline
++	   came out blank while the car dots, which are drawn live every frame, still
++	   appeared. Started from the menus this always ran inside a callback, with a
++	   realised window, which is why the same machine draws the outline that way
++	   and not this one. The delay only has to outlast the loop mapping the window
++	   and drawing once; it is imperceptible to whoever is about to drive. */
++	strncpy(gApexRaceConfig, raceconfig, sizeof(gApexRaceConfig) - 1);
++	gApexRaceConfig[sizeof(gApexRaceConfig) - 1] = '\0';
++	glutTimerFunc(200, apexStartRace, 0);
 +}
 +
 +
