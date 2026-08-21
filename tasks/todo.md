@@ -701,10 +701,17 @@ itself worked; everything below is what the run exposed.
   pristine archive: applies with zero fuzz and zero offsets, and the file
   compiles and links on Linux with `ReSinglePlayerInit` resolving from
   `singleplayer.o` in the same library.
-- [ ] Unverified end to end. The fix is a one-line assignment plus a same-folder
-  include, but nobody has yet driven a completed race on a build that contains
-  it. Acceptance is the 80-second recipe above: three finished one-lap races
-  through `-R`, all exiting 0.
+- [x] Verified end to end. Three finished one-lap races through `-R` all exited
+  0 against a build carrying the fix (confirmed by the `client.dll` timestamp in
+  a later crash report), and a full five-lap study session afterwards recorded
+  `status: complete`, `returncode: 0`.
+- [x] Standing lesson for this path, learnt the hard way in Task 37. `-R` runs a
+  start-up sequence upstream never executes, so its faults come one at a time and
+  fixes arm the next one: the Task 37 deferral let the splash draw, which armed a
+  seven-second timer that had been inert. Anything more than seven seconds of
+  driving would have caught it; the 80-second acceptance runs here all quit just
+  after a single lap. Accept changes to this path with a full session, never a
+  short one.
 - [x] Attribution settled by the missing arm being run: run the same one-lap
   race **through the menus** with no `-R`. Both paths reach the same
   race-completion code, so a menu race that also crashes puts this upstream and
@@ -820,10 +827,13 @@ itself worked; everything below is what the run exposed.
   main.cpp because it links both libraries, where `raceinit.cpp` calling into
   `libclient` would invert the existing dependency. Exported from `client.def`
   alongside `ReRunRaceOnGUI` by the same in-place edit in `build-windows.ps1`.
-- [ ] Reverify on Windows after the rebuild: outline present, no jump to the main
-  menu during a full five-lap session, and the Task 35 exit code still 0. The
-  splash-timer regression is exactly the kind a single short test would miss --
-  it needs more than seven seconds of driving to show up.
+- [x] Reverified on Windows over a full five-lap session (2026-08-21): the
+  outline is drawn and the race is never interrupted. Five complete laps
+  registered and reported as such.
+- [x] Task 35 did not regress: that session's manifest reads `status: complete`
+  with `returncode: 0`. Worth checking from the manifest rather than the screen,
+  because registering a run no longer depends on a clean exit -- "Driving data
+  saved" now appears either way, so the UI cannot tell the two apart.
 - [ ] Not a study blocker. Apex's own replay draws the track from the recorded
   `x`/`y`, so participants still get a map; this is the simulator's HUD only.
 
