@@ -66,8 +66,8 @@ class StudyView(QWidget):
         self._headline.setStyleSheet(f"color: {theme.TEXT_DIM};")
 
         refresh = QPushButton("Reload")
-        # clicked emits `checked`, which would arrive as `roots`.
-        refresh.clicked.connect(lambda: self.reload())
+        # clicked emits `checked`, which would arrive as `roots` and be iterated.
+        refresh.clicked.connect(self._reload_button_clicked)
         self._export = QPushButton("Export CSV…")
         self._export.setToolTip(
             "One row per participant per phase, for a paired test in R, SPSS or Python"
@@ -115,6 +115,9 @@ class StudyView(QWidget):
         layout.addWidget(split, stretch=1)
 
     # -- data ---------------------------------------------------------------
+
+    def _reload_button_clicked(self, _checked: bool = False) -> None:
+        self.reload()
 
     def reload(self, roots: list[Path] | None = None) -> None:
         """Read every session in the workspace, or the folders given."""

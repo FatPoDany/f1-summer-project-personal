@@ -124,3 +124,17 @@ def test_the_view_reports_measurements_and_leaves_significance_to_the_analyst(
     assert "significant" not in text
     assert "p =" not in text and "p<" not in text
     assert "export the rows to test" in text
+
+
+def test_reload_survives_being_wired_to_a_button(qtbot, paired, monkeypatch):
+    """clicked emits `checked`, which arrived as `roots` and was then iterated."""
+    monkeypatch.setattr(
+        "apex.study_view.list_sessions", lambda: paired
+    )
+    view = StudyView()
+    qtbot.addWidget(view)
+
+    # Exactly what the Reload button does, argument and all.
+    view._reload_button_clicked(False)
+
+    assert view._table.rowCount() == 2

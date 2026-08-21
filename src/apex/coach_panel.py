@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from apex import theme
+from apex.coach_task import NarrationTask
 from f1coach_core import (
     CoachingReport,
     CoachProvider,
@@ -310,6 +311,7 @@ class CoachPanel(QWidget):
     evidenceRequested = Signal(float, float)
     viewResetRequested = Signal()
     reportReady = Signal(object)  # CoachingReport
+    debriefNarrated = Signal(object)  # NarratedDebrief, for the replay to show
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -319,6 +321,9 @@ class CoachPanel(QWidget):
         self._prepare: _PrepareTask | None = None
         self._server = GraniteServer()
         self._managed_endpoint: str | None = None
+        self._debrief_summary = ""
+        self._debrief_points: list = []
+        self._narration_task: NarrationTask | None = None
         self._capability: gh.Capability | None = None
         self._restore_task: _RestoreTask | None = None
         self.report: CoachingReport | None = None
@@ -478,6 +483,38 @@ class CoachPanel(QWidget):
             return
         self._start_analysis()
 
+    def set_debrief(self, summary: str, points: list) -> None:
+        """The measured stretches this lap's coaching should talk about."""
+        self._debrief_summary = summary
+        self._debrief_points = list(points)
+
+    def _narrate_debrief(self) -> None:
+        """Put the measured stretches into words, for the replay to show.
+
+        Run after the analysis rather than instead of it: the cards answer a
+        researcher's question about the lap, and this answers the driver's
+        question about one corner, standing where it happened. The server is
+        already up by now, so this adopts it rather than loading 2.1 GB again.
+        """
+        if not self._debrief_points:
+            return
+        task = NarrationTask(self._debrief_summary, self._debrief_points)
+        self._narration_task = task
+        task.signals.finished.connect(
+            lambda result, current=task: self._debrief_narrated(current, result)
+        )
+        task.signals.failed.connect(
+            lambda _message, current=task: self._debrief_narrated(current, None)
+        )
+        QThreadPool.globalInstance().start(task)
+
+    def _debrief_narrated(self, task, result) -> None:
+        if task is not self._narration_task:
+            return
+        self._narration_task = None
+        if result is not None:
+            self.debriefNarrated.emit(result)
+
     def coach_state(self) -> str:
         """What the coach would do next, and why. Shown when it fails.
 
@@ -570,6 +607,7 @@ class CoachPanel(QWidget):
     def _task_finished(self, task: _CoachTask, report: CoachingReport) -> None:
         if task is self._task:
             self.show_report(report)
+            self._narrate_debrief()
 
     def _task_failed(self, task: _CoachTask, message: str) -> None:
         if task is self._task:

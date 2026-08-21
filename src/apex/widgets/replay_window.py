@@ -24,10 +24,30 @@ class ReplayWindow(QDialog):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.addWidget(self._replay)
 
-    def show_stretch(self, lap: Lap, point: DebriefPoint) -> None:
+    def show_stretch(
+        self,
+        lap: Lap,
+        point: DebriefPoint,
+        *,
+        reference: Lap | None = None,
+        note: str = "",
+    ) -> None:
+        """Replay one stretch, against the lap it lost time to.
+
+        The reference is what turns this from watching yourself into seeing a
+        difference: the dashed line is where the quicker lap went, and the two
+        markers sit at the same point on track so the gap is the thing on screen.
+        """
         title = point.headline
         if point.difference:
             title += f"  —  {point.difference}"
-        self._replay.set_stretch(lap, point.span_m[0], point.span_m[1], title)
+        self._replay.set_stretch(
+            lap,
+            point.span_m[0],
+            point.span_m[1],
+            title,
+            reference=reference,
+            note=note or point.detail,
+        )
         self.show()
         self.raise_()

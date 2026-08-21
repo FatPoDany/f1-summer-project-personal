@@ -130,12 +130,17 @@ class AnalysisView(QWidget):
         self._debrief.itemDoubleClicked.connect(self._replay_debrief_item)
         self._debrief.hide()
         self._debrief_points: list[DebriefPoint] = []
+        # Prose the coach produced, by row, so a replay can show what was said
+        # about the stretch it is playing.
+        self._narration: dict[int, str] = {}
+        self._reference: Lap | None = None
         self._replay_window: ReplayWindow | None = None
 
         self._panel = CoachPanel(self)
         self._panel.setMinimumWidth(300)
         self._panel.evidenceRequested.connect(self._show_evidence)
         self._panel.viewResetRequested.connect(self._stack.reset_view)
+        self._panel.debriefNarrated.connect(self._apply_narration)
 
         charts = QWidget()
         charts_layout = QVBoxLayout(charts)
@@ -223,7 +228,9 @@ class AnalysisView(QWidget):
 
     def _populate_debrief(self, reference: Lap | None) -> None:
         """Deterministic, and independent of whether a model ever runs."""
+        self._reference = reference
         self._debrief_points = []
+        self._narration = {}
         self._debrief.clear()
         if self._lap is None or reference is None or reference is self._lap:
             self._debrief_heading.hide()
@@ -245,6 +252,28 @@ class AnalysisView(QWidget):
                 item.setToolTip(point.detail)
             self._debrief.addItem(item)
         self._debrief.setVisible(bool(points))
+        self._panel.set_debrief(self._debrief_heading.text(), points)
+
+    def _apply_narration(self, result: object) -> None:
+        """Keep the coach's words with the stretch they are about.
+
+        They go on the row as a tooltip and into the replay, not into the row
+        text: a list item does not wrap, and a sentence pushed into one runs off
+        the end where nobody can read it.
+        """
+        narrated = getattr(result, "points", ())
+        if len(narrated) != len(self._debrief_points):
+            return
+        for row, item in enumerate(narrated):
+            if not item.narration:
+                continue
+            self._narration[row] = item.narration
+            entry = self._debrief.item(row)
+            if entry is not None:
+                entry.setToolTip(item.narration)
+        summary = getattr(result, "summary", "")
+        if summary:
+            self._debrief_heading.setText(summary)
 
     def coach_shutdown(self) -> None:
         self._panel.shutdown()
@@ -270,7 +299,12 @@ class AnalysisView(QWidget):
         self._show_evidence(*point.span_m)
         if self._replay_window is None:
             self._replay_window = ReplayWindow(self)
-        self._replay_window.show_stretch(self._lap, point)
+        self._replay_window.show_stretch(
+            self._lap,
+            point,
+            reference=self._reference,
+            note=self._narration.get(row, ""),
+        )
 
     # -- corner table ------------------------------------------------------
 

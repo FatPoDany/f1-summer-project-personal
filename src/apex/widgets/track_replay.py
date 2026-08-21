@@ -49,6 +49,12 @@ class TrackMap(QWidget):
         self._y: list[float] = []
         self._span: tuple[int, int] = (0, 0)
         self._cursor = 0
+        # The reference lap's path, drawn behind. Seeing the two lines together
+        # is the whole point: "you ran wide here" is an argument, but a line
+        # that visibly goes somewhere else is not.
+        self._ref_x: list[float] = []
+        self._ref_y: list[float] = []
+        self._ref_cursor: int | None = None
 
     def set_lap(self, lap: Lap, first: int, last: int) -> None:
         self._x = lap.df["x"].tolist()
@@ -57,9 +63,24 @@ class TrackMap(QWidget):
         self._cursor = first
         self.update()
 
+    def set_reference(self, lap: Lap | None) -> None:
+        if lap is None or not lap.has_track_map:
+            self._ref_x, self._ref_y = [], []
+        else:
+            self._ref_x = lap.df["x"].tolist()
+            self._ref_y = lap.df["y"].tolist()
+        self._ref_cursor = None
+        self.update()
+
+    def set_reference_cursor(self, index: int | None) -> None:
+        self._ref_cursor = index
+        self.update()
+
     def clear(self) -> None:
         """A lap without world position: say so rather than draw an empty box."""
         self._x, self._y = [], []
+        self._ref_x, self._ref_y = [], []
+        self._ref_cursor = None
         self.update()
 
     def set_cursor(self, index: int) -> None:
@@ -67,9 +88,15 @@ class TrackMap(QWidget):
         self.update()
 
     def _transform(self) -> tuple[float, float, float, float, float]:
-        """Scale and offset that fit the whole lap in view, aspect preserved."""
-        x0, x1 = min(self._x), max(self._x)
-        y0, y1 = min(self._y), max(self._y)
+        """Scale and offset that fit both laps in view, aspect preserved.
+
+        Both, deliberately: two lines drawn to different scales would show a
+        difference that is not there, and hide one that is.
+        """
+        xs = self._x + self._ref_x
+        ys = self._y + self._ref_y
+        x0, x1 = min(xs), max(xs)
+        y0, y1 = min(ys), max(ys)
         width = max(x1 - x0, 1e-6)
         height = max(y1 - y0, 1e-6)
         usable_w = max(self.width() - 2 * MARGIN, 1)
@@ -80,11 +107,12 @@ class TrackMap(QWidget):
         offset_y = MARGIN + (usable_h - height * scale) / 2
         return scale, x0, y0, offset_x, offset_y
 
-    def _point(self, index: int, scale, x0, y0, ox, oy) -> QPointF:
+    def _point(self, index: int, scale, x0, y0, ox, oy, source=None) -> QPointF:
         # Flip y: track coordinates count upward, widget coordinates downward.
+        xs, ys = (self._x, self._y) if source is None else source
         return QPointF(
-            ox + (self._x[index] - x0) * scale,
-            self.height() - (oy + (self._y[index] - y0) * scale),
+            ox + (xs[index] - x0) * scale,
+            self.height() - (oy + (ys[index] - y0) * scale),
         )
 
     def paintEvent(self, _event) -> None:
@@ -101,6 +129,16 @@ class TrackMap(QWidget):
             return
         transform = self._transform()
 
+        if len(self._ref_x) >= 2:
+            ref = (self._ref_x, self._ref_y)
+            path = QPainterPath(self._point(0, *transform, source=ref))
+            for i in range(1, len(self._ref_x)):
+                path.lineTo(self._point(i, *transform, source=ref))
+            pen = QPen(QColor(theme.BLUE), 2)
+            pen.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            painter.drawPath(path)
+
         whole = QPainterPath(self._point(0, *transform))
         for i in range(1, len(self._x)):
             whole.lineTo(self._point(i, *transform))
@@ -115,6 +153,17 @@ class TrackMap(QWidget):
             painter.setPen(QPen(QColor(theme.PURPLE), 4))
             painter.drawPath(stretch)
 
+        if self._ref_cursor is not None and len(self._ref_x) >= 2:
+            painter.setBrush(QColor(theme.BLUE))
+            painter.setPen(QPen(QColor(theme.BLUE), 1))
+            painter.drawEllipse(
+                self._point(
+                    self._ref_cursor, *transform, source=(self._ref_x, self._ref_y)
+                ),
+                5,
+                5,
+            )
+
         painter.setBrush(QColor(theme.GREEN))
         painter.setPen(QPen(QColor(theme.GREEN), 1))
         painter.drawEllipse(self._point(self._cursor, *transform), 6, 6)
@@ -128,6 +177,7 @@ class TrackReplay(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._lap: Lap | None = None
+        self._reference: Lap | None = None
         self._first = 0
         self._last = 0
 
@@ -136,6 +186,17 @@ class TrackReplay(QWidget):
         self._map = TrackMap(self)
         self._readout = QLabel()
         self._readout.setStyleSheet(f"color: {theme.TEXT_DIM};")
+        # What the coach said about this stretch, next to the stretch itself.
+        # Reading "you braked earlier here" while watching the place it happened
+        # is a different thing from reading it in a list.
+        self._note = QLabel()
+        self._note.setWordWrap(True)
+        self._note.hide()
+        self._legend = QLabel(
+            f'<span style="color:{theme.GREEN}">●</span> this lap'
+            f'    <span style="color:{theme.BLUE}">●</span> your best lap'
+        )
+        self._legend.hide()
 
         self._play = QPushButton("Play")
         self._play.setCheckable(True)
@@ -154,13 +215,35 @@ class TrackReplay(QWidget):
         layout = QVBoxLayout(self)
         layout.addWidget(self._title)
         layout.addWidget(self._map, stretch=1)
+        layout.addWidget(self._legend)
         layout.addWidget(self._readout)
+        layout.addWidget(self._note)
         layout.addLayout(controls)
 
-    def set_stretch(self, lap: Lap, d0: float, d1: float, title: str) -> None:
-        """Show the samples of `lap` between two distances, paused at the start."""
+    def set_stretch(
+        self,
+        lap: Lap,
+        d0: float,
+        d1: float,
+        title: str,
+        *,
+        reference: Lap | None = None,
+        note: str = "",
+    ) -> None:
+        """Show the samples of `lap` between two distances, paused at the start.
+
+        With a reference lap, both paths are drawn and both markers move -- the
+        reference one matched by distance along the track rather than by time, so
+        the two dots are always at the same place on the circuit and the gap
+        between them is the thing being explained.
+        """
         self._play.setChecked(False)
         self._lap = lap
+        self._reference = reference if reference is not lap else None
+        self._map.set_reference(self._reference)
+        self._legend.setVisible(self._reference is not None and lap.has_track_map)
+        self._note.setText(note)
+        self._note.setVisible(bool(note))
         self._title.setText(title)
         dist = lap.df["dist"]
         # searchsorted keeps this exact for any sampling rate.
@@ -214,10 +297,24 @@ class TrackReplay(QWidget):
             return
         row = self._lap.df.iloc[index]
         elapsed = float(row["t"]) - float(self._lap.df["t"].iloc[self._first])
-        self._readout.setText(
+        text = (
             f"+{elapsed:4.1f} s   ·   {float(row['speed']) * 3.6:5.1f} km/h"
             f"   ·   throttle {_pedal_pct(row['throttle']):3.0f}%"
             f"   ·   brake {_pedal_pct(row['brake']):3.0f}%"
             f"   ·   gear {int(row['gear'])}"
         )
+        text += self._reference_readout(float(row["dist"]), float(row["speed"]))
+        self._readout.setText(text)
         self.cursorMoved.emit(float(row["dist"]))
+
+    def _reference_readout(self, distance: float, speed: float) -> str:
+        """The best lap at the same point on track, and the difference."""
+        if self._reference is None:
+            self._map.set_reference_cursor(None)
+            return ""
+        ref_dist = self._reference.df["dist"]
+        index = int(min(ref_dist.searchsorted(distance, side="left"), len(ref_dist) - 1))
+        self._map.set_reference_cursor(index)
+        ref_speed = float(self._reference.df["speed"].iloc[index])
+        delta = (speed - ref_speed) * 3.6
+        return f"      best lap here: {ref_speed * 3.6:5.1f} km/h  ({delta:+.1f})"
