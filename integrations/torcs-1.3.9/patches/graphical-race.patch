@@ -88,6 +88,47 @@
  
  extern tModList *ReRaceModList;
  
+--- a/src/libs/client/splash.cpp
++++ b/src/libs/client/splash.cpp
+@@ -37,6 +37,7 @@
+ static int s_imgWidth, s_imgHeight;
+ static GLuint s_texture = 0;
+ static int SplashDisplaying;
++static int SplashTimerSuppressed = 0;
+ 
+ /*
+  * Function
+@@ -78,9 +79,19 @@
+  * Remarks
+  *	
+  */
++void TorcsSuppressSplashTimer(void)
++{
++	SplashTimerSuppressed = 1;
++}
++
++
+ static void splashTimer(int /* value */)
+ {
+-	if (SplashDisplaying) {
++	/* Started with -R there is a race running by now, and SplashDisplaying is
++	   set by the splash having drawn once, not by it still being on screen. So
++	   this timer used to fire seven seconds in and drop whoever was driving into
++	   the main menu, engine still running behind it. */
++	if (SplashDisplaying && !SplashTimerSuppressed) {
+ 		SplashDisplaying = 0;
+ 		glDeleteTextures(1, &s_texture);
+ 		s_texture = 0;
+--- a/src/libs/client/client.h
++++ b/src/libs/client/client.h
+@@ -27,6 +27,7 @@
+ 
+ 
+ extern void TorcsEntry(void);
++extern void TorcsSuppressSplashTimer(void);
+ 
+ #endif /* _TORCS_H_ */ 
+ 
 --- a/src/linux/main.cpp
 +++ b/src/linux/main.cpp
 @@ -30,7 +30,8 @@
@@ -133,7 +174,7 @@
  #ifdef FREEGLUT
  	GfuiMouseSetHWPresent(); /* allow the hardware cursor (freeglut pb ?) */
  #endif
-@@ -124,13 +144,17 @@
+@@ -124,13 +144,18 @@
  main(int argc, char *argv[])
  {
  	const char *raceconfig = "";
@@ -147,12 +188,13 @@
  		GfScrInit(argc, argv);	/* init screen */
  		TorcsEntry();			/* launch TORCS */
 +		if(strlen(graphicalraceconfig) != 0) {
++			TorcsSuppressSplashTimer();
 +			ReRunRaceOnGUI(graphicalraceconfig);
 +		}
  		glutMainLoop();			/* event loop of glut */
  	} else {
  		// Run race from console, no Window, no OpenGL/OpenAL etc.
-@@ -140,4 +164,3 @@
+@@ -140,4 +165,3 @@
  
  	return 0;					/* just for the compiler, never reached */
  }

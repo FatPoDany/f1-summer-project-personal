@@ -213,18 +213,23 @@ if (-not (Test-Marker 'src\drivers\human\human.vcxproj' 'apex_human_telemetry.cp
 # Edited in place rather than shipped as a patch because client.def uses CRLF
 # throughout, and a diff over a CRLF file cannot survive the eol=lf
 # normalisation that .gitattributes applies to the patches.
-Write-Step 'Exporting ReRunRaceOnGUI from client.dll'
+Write-Step 'Exporting the symbols wtorcs.exe calls from client.dll'
 $clientDef = Join-Path $SourceDir 'src\libs\client\client.def'
-$defText = [System.IO.File]::ReadAllText($clientDef)
-if ($defText.Contains('ReRunRaceOnGUI')) {
-    Write-Host 'client.def already exports ReRunRaceOnGUI'
-} else {
+# TorcsSuppressSplashTimer joins the list for the same reason: main.cpp calls it
+# on the -R path so the splash screen's seven-second timer cannot navigate away
+# from a race that is already being driven.
+foreach ($export in @('ReRunRaceOnGUI', 'TorcsSuppressSplashTimer')) {
+    $defText = [System.IO.File]::ReadAllText($clientDef)
+    if ($defText.Contains($export)) {
+        Write-Host "client.def already exports $export"
+        continue
+    }
     $anchor = "`tReRunRaceOnConsole`r`n"
     if (-not $defText.Contains($anchor)) {
         throw "client.def has no ReRunRaceOnConsole export to anchor against: $clientDef"
     }
-    [System.IO.File]::WriteAllText($clientDef, $defText.Replace($anchor, $anchor + "`tReRunRaceOnGUI`r`n"))
-    Write-Host 'Added ReRunRaceOnGUI to client.def'
+    [System.IO.File]::WriteAllText($clientDef, $defText.Replace($anchor, $anchor + "`t$export`r`n"))
+    Write-Host "Added $export to client.def"
 }
 
 if ($Action -eq 'prepare') {

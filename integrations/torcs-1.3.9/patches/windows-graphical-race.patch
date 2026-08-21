@@ -94,7 +94,7 @@
  	static const int BUFSIZE = 1024;
  	char buf[BUFSIZE];
  	strncpy(buf, argv[0], BUFSIZE);
-@@ -215,13 +274,17 @@
+@@ -215,13 +274,18 @@
  main(int argc, char *argv[])
  {
  	const char* raceconfig = "";
@@ -108,6 +108,7 @@
  		GfScrInit(argc, argv);	/* init screen */
  		TorcsEntry();			/* launch TORCS */
 +		if (strlen(graphicalraceconfig) != 0) {
++			TorcsSuppressSplashTimer();
 +			ReRunRaceOnGUI(graphicalraceconfig);
 +		}
  		glutMainLoop();			/* event loop of glut */

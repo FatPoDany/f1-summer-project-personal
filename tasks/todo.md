@@ -807,10 +807,23 @@ itself worked; everything below is what the run exposed.
   handing the start to `glutTimerFunc`, so it happens inside the event loop where
   the menu route has always run it. Patch applies to the pristine archive with no
   fuzz, and compiles and links on Linux.
-- [ ] Unverified visually. The headless Linux runtime never renders the live race
-  view -- captures only ever show loading, the pre-race screen and the results --
-  so the outline has to be confirmed on Windows: run a capture session and look
-  at the top right.
+- [x] Confirmed on Windows: the outline is drawn.
+- [x] Regression the deferral caused, and its fix. Moving the start into the
+  event loop meant the splash screen now got to draw a frame, and
+  `splashDisplay` is what sets `SplashDisplaying` (`splash.cpp:112`) -- not the
+  splash still being on screen. Its seven-second `glutTimerFunc` then fired
+  mid-lap and called `TorcsMainMenuRun()`, so the participant was dropped into
+  the main menu with the engine still audible behind it. Before the deferral the
+  splash never drew, the flag stayed 0, and the timer was inert; the fix had
+  quietly armed it. `TorcsSuppressSplashTimer()` now guards that timer, declared
+  in `client.h` and called from both `main.cpp` files on the `-R` branch --
+  main.cpp because it links both libraries, where `raceinit.cpp` calling into
+  `libclient` would invert the existing dependency. Exported from `client.def`
+  alongside `ReRunRaceOnGUI` by the same in-place edit in `build-windows.ps1`.
+- [ ] Reverify on Windows after the rebuild: outline present, no jump to the main
+  menu during a full five-lap session, and the Task 35 exit code still 0. The
+  splash-timer regression is exactly the kind a single short test would miss --
+  it needs more than seven seconds of driving to show up.
 - [ ] Not a study blocker. Apex's own replay draws the track from the recorded
   `x`/`y`, so participants still get a map; this is the simulator's HUD only.
 
