@@ -43,10 +43,19 @@ def model_urls() -> tuple[str, ...]:
     return (override,) if override else MODEL_URLS
 
 _CHUNK = 1024 * 1024
+ATTEMPTS_PER_SOURCE = 3
 
 
 class ModelError(RuntimeError):
     """The weights are absent, untrustworthy, or could not be fetched."""
+
+
+class IncompleteDownload(ModelError):
+    """The transfer stopped before the end. What arrived is still usable to resume from."""
+
+    def __init__(self, received: int, message: str) -> None:
+        super().__init__(message)
+        self.received = received
 
 
 @dataclass(frozen=True)
@@ -103,6 +112,22 @@ def is_verified(path: str | Path) -> bool:
     return digest_of(path) == MODEL_SHA256
 
 
+def looks_present(path: str | Path | None = None) -> bool:
+    """A cheap "is the model here" for steering the interface.
+
+    Digesting 2.1 GB takes seconds, which is fine before loading the weights and
+    completely unacceptable on the GUI thread every time somebody clicks a lap.
+    Length alone answers "should this button say Download or Explain", and the
+    real check still happens where it counts: after a download, and before the
+    server is allowed to start.
+    """
+    candidate = Path(path) if path is not None else model_path()
+    try:
+        return candidate.stat().st_size == MODEL_SIZE
+    except OSError:
+        return False
+
+
 def available() -> bool:
     """Whether coaching can run locally right now, without downloading anything."""
     return is_verified(model_path())
@@ -156,12 +181,26 @@ def ensure_model(
 
     _download_from_any(partial, received, on_progress, should_cancel, opener)
 
+    # Size first, and the two outcomes are not the same thing. A file that is
+    # short simply has not finished -- keep it, because the next attempt resumes
+    # from where it stopped, and on a connection that drops during a 2.1 GB
+    # transfer discarding it means the download can never succeed at all. A file
+    # of exactly the right length whose digest is wrong is a different animal:
+    # those bytes are not the model and no amount of resuming will fix them.
+    got = partial.stat().st_size if partial.exists() else 0
+    if got < MODEL_SIZE:
+        raise IncompleteDownload(
+            got,
+            f"The download stopped at {got / 1e9:.2f} of "
+            f"{MODEL_SIZE / 1e9:.2f} GB. Nothing is lost -- start it again and it "
+            "picks up from there.",
+        )
     if not is_verified(partial):
         partial.unlink(missing_ok=True)
         raise ModelError(
-            "The downloaded Granite model failed verification and has been "
-            "discarded. This is usually a truncated or intercepted download; "
-            "trying again is safe."
+            "The download finished at the right length but the contents are not "
+            "the Granite model, so it has been discarded. That usually means "
+            "something on the network replaced the file."
         )
     partial.replace(destination)
     return destination
@@ -174,19 +213,42 @@ def _download_from_any(
     should_cancel: Callable[[], bool] | None,
     opener: Callable[[urllib.request.Request], object] | None,
 ) -> None:
-    """Try each source in turn, giving up only when every one has failed."""
+    """Try each source in turn, resuming, until one of them delivers the lot."""
     failures: list[str] = []
     for url in model_urls():
-        try:
-            _download(url, partial, received, on_progress, should_cancel, opener)
+        # A dropped connection is transient, so a source gets several goes before
+        # being written off -- each one resuming, so the attempts add up instead
+        # of repeating each other.
+        for _attempt in range(ATTEMPTS_PER_SOURCE):
+            try:
+                _download(url, partial, received, on_progress, should_cancel, opener)
+                return
+            except IncompleteDownload as exc:
+                if should_cancel and should_cancel():
+                    raise
+                if exc.received <= received:
+                    failures.append(f"{url}: {exc}")
+                    break  # no progress at all, so retrying this source is futile
+                received = exc.received
+            except ModelError as exc:
+                if should_cancel and should_cancel():
+                    raise
+                failures.append(f"{url}: {exc}")
+                break
+        received = partial.stat().st_size if partial.exists() else 0
+        if received >= MODEL_SIZE:
             return
-        except ModelError as exc:
-            if should_cancel and should_cancel():
-                raise
-            failures.append(f"{url}: {exc}")
-            # A source that answered partially leaves usable bytes behind, so the
-            # next one resumes from wherever this one stopped.
-            received = partial.stat().st_size if partial.exists() else 0
+    # What to advise depends on whether anything is actually arriving. A link
+    # that keeps dropping halfway is worth another go; one that reaches nothing
+    # at all will not improve by being retried, and the person needs the other
+    # route instead.
+    if received:
+        raise IncompleteDownload(
+            received,
+            f"The download stopped at {received / 1e9:.2f} of "
+            f"{MODEL_SIZE / 1e9:.2f} GB after trying every source. Nothing is "
+            "lost -- start it again and it picks up from there.",
+        )
     raise ModelError(
         "Could not download the Granite model from any known source.\n  "
         + "\n  ".join(failures)
@@ -249,14 +311,24 @@ def _download(
         received = 0
         mode = "wb"
 
-    with response, open(partial, mode) as handle:
-        while True:
-            if should_cancel and should_cancel():
-                raise ModelError("The model download was cancelled.")
-            chunk = response.read(_CHUNK)
-            if not chunk:
-                break
-            handle.write(chunk)
-            received += len(chunk)
-            if on_progress:
-                on_progress(Progress(received, MODEL_SIZE))
+    try:
+        with response, open(partial, mode) as handle:
+            while received < MODEL_SIZE:
+                if should_cancel and should_cancel():
+                    raise ModelError("The model download was cancelled.")
+                chunk = response.read(_CHUNK)
+                if not chunk:
+                    break
+                handle.write(chunk)
+                received += len(chunk)
+                if on_progress:
+                    on_progress(Progress(received, MODEL_SIZE))
+    except OSError as exc:
+        # A connection that dies mid-transfer surfaces here. Whatever reached the
+        # disk is a valid prefix, so report how far it got rather than losing it.
+        raise IncompleteDownload(received, f"the connection failed ({exc})") from exc
+
+    # An empty read is indistinguishable from a finished body, so the only honest
+    # test of completeness is the length we were promised.
+    if received < MODEL_SIZE:
+        raise IncompleteDownload(received, "the connection closed early")

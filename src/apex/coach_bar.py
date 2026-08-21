@@ -52,14 +52,22 @@ class CoachBar(QWidget):
     # -- state -------------------------------------------------------------
 
     def set_debrief(self, summary: str, points: list[DebriefPoint]) -> None:
-        """Point the bar at a lap. Hides itself when there is nothing to say."""
+        """Point the bar at a lap being compared against a reference.
+
+        Stays put whether or not this lap has findings. Installing the coach is a
+        one-off setup step, not a property of the lap on screen, and a button
+        that came and went as the participant clicked between laps read as a
+        fault rather than as a choice.
+        """
         self._summary = summary
         self._points = list(points)
-        if not points:
-            self.hide()
-            return
         self.show()
         self._refresh()
+
+    def clear(self) -> None:
+        """No lap, or nothing to compare it against."""
+        self._points = []
+        self.hide()
 
     def _refresh(self) -> None:
         if self._capability is None:
@@ -73,11 +81,16 @@ class CoachBar(QWidget):
             return
 
         self._button.show()
-        self._status.setText(capability.reason)
         if capability.needs_download:
+            self._status.setText(capability.reason)
             self._button.setText("Download coach")
-        else:
+        elif self._points:
+            self._status.setText(capability.reason)
             self._button.setText("Explain my lap")
+        else:
+            # Ready, but this lap has nothing that needs explaining.
+            self._status.setText("Nothing on this lap needs explaining.")
+            self._button.hide()
 
     # -- actions -----------------------------------------------------------
 
@@ -86,7 +99,7 @@ class CoachBar(QWidget):
             self._download.cancel()
             return
         assert self._capability is not None
-        if self._capability.needs_download:
+        if self._capability.needs_download:  # noqa: SIM102
             self._start_download()
         else:
             self._start_narration()
@@ -120,14 +133,14 @@ class CoachBar(QWidget):
         self._capability = gh.capability()
         self._refresh()
 
-    def _on_download_failed(self, _token: object, message: str) -> None:
+    def _on_download_failed(self, _token: object, message: str, resumable: bool) -> None:
         self._download = None
         self._progress.hide()
-        # The message already carries the manual route when every source failed;
-        # keeping it whole matters more here than keeping the strip short,
-        # because on a network that blocks the model hosts retrying is futile.
+        # The message already carries the right advice for the case -- resume, or
+        # get the file another way -- so it is shown whole rather than trimmed.
+        # On a network that blocks the model hosts, "Try again" alone is a lie.
         self._status.setText(message)
-        self._button.setText("Try again")
+        self._button.setText("Resume download" if resumable else "Try again")
 
     def _on_cancelled(self, _token: object) -> None:
         self._download = None

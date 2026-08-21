@@ -99,7 +99,9 @@ def capability(*, server_present: bool | None = None) -> Capability:
             total_memory_bytes=memory,
         )
 
-    present = gm.available()
+    # Cheap on purpose: this runs on the GUI thread. GraniteServer
+    # digests the file properly before it will load it.
+    present = gm.looks_present()
     if present:
         reason = "Written coaching is ready to use on this computer."
     else:

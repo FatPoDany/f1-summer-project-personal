@@ -20,7 +20,7 @@ from racecoach.granite.narrate import NarratedDebrief, NarrationError, narrate_d
 class DownloadSignals(QObject):
     progress = Signal(object, int, int)  # token, received, total
     finished = Signal(object, str)  # token, path
-    failed = Signal(object, str)  # token, message
+    failed = Signal(object, str, bool)  # token, message, resumable
     cancelled = Signal(object)
 
 
@@ -49,7 +49,11 @@ class ModelDownloadTask(QRunnable):
             if self._stop.is_set():
                 self.signals.cancelled.emit(self.token)
             else:
-                self.signals.failed.emit(self.token, str(exc))
+                # A stopped-short transfer keeps its bytes, so the button should
+                # offer to carry on rather than to start over.
+                self.signals.failed.emit(
+                    self.token, str(exc), isinstance(exc, gm.IncompleteDownload)
+                )
             return
         self.signals.finished.emit(self.token, str(path))
 

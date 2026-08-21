@@ -87,16 +87,37 @@ def test_a_download_is_verified_before_it_is_named_as_the_model(cache, monkeypat
     assert seen[-1].received == len(payload) and seen[-1].fraction == 1.0
 
 
-def test_a_truncated_download_is_discarded_rather_than_kept(cache, monkeypatch):
+def test_a_truncated_download_is_kept_so_the_next_attempt_resumes(cache, monkeypatch):
+    """On a link that drops during 2.1 GB, discarding progress means never finishing."""
     payload = b"granite weights" * 40
     pin_payload(monkeypatch, payload)
 
-    with pytest.raises(gm.ModelError, match="failed verification"):
+    with pytest.raises(gm.IncompleteDownload) as caught:
         gm.ensure_model(opener=lambda _r: FakeResponse(payload[:-10]))
 
-    # Nothing is left behind that a later run could mistake for a model.
+    assert "picks up from there" in str(caught.value)
+    # Not a model yet, but the bytes that did arrive are still on disk.
     assert not (cache / gm.MODEL_FILE).exists()
-    assert not (cache / (gm.MODEL_FILE + ".part")).exists()
+    assert (cache / (gm.MODEL_FILE + ".part")).stat().st_size == len(payload) - 10
+
+
+def test_a_connection_that_drops_partway_is_resumed_until_it_completes(cache, monkeypatch):
+    """The case that made this fail on a real network: one drop, then success."""
+    payload = b"granite weights" * 40
+    pin_payload(monkeypatch, payload)
+    attempts = []
+
+    def opener(request):
+        attempts.append(request.get_header("Range"))
+        if len(attempts) == 1:
+            return FakeResponse(payload[:100])  # dies partway through
+        start = int(request.get_header("Range").split("=")[1].rstrip("-"))
+        return FakeResponse(payload[start:], status=206)
+
+    path = gm.ensure_model(opener=opener)
+
+    assert path.read_bytes() == payload
+    assert attempts[0] is None and attempts[1] == "bytes=100-"
 
 
 def test_an_unrecognised_file_already_in_place_stops_rather_than_overwrites(cache, monkeypatch):
@@ -217,21 +238,26 @@ def test_an_explicit_url_replaces_the_built_in_sources(cache, monkeypatch):
     assert gm.model_urls() == ("https://example.invalid/model.gguf",)
 
 
-def test_a_mirror_serving_the_wrong_bytes_is_still_refused(cache, monkeypatch):
-    """The digest is what makes any source safe to use."""
+def test_a_source_serving_the_wrong_bytes_is_refused_even_at_the_right_length(
+    cache, monkeypatch
+):
+    """The digest is what makes any source, mirror included, safe to use."""
     import urllib.error
 
     payload = b"granite weights" * 40
     pin_payload(monkeypatch, payload)
+    impostor = b"x" * len(payload)  # right length, wrong contents
 
     def opener(request):
         if "huggingface.co" in request.full_url:
             raise urllib.error.URLError("timed out")
-        return FakeResponse(b"a different model entirely" * 20)
+        return FakeResponse(impostor)
 
-    with pytest.raises(gm.ModelError, match="failed verification"):
+    with pytest.raises(gm.ModelError, match="not the Granite model"):
         gm.ensure_model(opener=opener)
+    # Wrong bytes cannot be resumed into right ones, so they go.
     assert not (cache / gm.MODEL_FILE).exists()
+    assert not (cache / (gm.MODEL_FILE + ".part")).exists()
 
 
 def test_a_file_delivered_by_hand_is_accepted_once_verified(cache, monkeypatch, tmp_path):
@@ -256,3 +282,21 @@ def test_a_file_delivered_by_hand_that_is_not_the_model_is_refused(cache, monkey
     with pytest.raises(gm.ModelError, match="not the pinned Granite model"):
         gm.import_model(wrong)
     assert not gm.available()
+
+
+def test_the_interface_check_does_not_digest_two_gigabytes(cache, monkeypatch):
+    """looks_present runs on the GUI thread every time a lap is clicked."""
+    payload = b"granite weights" * 40
+    pin_payload(monkeypatch, payload)
+    cache.mkdir(parents=True)
+    (cache / gm.MODEL_FILE).write_bytes(b"x" * len(payload))
+
+    def refuse(_path):  # pragma: no cover - proves the digest is skipped
+        raise AssertionError("hashed the whole model just to draw a button")
+
+    monkeypatch.setattr(gm, "digest_of", refuse)
+    assert gm.looks_present() is True  # right length is all the interface asks
+
+    # The real check still rejects it where correctness matters.
+    monkeypatch.undo()
+    assert gm.available() is False

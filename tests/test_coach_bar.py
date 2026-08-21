@@ -49,9 +49,30 @@ def too_small():
     )
 
 
-def test_a_lap_with_nothing_to_report_hides_the_offer(qtbot):
+def test_a_lap_with_nothing_to_report_keeps_the_strip_but_drops_the_button(qtbot):
+    """Installing the coach is setup, not a property of the lap on screen."""
     widget = bar_with(qtbot, ready())
     widget.set_debrief("This was your quickest lap of the session.", [])
+
+    assert not widget.isHidden()
+    assert widget._button.isHidden()
+    assert "Nothing on this lap" in widget._status.text()
+
+
+def test_the_download_is_offered_even_on_a_lap_with_no_findings(qtbot):
+    """Otherwise the button comes and goes as the participant clicks laps."""
+    widget = bar_with(qtbot, needs_download())
+    widget.set_debrief("This was your quickest lap of the session.", [])
+
+    assert widget._button.text() == "Download coach"
+
+
+def test_clearing_hides_the_strip_when_there_is_nothing_to_compare(qtbot):
+    widget = bar_with(qtbot, ready())
+    widget.set_debrief("0.9 s off your best lap.", [point()])
+    assert not widget.isHidden()
+
+    widget.clear()
     assert widget.isHidden()
 
 
@@ -90,10 +111,22 @@ def test_a_stopped_download_says_the_progress_is_kept(qtbot):
 def test_a_failed_download_reports_the_reason_and_offers_a_retry(qtbot):
     widget = bar_with(qtbot, needs_download())
     widget.set_debrief("s", [point()])
-    widget._on_download_failed(object(), "Not enough free space")
+    widget._on_download_failed(object(), "Not enough free space", False)
 
     assert "Not enough free space" in widget._status.text()
     assert widget._button.text() == "Try again"
+
+
+def test_a_download_that_stopped_short_offers_to_carry_on(qtbot):
+    """The bytes are kept, so "start over" would be the wrong thing to offer."""
+    widget = bar_with(qtbot, needs_download())
+    widget.set_debrief("s", [point()])
+    widget._on_download_failed(
+        object(), "The download stopped at 1.20 of 2.10 GB.", True
+    )
+
+    assert widget._button.text() == "Resume download"
+    assert "1.20 of 2.10 GB" in widget._status.text()
 
 
 def test_a_coach_that_could_not_speak_says_so_rather_than_looking_empty(qtbot):

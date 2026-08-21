@@ -234,6 +234,9 @@ class AnalysisView(QWidget):
         if self._lap is None or reference is None or reference is self._lap:
             self._debrief_heading.hide()
             self._debrief.hide()
+            # Without this the strip keeps the previous lap's state and appears
+            # to come and go on its own.
+            self._coach_bar.clear()
             return
         try:
             points = lap_debrief(self._lap, reference)
