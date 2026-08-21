@@ -32,6 +32,9 @@ def workspace(tmp_path, monkeypatch):
 
 @pytest.fixture
 def analysis(qtbot, monkeypatch):
+    # A configured endpoint means the panel talks to that and manages nothing --
+    # the same path a researcher with their own server takes.
+    monkeypatch.setenv("GRANITE_BASE_URL", "http://127.0.0.1:8080/v1")
     session = load_sample_session()
     monkeypatch.setattr(
         "apex.coach_panel.get_provider", lambda name: get_provider("mock")
@@ -273,7 +276,9 @@ def test_failed_runs_are_audited_too(qtbot, analysis):
     assert record["model"] is None and record["report"] is None
 
 
-def test_panel_allows_single_lap_analysis(qtbot, tmp_path):
+def test_panel_allows_single_lap_analysis(qtbot, tmp_path, monkeypatch):
+    """One lap on its own is still analysable -- there is just no lap to compare it to."""
+    monkeypatch.setenv("GRANITE_BASE_URL", "http://127.0.0.1:8080/v1")
     csv = tmp_path / "loose.csv"
     csv.write_text("t,speed,throttle,brake,steer,gear\n0.0,10,1,0,0,3\n1.0,20,1,0,0,3\n")
     window = MainWindow()
@@ -282,6 +287,25 @@ def test_panel_allows_single_lap_analysis(qtbot, tmp_path):
 
     panel = window._analysis._panel
     assert panel._coach_button.isEnabled()
+    assert panel._coach_button.text() == "Analyze lap"
+    assert "single lap" in panel._placeholder.text().lower()
+
+
+def test_a_build_without_the_coach_disables_it_and_says_why(qtbot, tmp_path, monkeypatch):
+    """Better a disabled button with a reason than one that fails when pressed."""
+    monkeypatch.delenv("GRANITE_BASE_URL", raising=False)
+    monkeypatch.setattr("apex.coach_panel.gh.capability", lambda: __import__(
+        "racecoach.granite.host", fromlist=["Capability"]
+    ).Capability(can_run=False, reason="installed without the local model server"))
+    csv = tmp_path / "loose.csv"
+    csv.write_text("t,speed,throttle,brake,steer,gear\n0.0,10,1,0,0,3\n1.0,20,1,0,0,3\n")
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.open_path(csv)
+
+    panel = window._analysis._panel
+    assert not panel._coach_button.isEnabled()
+    # The lap itself is still open and analysed; only the writing is unavailable.
     assert "single lap" in panel._placeholder.text().lower()
 
 

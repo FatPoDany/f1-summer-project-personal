@@ -264,6 +264,9 @@ class MainWindow(QMainWindow):
         if self._synthetic is not None:
             self._synthetic.shutdown(timeout_s=2.0)
         self._live.shutdown(timeout_s=2.0)
+        # The model server is a child process holding 2.1 GB; leaving it behind
+        # would keep that resident after the window is gone.
+        self._analysis.coach_shutdown()
         super().closeEvent(event)
 
     def _pick_file(self) -> None:

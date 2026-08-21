@@ -7,7 +7,9 @@ Every run, whether successful or failed, writes an audit record next to the
 session (see f1coach_core.audit); the Audit… button opens the latest one so a
 claim can always be traced to the exact prompt and raw response."""
 
+import os
 import sys
+import threading
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
@@ -37,6 +39,9 @@ from f1coach_core import (
     latest_coaching_report,
     write_coaching_audit,
 )
+from racecoach.granite import host as gh
+from racecoach.granite import model as gm
+from racecoach.granite.server import GraniteServer, ServerError
 
 CARD_STYLE = (
     "QFrame#findingCard { background: #1f1f1f; border: 1px solid #393939; border-radius: 6px; }"
@@ -81,6 +86,63 @@ class _RestoreTask(QRunnable):
         except (OSError, ValueError):
             saved = None
         self.signals.finished.emit(saved)
+
+
+def _endpoint_is_configured() -> bool:
+    """Whether somebody already told Apex where a model server lives.
+
+    Set by a researcher who runs their own, and by the tests. It is the signal
+    that Apex should not manage a server of its own.
+    """
+    return bool(os.environ.get("GRANITE_BASE_URL"))
+
+
+class _PrepareSignals(QObject):
+    progress = Signal(str)
+    ready = Signal(str)
+    failed = Signal(str, bool)  # message, resumable
+
+
+class _PrepareTask(QRunnable):
+    """Get the weights and the server up so nobody has to open a terminal.
+
+    This is the whole point of the coach being usable by a participant, and it
+    used to be absent: the panel simply told people to start a server and set an
+    environment variable, which is not something a classmate is going to do.
+    """
+
+    def __init__(self, server: GraniteServer, *, download: bool) -> None:
+        super().__init__()
+        self.signals = _PrepareSignals()
+        self._server = server
+        self._download = download
+        self._stop = threading.Event()
+
+    def cancel(self) -> None:
+        self._stop.set()
+
+    def run(self) -> None:
+        if self._download:
+            try:
+                gm.ensure_model(
+                    on_progress=lambda p: self.signals.progress.emit(
+                        f"Downloading the coach: {p.received / 1e9:.1f} of "
+                        f"{p.total / 1e9:.1f} GB"
+                    ),
+                    should_cancel=self._stop.is_set,
+                )
+            except gm.ModelError as exc:
+                self.signals.failed.emit(
+                    str(exc), isinstance(exc, gm.IncompleteDownload)
+                )
+                return
+        self.signals.progress.emit("Starting the coach. The first time takes a minute…")
+        try:
+            base_url = self._server.start()
+        except ServerError as exc:
+            self.signals.failed.emit(str(exc), False)
+            return
+        self.signals.ready.emit(base_url)
 
 
 class _CoachTask(QRunnable):
@@ -248,6 +310,9 @@ class CoachPanel(QWidget):
         self._lap: Lap | None = None
         self._reference: Lap | None = None
         self._task: _CoachTask | None = None
+        self._prepare: _PrepareTask | None = None
+        self._server = GraniteServer()
+        self._capability: gh.Capability | None = None
         self._restore_task: _RestoreTask | None = None
         self.report: CoachingReport | None = None
         self.audit_path: Path | None = None
@@ -324,6 +389,7 @@ class CoachPanel(QWidget):
         self._chip.hide()
         ready = lap is not None
         self._coach_button.setEnabled(ready)
+        self._refresh_button()
         if lap is not None and reference is not None:
             self._placeholder.setText(
                 f"Ready — Granite will compare {lap.source.stem} with {reference.source.stem}."
@@ -358,9 +424,94 @@ class CoachPanel(QWidget):
 
     # -- running ---------------------------------------------------------------
 
+    def _refresh_button(self) -> None:
+        """Say what the next click will do.
+
+        Installing the coach is a one-off setup step, so the wording must not
+        depend on which lap happens to be on screen -- a button that changed as
+        the participant clicked between laps read as a fault, not a choice.
+        """
+        if _endpoint_is_configured():
+            self._coach_button.setText("Analyze lap")
+            return
+        capability = self._capability or gh.capability()
+        self._capability = capability
+        if not capability.can_run:
+            self._coach_button.setEnabled(False)
+            self._coach_button.setToolTip(capability.reason)
+        elif capability.needs_download:
+            self._coach_button.setText("Download coach")
+            self._coach_button.setToolTip(capability.reason)
+        else:
+            self._coach_button.setText("Analyze lap")
+            self._coach_button.setToolTip("")
+
     def _run(self) -> None:
         if self._lap is None:
             return
+        if self._prepare is not None:  # a download is running; this click cancels it
+            self._prepare.cancel()
+            return
+
+        if _endpoint_is_configured():
+            # Somebody has pointed this at a server of their own -- a researcher's
+            # workstation, or a test. Downloading 2.1 GB and starting a second
+            # one on top of that would be presumptuous.
+            self._start_analysis()
+            return
+
+        capability = self._capability or gh.capability()
+        self._capability = capability
+        if not capability.can_run:
+            self._placeholder.setText(capability.reason)
+            self._coach_button.setEnabled(False)
+            return
+        if capability.needs_download or not self._server.is_ready:
+            self._start_preparation(download=capability.needs_download)
+            return
+        self._start_analysis()
+
+    def _start_preparation(self, *, download: bool) -> None:
+        task = _PrepareTask(self._server, download=download)
+        self._prepare = task
+        self._coach_button.setText("Cancel" if download else "Starting…")
+        self._coach_button.setEnabled(download)
+        self._placeholder.setText(
+            f"The coach needs a one-off {gm.MODEL_SIZE / 1e9:.1f} GB download. "
+            "It then runs entirely on this computer."
+            if download
+            else "Starting the coach…"
+        )
+        task.signals.progress.connect(self._placeholder.setText)
+        task.signals.ready.connect(lambda _url, current=task: self._prepared(current))
+        task.signals.failed.connect(
+            lambda message, resumable, current=task: self._preparation_failed(
+                current, message, resumable
+            )
+        )
+        QThreadPool.globalInstance().start(task)
+
+    def _prepared(self, task: _PrepareTask) -> None:
+        if task is not self._prepare:
+            return
+        self._prepare = None
+        self._capability = None  # the model is present now
+        # The provider reads this, so a server we started is the one it talks to.
+        os.environ["GRANITE_BASE_URL"] = self._server.base_url
+        os.environ.setdefault("GRANITE_MODEL", gm.MODEL_REPO.replace("-GGUF", ""))
+        self._start_analysis()
+
+    def _preparation_failed(
+        self, task: _PrepareTask, message: str, resumable: bool
+    ) -> None:
+        if task is not self._prepare:
+            return
+        self._prepare = None
+        self._coach_button.setEnabled(True)
+        self._coach_button.setText("Resume download" if resumable else "Try again")
+        self._placeholder.setText(message)
+
+    def _start_analysis(self) -> None:
         self._restore_task = None  # a late disk read must not replace this new run
         try:
             provider = get_provider(self.provider_name)
@@ -454,10 +605,25 @@ class CoachPanel(QWidget):
         self._chip.clear()
         self._chip.hide()
         self._scroll.verticalScrollBar().setValue(0)  # outcome reads from the top
+        # Never tell a participant to start a server or set an environment
+        # variable: they installed a desktop app, and doing that is our job.
         text = f"Coaching failed: {message}"
+        if "GRANITE_BASE_URL" in text or "not reachable" in text:
+            self._server.stop()
+            text = (
+                "The coach stopped responding. Press Analyze lap to start it again. "
+                "Your lap analysis below is measured from telemetry and is unaffected."
+            )
         if self.audit_path is not None:  # audited arrives first, so this is current
             text += "\n\nThe full run record (prompt and raw response) is under Audit…"
         self._placeholder.setText(text)
+
+    def shutdown(self) -> None:
+        """Stop the model server we started. Called when the window closes."""
+        if self._prepare is not None:
+            self._prepare.cancel()
+            self._prepare = None
+        self._server.stop()
 
     def _clear_cards(self) -> None:
         for i in reversed(range(self._cards.count())):

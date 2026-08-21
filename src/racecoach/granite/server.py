@@ -147,6 +147,15 @@ class GraniteServer:
         return endpoint(self.port)
 
     @property
+    def is_ready(self) -> bool:
+        """Whether this endpoint is answering right now.
+
+        Cheap enough to ask before every analysis, and honest about a server that
+        died in the background rather than assuming one we started is still up.
+        """
+        return self._probe(self.port)
+
+    @property
     def owns_process(self) -> bool:
         """False when we attached to a server someone else was already running."""
         return self._process is not None and not self._adopted

@@ -1,9 +1,10 @@
 """Garage screen: session library, lap table with deltas/status, import and
 watched folder. Double-click a lap to open it in Lap Analysis."""
 
+import shutil
 from pathlib import Path
 
-from PySide6.QtCore import QFileSystemWatcher, Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -11,6 +12,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QListWidget,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSplitter,
@@ -45,32 +47,26 @@ class GarageView(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._session: Session | None = None
-        self._watcher = QFileSystemWatcher(self)
-        self._watcher.directoryChanged.connect(self._watched_dir_changed)
-        self._watched_seen: set[str] = set()
         self._fresh: set[str] = set()  # lap stems imported this run, not yet opened
 
         self._session_list = QListWidget()
         self._session_list.currentRowChanged.connect(lambda _row: self._load_selected())
-        new_button = QPushButton("New Session…")
-        new_button.clicked.connect(self._new_session)
-        self._delete_button = QPushButton("Delete Session…")
-        self._delete_button.setEnabled(False)
-        self._delete_button.clicked.connect(self._delete_session)
+        # Creating and deleting a session are things you do *to* a session, so
+        # they belong on it rather than as permanent buttons underneath.
+        self._session_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._session_list.customContextMenuRequested.connect(self._session_menu)
+        self._session_list.setToolTip("Right-click for new and delete")
 
         left = QWidget()
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.addWidget(QLabel("Sessions"))
         left_layout.addWidget(self._session_list, stretch=1)
-        left_layout.addWidget(new_button)
-        left_layout.addWidget(self._delete_button)
 
-        import_button = QPushButton("Import Telemetry…")
+        # One import. Watching a folder was a second way to do the same thing,
+        # from before capture put its laps in the Garage by itself.
+        import_button = QPushButton("Import…")
         import_button.clicked.connect(self._import_files)
-        self._watch_button = QPushButton("Watch Folder…")
-        self._watch_button.setCheckable(True)
-        self._watch_button.toggled.connect(self._toggle_watch)
 
         self._table = QTableWidget(0, len(TABLE_HEADERS))
         self._table.setHorizontalHeaderLabels(TABLE_HEADERS)
@@ -79,10 +75,12 @@ class GarageView(QWidget):
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._table.cellDoubleClicked.connect(self._open_row)
+        self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._table.customContextMenuRequested.connect(self._lap_menu)
+        self._table.setToolTip("Double-click to open, right-click to export")
 
         buttons = QHBoxLayout()
         buttons.addWidget(import_button)
-        buttons.addWidget(self._watch_button)
         buttons.addStretch(1)
 
         right = QWidget()
@@ -122,7 +120,6 @@ class GarageView(QWidget):
         else:
             self._session = None
             self._table.setRowCount(0)
-            self._delete_button.setEnabled(False)
 
     def _load_selected(self) -> None:
         item = self._session_list.currentItem()
@@ -133,7 +130,6 @@ class GarageView(QWidget):
             self.refresh_sessions()
             return
         self._session = load_session(match)
-        self._delete_button.setEnabled(True)
         self._populate_table()
 
     def _populate_table(self) -> None:
@@ -224,8 +220,6 @@ class GarageView(QWidget):
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
-        if self._watch_button.isChecked():
-            self._watch_button.setChecked(False)
         try:
             delete_session(session.name)
         except (ValueError, OSError) as exc:
@@ -237,6 +231,42 @@ class GarageView(QWidget):
         self.refresh_sessions()
         self.sessionDeleted.emit(deleted_path)
         self.status.emit(f"Deleted session '{name}' from the Apex workspace")
+
+    def _session_menu(self, position) -> None:
+        menu = QMenu(self)
+        menu.addAction("New session…", self._new_session)
+        delete = menu.addAction("Delete session…", self._delete_session)
+        delete.setEnabled(self._session is not None)
+        menu.exec(self._session_list.mapToGlobal(position))
+
+    def _lap_menu(self, position) -> None:
+        row = self._table.rowAt(position.y())
+        if self._session is None or row < 0 or row >= len(self._session.laps):
+            return
+        self._table.selectRow(row)
+        menu = QMenu(self)
+        menu.addAction("Open", lambda: self._open_row(row, 0))
+        menu.addAction("Export CSV…", lambda: self._export_row(row))
+        menu.exec(self._table.viewport().mapToGlobal(position))
+
+    def _export_row(self, row: int) -> None:
+        """Hand the participant the exact file, not a re-rendering of it.
+
+        What they pass to the research team has to be the recorded lap, header
+        and all, so this copies rather than writing the table out again.
+        """
+        lap = self._session.laps[row]
+        target, _ = QFileDialog.getSaveFileName(
+            self, "Export lap", lap.source.name, "Telemetry CSV (*.csv)"
+        )
+        if not target:
+            return
+        try:
+            shutil.copyfile(lap.source, target)
+        except OSError as exc:
+            QMessageBox.critical(self, "Can't export lap", str(exc))
+            return
+        self.status.emit(f"Exported {lap.label} -> {target}")
 
     def _import_files(self) -> None:
         if self._session is None:
@@ -263,36 +293,4 @@ class GarageView(QWidget):
             self._fresh.add(path.stem)
             self.status.emit(summary)
 
-    def _toggle_watch(self, checked: bool) -> None:
-        if not checked:
-            if self._watcher.directories():
-                self._watcher.removePaths(self._watcher.directories())
-            self._watch_button.setText("Watch Folder…")
-            self.status.emit("Stopped watching")
-            return
-        folder = QFileDialog.getExistingDirectory(self, "Watch folder for new laps")
-        if not folder:
-            self._watch_button.setChecked(False)
-            return
-        if self._session is None:
-            self._new_session()
-        if self._session is None:
-            self._watch_button.setChecked(False)
-            return
-        self._watcher.addPath(folder)
-        self._watched_seen = {str(p) for p in Path(folder).glob("*.csv")}
-        self._watch_button.setText(f"Watching {Path(folder).name} (stop)")
-        self.status.emit(f"Watching {folder} — new CSVs import into '{self._session.name}'")
 
-    def _watched_dir_changed(self, folder: str) -> None:
-        current = {str(p) for p in Path(folder).glob("*.csv")}
-        fresh = sorted(current - self._watched_seen)
-        self._watched_seen = current
-        if self._session is None:
-            return
-        for path in fresh:
-            if Path(path).parent == self._session.path:
-                continue  # watching the session folder itself: nothing to copy
-            self._import_one(Path(path))
-        if fresh:
-            self.refresh_sessions()

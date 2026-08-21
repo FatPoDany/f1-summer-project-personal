@@ -3,6 +3,7 @@
 import json
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMessageBox
 
 from apex.garage_view import GarageView
@@ -162,3 +163,48 @@ def test_study_laps_show_their_lap_number_and_driver(qtbot, tmp_path):
     table = view._table
     assert [table.item(r, 0).text() for r in range(table.rowCount())] == ["1", "2"]
     assert {table.item(r, 1).text() for r in range(table.rowCount())} == {"P001"}
+
+
+def test_session_actions_live_on_the_session_they_act_on(qtbot, tmp_path, monkeypatch):
+    """New and delete are things you do to a session, not permanent buttons."""
+    monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "ws"))
+    view = GarageView()
+    qtbot.addWidget(view)
+
+    assert not hasattr(view, "_delete_button")
+    policy = view._session_list.contextMenuPolicy()
+    assert policy == Qt.ContextMenuPolicy.CustomContextMenu
+    assert view._table.contextMenuPolicy() == Qt.ContextMenuPolicy.CustomContextMenu
+
+
+def test_watching_a_folder_is_gone_now_that_capture_registers_its_own_laps(
+    qtbot, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "ws"))
+    view = GarageView()
+    qtbot.addWidget(view)
+
+    assert not hasattr(view, "_watch_button")
+    assert not hasattr(view, "_watcher")
+
+
+def test_a_lap_exports_as_the_recorded_file_not_a_re_rendering(
+    qtbot, tmp_path, monkeypatch
+):
+    """What reaches the research team has to be the recording, header and all."""
+    monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "ws"))
+    ensure_sample_session()
+    view = GarageView()
+    qtbot.addWidget(view)
+    view.refresh_sessions()
+    assert view._session is not None and view._session.laps
+
+    target = tmp_path / "exported.csv"
+    monkeypatch.setattr(
+        "apex.garage_view.QFileDialog.getSaveFileName",
+        lambda *a, **k: (str(target), ""),
+    )
+    view._export_row(0)
+
+    source = view._session.laps[0].source
+    assert target.read_bytes() == source.read_bytes()
