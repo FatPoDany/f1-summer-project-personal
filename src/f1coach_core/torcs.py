@@ -212,7 +212,31 @@ def _to_canonical(seg: pd.DataFrame, speed_col: str, track_length: float) -> pd.
             "sector": sector.to_numpy(),
         }
     )
-    return _with_track_position(canonical, seg, frame.index)
+    canonical = _with_track_position(canonical, seg, frame.index)
+    return _with_study_channels(canonical, seg, frame.index)
+
+
+def _with_study_channels(
+    canonical: pd.DataFrame, seg: pd.DataFrame, kept: pd.Index
+) -> pd.DataFrame:
+    """Carry the channels a comparative study is measured on.
+
+    Lap time alone cannot say whether coaching made somebody drive better or
+    merely faster and more recklessly, so the objective measures include leaving
+    the track and collecting damage. Both exist in the recording and were simply
+    not reaching the canonical lap, which is the file every analysis reads.
+
+    Each is optional and independent: a source that publishes one but not the
+    other still contributes what it has.
+    """
+    for name, source in (("track_pos", "track_pos"), ("damage", "damage")):
+        if source not in seg.columns:
+            continue
+        values = pd.to_numeric(seg[source], errors="coerce").reindex(kept)
+        if not np.isfinite(values).all():
+            continue  # a partial channel would understate every count drawn from it
+        canonical[name] = values.round(4).to_numpy()
+    return canonical
 
 
 def _with_track_position(

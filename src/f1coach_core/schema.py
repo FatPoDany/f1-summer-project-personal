@@ -32,11 +32,19 @@ x, y      m       world position; OPTIONAL, present together or not at all.
                   Distance alone cannot draw a track, so the replay needs
                   these; laps from a source without a position channel stay
                   fully analysable and simply cannot be mapped.
+track_pos --      lateral position, 0 at the centre line and +-1 at the track
+                  edges, so |track_pos| > 1 means the car is off the track.
+                  OPTIONAL. Carried because a comparative study is judged on
+                  more than lap time: leaving the track is one of the objective
+                  measures of whether coaching changed how somebody drove.
+damage    --      cumulative damage, monotonically non-decreasing within a lap.
+                  OPTIONAL. Increases mark incidents; the level itself is only
+                  meaningful relative to where the lap started.
 """
 
 SCHEMA_VERSION = 1
 SUPPORTED_VERSIONS = (1,)
 
 REQUIRED_COLUMNS = ("t", "speed", "throttle", "brake", "steer", "gear")
-OPTIONAL_COLUMNS = ("dist", "sector", "x", "y")  # x/y: world position, for the track map
+OPTIONAL_COLUMNS = ("dist", "sector", "x", "y", "track_pos", "damage")
 CANONICAL_ORDER = ("t", "dist", "speed", "throttle", "brake", "steer", "gear", "sector")

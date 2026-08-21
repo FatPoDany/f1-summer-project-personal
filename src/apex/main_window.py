@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 
+from PySide6.QtCore import QSettings
 from PySide6.QtGui import (
     QAction,
     QActionGroup,
@@ -24,6 +25,7 @@ from apex.capture_view import CaptureGuideView, _saved_summary
 from apex.compare_view import CompareView
 from apex.garage_view import GarageView
 from apex.live_view import LivePitWallView
+from apex.study_view import StudyView
 from apex.synthetic_capture_view import SyntheticCaptureView
 from f1coach_core import (
     Lap,
@@ -51,7 +53,12 @@ class MainWindow(QMainWindow):
         self._synthetic = SyntheticCaptureView(self) if _research_mode_enabled() else None
         self._analysis = AnalysisView(self)
         self._compare = CompareView(self)
-        self._live = LivePitWallView(self)
+        # Live coaching is a different intervention from the post-drive coaching
+        # the study is testing. A participant who used it is no longer a subject
+        # who only received a debrief, so it stays out of their reach.
+        research = _research_mode_enabled()
+        self._live = LivePitWallView(self) if research else None
+        self._study = StudyView(self) if research else None
         self._stacked = QStackedWidget(self)
         self._stacked.addWidget(self._garage)
         self._stacked.addWidget(self._capture)
@@ -59,7 +66,10 @@ class MainWindow(QMainWindow):
             self._stacked.addWidget(self._synthetic)
         self._stacked.addWidget(self._analysis)
         self._stacked.addWidget(self._compare)
-        self._stacked.addWidget(self._live)
+        if self._study is not None:
+            self._stacked.addWidget(self._study)
+        if self._live is not None:
+            self._stacked.addWidget(self._live)
         self.setCentralWidget(self._stacked)
 
         self._garage.lapOpened.connect(self.show_analysis)
@@ -75,6 +85,22 @@ class MainWindow(QMainWindow):
         self._garage.refresh_sessions()
 
     # -- navigation ----------------------------------------------------------
+
+    def _set_research_mode(self, enabled: bool) -> None:
+        QSettings("Apex", "Apex").setValue(RESEARCH_SETTING, enabled)
+        QMessageBox.information(
+            self,
+            "Research tools",
+            "Research tools are "
+            + ("on" if enabled else "off")
+            + ". Restart Apex for the change to take effect.",
+        )
+
+    def _show_study(self) -> None:
+        # Reloaded on entry: laps arrive from capture and from folders a
+        # researcher drops in, so a cached view would quietly go stale.
+        self._study.reload()
+        self._stacked.setCurrentWidget(self._study)
 
     def show_garage(self) -> None:
         self._stacked.setCurrentWidget(self._garage)
@@ -177,6 +203,16 @@ class MainWindow(QMainWindow):
     # -- chrome ---------------------------------------------------------------
 
     def _build_menu_and_toolbar(self) -> None:
+        view_menu = self.menuBar().addMenu("&View")
+        self._research_action = QAction("Research tools", self, checkable=True)
+        self._research_action.setChecked(_research_mode_enabled())
+        self._research_action.setToolTip(
+            "Study Results, Robot Pilot and Live Pit Wall. Off for participants: "
+            "live coaching is a different intervention from the one being tested."
+        )
+        self._research_action.toggled.connect(self._set_research_mode)
+        view_menu.addAction(self._research_action)
+
         file_menu = self.menuBar().addMenu("&File")
 
         open_action = QAction("&Open Telemetry CSV…", self)
@@ -226,16 +262,27 @@ class MainWindow(QMainWindow):
         self._compare_action.triggered.connect(
             lambda: self._stacked.setCurrentWidget(self._compare)
         )
-        self._live_action = QAction("Live Pit Wall", self, checkable=True)
-        self._live_action.triggered.connect(
-            lambda: self._stacked.setCurrentWidget(self._live)
-        )
+        self._study_action = None
+        if self._study is not None:
+            self._study_action = QAction("Study Results", self, checkable=True)
+            self._study_action.setToolTip(
+                "Baseline against coached, per participant, and the export for statistics"
+            )
+            self._study_action.triggered.connect(self._show_study)
+            self._study.status.connect(lambda text: self.statusBar().showMessage(text))
+        self._live_action = None
+        if self._live is not None:
+            self._live_action = QAction("Live Pit Wall", self, checkable=True)
+            self._live_action.triggered.connect(
+                lambda: self._stacked.setCurrentWidget(self._live)
+            )
         for action in (
             self._garage_action,
             self._capture_action,
             self._synthetic_action,
             self._analysis_action,
             self._compare_action,
+            self._study_action,
             self._live_action,
         ):
             if action is None:
@@ -263,7 +310,8 @@ class MainWindow(QMainWindow):
         self._capture.shutdown(timeout_s=2.0)
         if self._synthetic is not None:
             self._synthetic.shutdown(timeout_s=2.0)
-        self._live.shutdown(timeout_s=2.0)
+        if self._live is not None:
+            self._live.shutdown(timeout_s=2.0)
         # The model server is a child process holding 2.1 GB; leaving it behind
         # would keep that resident after the window is gone.
         self._analysis.coach_shutdown()
@@ -303,9 +351,22 @@ class MainWindow(QMainWindow):
         self.open_path(event.mimeData().urls()[0].toLocalFile())
 
 
+RESEARCH_SETTING = "research_tools"
+
+
 def _research_mode_enabled() -> bool:
+    """Whether the researcher-facing screens exist in this window.
+
+    An environment variable alone was the wrong gate: it hid the research tools
+    from participants, which was the point, but also from the researchers, who
+    are not going to set a variable before launching a desktop app they double
+    clicked. The stored setting is the usable half; the variable still wins for
+    scripted runs and tests.
+    """
     value = os.environ.get("APEX_RESEARCH_MODE", "")
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+    if value.strip():
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(QSettings("Apex", "Apex").value(RESEARCH_SETTING, False, type=bool))
 
 
 def _run_identity(run_dir: Path) -> StudyIdentity:

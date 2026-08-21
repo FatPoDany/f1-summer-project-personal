@@ -576,3 +576,39 @@ def test_recovery_refuses_a_folder_with_nothing_to_register(torcs_binary, tmp_pa
     with pytest.raises(HumanCaptureError, match="no usable telemetry"):
         finish_capture(capture_dir)
     assert list_runs() == []
+
+
+def test_the_study_assignment_matches_the_race_configuration_it_ships(torcs_binary):
+    """A preset that names a different track from the XML would silently mislead."""
+    from racecoach.telemetry.human_capture import default_study_preset
+
+    preset = default_study_preset(torcs_binary)
+    xml = Path("integrations/torcs-1.3.9/overlay/src/raceman/apexstudy.xml").read_text("utf-8")
+
+    assert f'val="{preset.track_id}"' in xml
+    assert f'name="laps" val="{preset.laps}"' in xml
+
+
+def test_every_participant_is_assigned_the_same_car(torcs_binary):
+    """An uncontrolled car would confound the comparison the study is built on.
+
+    The raceman does not choose the human's car -- TORCS takes it from the driver
+    profile -- so the control lives in the shipped human.xml that each fresh
+    profile is seeded from, and the preset must agree with it.
+    """
+    from racecoach.telemetry.human_capture import default_study_preset
+    from racecoach.telemetry.torcs_runtime import torcs_data_root
+
+    preset = default_study_preset(torcs_binary)
+    template = torcs_data_root(torcs_binary) / "drivers" / "human" / "human.xml"
+    if not template.is_file():
+        pytest.skip("no installed TORCS runtime on this machine")
+    assert f'val="{preset.car_id}"' in template.read_text("latin-1")
+
+
+def test_damage_is_recorded_but_can_never_end_a_participants_session():
+    """Incidents are a measurement. Being retired by them would destroy the data."""
+    xml = Path("integrations/torcs-1.3.9/overlay/src/raceman/apexstudy.xml").read_text("utf-8")
+
+    assert 'name="damage factor" val="1"' in xml  # damage accrues, so it can be counted
+    assert 'name="maximum dammage" val="0"' in xml  # 0 disables retirement in simu.cpp

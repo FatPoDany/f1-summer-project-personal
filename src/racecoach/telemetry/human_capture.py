@@ -180,11 +180,19 @@ class HumanCaptureResult:
 
 
 def default_study_preset(torcs_binary: str | Path) -> TorcsStudyPreset:
+    """The fixed assignment every participant drives.
+
+    aalborg rather than the speedway it started on: a comparative study is judged
+    on more than lap time, and CG Speedway 1 has enough asphalt run-off that a
+    participant measured 14 m outside the track edge still collected no damage at
+    all. A narrower circuit with the barrier closer makes a mistake register as
+    something, which is what gives the incident count any power to discriminate.
+    """
     race_config = torcs_raceman_dir(torcs_binary) / "apexstudy.xml"
     return TorcsStudyPreset(
         preset_id="apex-study-v1",
         display_name="Apex Study v1",
-        track_id="g-track-1",
+        track_id="aalborg",
         track_category="road",
         car_id="car7-trb1",
         laps=5,

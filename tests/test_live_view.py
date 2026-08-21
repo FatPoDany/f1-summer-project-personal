@@ -51,7 +51,24 @@ def make_snapshot(**overrides) -> TelemetrySnapshot:
     return TelemetrySnapshot(**values)
 
 
-def test_live_pit_wall_is_toolbar_reachable_but_does_not_auto_connect(qtbot):
+def test_live_pit_wall_is_out_of_a_participants_reach(qtbot, monkeypatch):
+    """Live coaching is a different intervention from the debrief under test.
+
+    A participant who used it is no longer a subject who received only a
+    post-drive debrief, so it must not be one navigation click away for them.
+    """
+    monkeypatch.delenv("APEX_RESEARCH_MODE", raising=False)
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    assert window._live is None
+    assert window._live_action is None
+
+
+def test_live_pit_wall_is_reachable_for_research_and_does_not_auto_connect(
+    qtbot, monkeypatch
+):
+    monkeypatch.setenv("APEX_RESEARCH_MODE", "1")
     window = MainWindow()
     qtbot.addWidget(window)
 

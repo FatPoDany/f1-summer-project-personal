@@ -9,6 +9,7 @@
     racecoach recover-capture      register laps a crashed session left unregistered
     racecoach debrief <session>    coached debrief for a folder of canonical laps
     racecoach install-model <f>   adopt a Granite weights file you already have
+    racecoach study-summary       per-participant, per-phase rows for statistics
     racecoach capture-synthetic    run pinned unattended robot reference sessions
     racecoach report               render the post-race report
 
@@ -113,6 +114,21 @@ def main(argv: list[str] | None = None) -> int:
         help="served Granite model alias (or GRANITE_MODEL)",
     )
     from racecoach.telemetry.torcs_runtime import default_torcs_binary
+
+    study_cmd = commands.add_parser(
+        "study-summary",
+        help="one row per participant per phase, for a paired statistical test",
+    )
+    study_cmd.add_argument(
+        "roots",
+        nargs="*",
+        type=Path,
+        default=None,
+        help="session folders, or folders of them; defaults to the whole workspace",
+    )
+    study_cmd.add_argument(
+        "--out", type=Path, default=None, help="write CSV here instead of stdout"
+    )
 
     install_model_cmd = commands.add_parser(
         "install-model",
@@ -336,6 +352,39 @@ def _dispatch(args: argparse.Namespace) -> int:
                 print("Warning: Granite worker did not stop before its timeout", file=sys.stderr)
         print(f"Next: racecoach analyze {run_dir.name} · racecoach coach {run_dir.name}"
               f" · racecoach report --run {run_dir.name}")
+        return 0
+    if args.command == "study-summary":
+        from f1coach_core.study import summarise_all, summary_csv
+        from f1coach_core.workspace import list_sessions
+        from racecoach.granite.report import session_laps
+
+        roots = args.roots or list_sessions()
+        laps = []
+        for root in roots:
+            found = session_laps(root)
+            if found:
+                laps.extend(found)
+                continue
+            # A folder of session folders: what a researcher gets after pooling
+            # what several participants sent in.
+            for child in sorted(Path(root).iterdir()) if Path(root).is_dir() else []:
+                if child.is_dir():
+                    laps.extend(session_laps(child))
+        if not laps:
+            raise RunImportError("No readable laps found to summarise.")
+
+        summaries = summarise_all(laps)
+        if not summaries:
+            raise RunImportError(
+                f"{len(laps)} laps found, but none carry both a driver and a phase, "
+                "so they cannot be assigned to a group."
+            )
+        text = summary_csv(summaries)
+        if args.out:
+            args.out.write_text(text, encoding="utf-8")
+            print(f"{len(summaries)} rows from {len(laps)} laps -> {args.out}")
+        else:
+            print(text, end="")
         return 0
     if args.command == "install-model":
         from racecoach.granite import model as granite_model
