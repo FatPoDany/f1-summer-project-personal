@@ -194,15 +194,24 @@ class CaptureCompletePage(QWidget):
         next_steps = QLabel(
             "Your laps are already in the Garage on this computer — nothing further "
             "is needed to save them.\n\n"
-            "To pass them to the research team, send them the whole folder shown "
-            "above. It holds the raw recording and its integrity manifest."
+            "To pass them to the research team, use the button below. It puts this "
+            "whole session into one file you can email or copy, with a checksum of "
+            "every part so the team can tell if anything was lost on the way."
         )
         next_steps.setWordWrap(True)
         buttons = QHBoxLayout()
+        # First and widest: for the study, handing the data over is the point of
+        # the session, and it is the one step nothing else in Apex can do for them.
+        self.package_button = QPushButton("Save a file to send")
+        self.package_button.setMinimumHeight(44)
+        self.package_button.setToolTip(
+            "One file containing this session, checksummed so damage in transit shows up"
+        )
         self.new_session_button = QPushButton("Collect another session")
         self.new_session_button.setMinimumHeight(44)
         self.open_results_button = QPushButton("View my laps")
         self.open_results_button.setMinimumHeight(44)
+        buttons.addWidget(self.package_button)
         buttons.addWidget(self.new_session_button)
         buttons.addWidget(self.open_results_button)
         buttons.addStretch(1)

@@ -7,6 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import QThreadPool, Signal
 from PySide6.QtWidgets import (
     QDialog,
+    QFileDialog,
     QFrame,
     QLabel,
     QScrollArea,
@@ -20,6 +21,7 @@ from apex.background_dialog import BackgroundDialog
 from apex.capture_pages import CaptureCompletePage, CaptureDrivePage, CaptureSetupPage
 from apex.capture_task import CaptureFunction, HumanCaptureTask
 from f1coach_core.participant import Background, load_background, save_background
+from racecoach.telemetry.handover import HandoverError, package
 from racecoach.telemetry.human_capture import (
     HumanCaptureConfig,
     HumanCaptureResult,
@@ -97,6 +99,7 @@ class CaptureGuideView(QWidget):
         self._torcs_binary = Path(torcs_binary or default_torcs_binary())
         self._study_preset = study_preset or default_study_preset(self._torcs_binary)
         self._task: HumanCaptureTask | None = None
+        self._result_capture_dir: str | None = None
         self._result_run_dirs: list[str] = []
         self._build_ui()
         self._update_start_state()
@@ -162,6 +165,7 @@ class CaptureGuideView(QWidget):
         self._result_path = self._complete_page.result_path
         self._new_session_button = self._complete_page.new_session_button
         self._open_results_button = self._complete_page.open_results_button
+        self._package_button = self._complete_page.package_button
         self._participant_id.textChanged.connect(self._update_start_state)
         for check in self._readiness_checks:
             check.toggled.connect(self._update_start_state)
@@ -169,6 +173,7 @@ class CaptureGuideView(QWidget):
         self._stop_button.clicked.connect(self.stop_capture)
         self._new_session_button.clicked.connect(self.reset_guide)
         self._open_results_button.clicked.connect(self._request_results)
+        self._package_button.clicked.connect(self._package_session)
 
     def start_capture(self) -> None:
         if self._task is not None:
@@ -225,11 +230,48 @@ class CaptureGuideView(QWidget):
         self._result_summary.setText(_saved_summary(result.run_dirs))
         self._result_path.setText(f"Send this folder to the researchers: {result.capture_dir}")
         self._result_run_dirs = [str(path) for path in result.run_dirs]
+        self._result_capture_dir = str(result.capture_dir)
         self._pages.setCurrentWidget(self._complete_page)
         self._new_session_button.setFocus()
         self.sessionFinished.emit(
             str(result.capture_dir), self._result_run_dirs
         )
+
+    def _package_session(self) -> None:
+        """Turn this session into the one file the participant has to send.
+
+        Defaulted onto the Desktop rather than into the workspace: the folder
+        Apex keeps its data in is not somewhere a participant browses, and a file
+        they cannot find is one they will not send.
+        """
+        if self._result_capture_dir is None:
+            return
+        source = Path(self._result_capture_dir)
+        suggested = Path.home() / "Desktop"
+        if not suggested.is_dir():
+            suggested = Path.home()
+        target, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save the file to send",
+            str(suggested / f"{source.name}.zip"),
+            "Apex handover (*.zip)",
+        )
+        if not target:
+            return
+        try:
+            result = package(source, target)
+        except HandoverError as exc:
+            self._show_result_message(str(exc), error=True)
+            return
+        self._show_result_message(
+            f"Saved {result.files} files to {result.path}. Send that one file to "
+            "the research team — they can check it arrived intact."
+        )
+
+    def _show_result_message(self, text: str, *, error: bool = False) -> None:
+        colour = theme.RED if error else theme.TEXT_DIM
+        self._result_path.setStyleSheet(f"color: {colour};")
+        self._result_path.setText(text)
 
     def _request_results(self) -> None:
         if self._result_run_dirs:

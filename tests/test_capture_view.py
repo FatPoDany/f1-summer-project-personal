@@ -222,3 +222,69 @@ def test_the_saved_summary_stays_useful_when_the_count_is_unreadable(tmp_path):
     run_dir = tmp_path / "human-1"
     run_dir.mkdir()
     assert "saved" in _saved_summary([run_dir])
+
+
+
+def _completed_view(qtbot, tmp_path, torcs_binary, study_preset, capture_dir):
+    """Drive a fake capture to the completion page, as a participant would."""
+    import json
+
+    from racecoach.telemetry.human_capture import HumanCaptureResult
+
+    run_dir = tmp_path / "runs" / "human-1"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "meta.json").write_text(json.dumps({"laps_seen": [1]}), "utf-8")
+
+    def fake_capture(config, *, runner, stop_requested):
+        del config, runner, stop_requested
+        return HumanCaptureResult(capture_dir=capture_dir, run_dirs=(run_dir,))
+
+    view = CaptureGuideView(
+        capture_fn=fake_capture, torcs_binary=torcs_binary, study_preset=study_preset
+    )
+    qtbot.addWidget(view)
+    make_ready(view)
+    with qtbot.waitSignal(view.sessionFinished, timeout=2000):
+        view._start_button.click()
+    return view
+
+
+def test_the_participant_can_save_one_file_to_send(
+    qtbot, tmp_path, torcs_binary, study_preset, monkeypatch
+):
+    """Handing the data over is the point of the session, so it is one click."""
+    import json
+
+    capture_dir = tmp_path / "A001-baseline-20260821-120000"
+    capture_dir.mkdir()
+    (capture_dir / "human-1.csv").write_text("t,speed\n0,10\n", encoding="utf-8")
+    (capture_dir / "manifest.json").write_text(
+        json.dumps({"participant_id": "A001"}), encoding="utf-8"
+    )
+    view = _completed_view(qtbot, tmp_path, torcs_binary, study_preset, capture_dir)
+
+    target = tmp_path / "to-send.zip"
+    monkeypatch.setattr(
+        "apex.capture_view.QFileDialog.getSaveFileName", lambda *a, **k: (str(target), "")
+    )
+    view._package_button.click()
+
+    assert target.is_file()
+    assert "Send that one file" in view._result_path.text()
+
+
+def test_saving_a_file_to_send_reports_a_failure_instead_of_looking_done(
+    qtbot, tmp_path, torcs_binary, study_preset, monkeypatch
+):
+    empty = tmp_path / "nothing-here"
+    empty.mkdir()
+    view = _completed_view(qtbot, tmp_path, torcs_binary, study_preset, empty)
+
+    monkeypatch.setattr(
+        "apex.capture_view.QFileDialog.getSaveFileName",
+        lambda *a, **k: (str(tmp_path / "out.zip"), ""),
+    )
+    view._package_button.click()
+
+    assert "no files to hand over" in view._result_path.text()
+    assert not (tmp_path / "out.zip").exists()
