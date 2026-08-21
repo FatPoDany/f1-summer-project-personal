@@ -173,3 +173,86 @@ def test_the_shipped_pins_match_the_shell_script(monkeypatch):
     assert f'MODEL_FILE="{gm.MODEL_FILE}"' in script
     assert f'MODEL_REVISION="{gm.MODEL_REVISION}"' in script
     assert os.path.basename(gm.MODEL_URL) == gm.MODEL_FILE
+
+
+def test_a_second_source_is_tried_when_the_first_cannot_be_reached(cache, monkeypatch):
+    """huggingface.co is unreachable on some participants' networks."""
+    import urllib.error
+
+    payload = b"granite weights" * 40
+    pin_payload(monkeypatch, payload)
+    tried = []
+
+    def opener(request):
+        tried.append(request.full_url)
+        if "huggingface.co" in request.full_url:
+            raise urllib.error.URLError("timed out")
+        return FakeResponse(payload)
+
+    path = gm.ensure_model(opener=opener)
+
+    assert len(tried) == 2 and "hf-mirror.com" in tried[1]
+    assert path.read_bytes() == payload
+
+
+def test_every_source_failing_says_how_to_supply_the_file_by_hand(cache, monkeypatch):
+    import urllib.error
+
+    payload = b"granite weights" * 40
+    pin_payload(monkeypatch, payload)
+
+    def opener(_request):
+        raise urllib.error.URLError("timed out")
+
+    with pytest.raises(gm.ModelError) as caught:
+        gm.ensure_model(opener=opener)
+    message = str(caught.value)
+    assert "any known source" in message
+    assert "install-model" in message
+    assert gm.MODEL_FILE in message
+
+
+def test_an_explicit_url_replaces_the_built_in_sources(cache, monkeypatch):
+    monkeypatch.setenv("GRANITE_MODEL_URL", "https://example.invalid/model.gguf")
+    assert gm.model_urls() == ("https://example.invalid/model.gguf",)
+
+
+def test_a_mirror_serving_the_wrong_bytes_is_still_refused(cache, monkeypatch):
+    """The digest is what makes any source safe to use."""
+    import urllib.error
+
+    payload = b"granite weights" * 40
+    pin_payload(monkeypatch, payload)
+
+    def opener(request):
+        if "huggingface.co" in request.full_url:
+            raise urllib.error.URLError("timed out")
+        return FakeResponse(b"a different model entirely" * 20)
+
+    with pytest.raises(gm.ModelError, match="failed verification"):
+        gm.ensure_model(opener=opener)
+    assert not (cache / gm.MODEL_FILE).exists()
+
+
+def test_a_file_delivered_by_hand_is_accepted_once_verified(cache, monkeypatch, tmp_path):
+    payload = b"granite weights" * 40
+    pin_payload(monkeypatch, payload)
+    handed_over = tmp_path / "from-a-memory-stick.gguf"
+    handed_over.write_bytes(payload)
+
+    path = gm.import_model(handed_over)
+
+    assert path == cache / gm.MODEL_FILE
+    assert path.read_bytes() == payload
+    assert gm.available()
+
+
+def test_a_file_delivered_by_hand_that_is_not_the_model_is_refused(cache, monkeypatch, tmp_path):
+    payload = b"granite weights" * 40
+    pin_payload(monkeypatch, payload)
+    wrong = tmp_path / "something-else.gguf"
+    wrong.write_bytes(b"not the model")
+
+    with pytest.raises(gm.ModelError, match="not the pinned Granite model"):
+        gm.import_model(wrong)
+    assert not gm.available()

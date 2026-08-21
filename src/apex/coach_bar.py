@@ -123,6 +123,9 @@ class CoachBar(QWidget):
     def _on_download_failed(self, _token: object, message: str) -> None:
         self._download = None
         self._progress.hide()
+        # The message already carries the manual route when every source failed;
+        # keeping it whole matters more here than keeping the strip short,
+        # because on a network that blocks the model hosts retrying is futile.
         self._status.setText(message)
         self._button.setText("Try again")
 

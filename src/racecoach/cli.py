@@ -8,6 +8,7 @@
     racecoach capture-human        record a human TORCS session without controlling it
     racecoach recover-capture      register laps a crashed session left unregistered
     racecoach debrief <session>    coached debrief for a folder of canonical laps
+    racecoach install-model <f>   adopt a Granite weights file you already have
     racecoach capture-synthetic    run pinned unattended robot reference sessions
     racecoach report               render the post-race report
 
@@ -112,6 +113,14 @@ def main(argv: list[str] | None = None) -> int:
         help="served Granite model alias (or GRANITE_MODEL)",
     )
     from racecoach.telemetry.torcs_runtime import default_torcs_binary
+
+    install_model_cmd = commands.add_parser(
+        "install-model",
+        help="adopt a Granite weights file supplied by other means",
+    )
+    install_model_cmd.add_argument(
+        "gguf", type=Path, help="the granite-4.1-3b-Q4_K_M.gguf file to verify and keep"
+    )
 
     debrief_cmd = commands.add_parser(
         "debrief",
@@ -327,6 +336,12 @@ def _dispatch(args: argparse.Namespace) -> int:
                 print("Warning: Granite worker did not stop before its timeout", file=sys.stderr)
         print(f"Next: racecoach analyze {run_dir.name} · racecoach coach {run_dir.name}"
               f" · racecoach report --run {run_dir.name}")
+        return 0
+    if args.command == "install-model":
+        from racecoach.granite import model as granite_model
+
+        path = granite_model.import_model(args.gguf)
+        print(f"Verified Granite model installed -> {path}")
         return 0
     if args.command == "debrief":
         from racecoach.granite import report as granite_report

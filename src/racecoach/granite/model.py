@@ -25,7 +25,22 @@ MODEL_REVISION = "ab4701481089b58a082ef63cc1cee738887293ff"
 MODEL_FILE = "granite-4.1-3b-Q4_K_M.gguf"
 MODEL_SIZE = 2_099_501_664
 MODEL_SHA256 = "662b0626cd58f443baea23559b469df6576a81d349649c59413b36a9fb32eb29"
-MODEL_URL = f"https://huggingface.co/{MODEL_REPO}/resolve/{MODEL_REVISION}/{MODEL_FILE}"
+_PATH = f"{MODEL_REPO}/resolve/{MODEL_REVISION}/{MODEL_FILE}"
+# Tried in order. A mirror is safe here precisely because of the digest above:
+# bytes that do not match the pin are discarded whoever served them, so the only
+# thing a second source can change is whether the download completes at all.
+# huggingface.co is unreachable from some of the networks participants are on.
+MODEL_URLS = (
+    f"https://huggingface.co/{_PATH}",
+    f"https://hf-mirror.com/{_PATH}",
+)
+MODEL_URL = MODEL_URLS[0]
+
+
+def model_urls() -> tuple[str, ...]:
+    """Where to look for the weights, most preferred first."""
+    override = os.environ.get("GRANITE_MODEL_URL")
+    return (override,) if override else MODEL_URLS
 
 _CHUNK = 1024 * 1024
 
@@ -139,7 +154,7 @@ def ensure_model(
             f"still needed under {destination.parent}."
         )
 
-    _download(partial, received, on_progress, should_cancel, opener)
+    _download_from_any(partial, received, on_progress, should_cancel, opener)
 
     if not is_verified(partial):
         partial.unlink(missing_ok=True)
@@ -152,14 +167,69 @@ def ensure_model(
     return destination
 
 
-def _download(
+def _download_from_any(
     partial: Path,
     received: int,
     on_progress: ProgressHook | None,
     should_cancel: Callable[[], bool] | None,
     opener: Callable[[urllib.request.Request], object] | None,
 ) -> None:
-    request = urllib.request.Request(MODEL_URL)  # noqa: S310 - pinned https URL
+    """Try each source in turn, giving up only when every one has failed."""
+    failures: list[str] = []
+    for url in model_urls():
+        try:
+            _download(url, partial, received, on_progress, should_cancel, opener)
+            return
+        except ModelError as exc:
+            if should_cancel and should_cancel():
+                raise
+            failures.append(f"{url}: {exc}")
+            # A source that answered partially leaves usable bytes behind, so the
+            # next one resumes from wherever this one stopped.
+            received = partial.stat().st_size if partial.exists() else 0
+    raise ModelError(
+        "Could not download the Granite model from any known source.\n  "
+        + "\n  ".join(failures)
+        + f"\nIf your network cannot reach these, ask the study team for "
+        f"{MODEL_FILE} and put it at {model_path()}, or run "
+        f"`racecoach install-model <file>`."
+    )
+
+
+def import_model(source: str | Path) -> Path:
+    """Adopt a copy of the weights someone supplied by other means.
+
+    Networks that cannot reach a model host are exactly the case this exists for,
+    and the digest check means a file that arrived on a memory stick is worth no
+    less than one that arrived over HTTPS.
+    """
+    source = Path(source)
+    if not source.is_file():
+        raise ModelError(f"No such file: {source}")
+    if not is_verified(source):
+        raise ModelError(
+            f"{source} is not the pinned Granite model. Expected {MODEL_SIZE} "
+            f"bytes with SHA-256 {MODEL_SHA256}."
+        )
+    destination = model_path()
+    if is_verified(destination):
+        return destination
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if free_space_bytes(destination.parent) < MODEL_SIZE:
+        raise ModelError(f"Not enough free space under {destination.parent}.")
+    shutil.copyfile(source, destination)
+    return destination
+
+
+def _download(
+    url: str,
+    partial: Path,
+    received: int,
+    on_progress: ProgressHook | None,
+    should_cancel: Callable[[], bool] | None,
+    opener: Callable[[urllib.request.Request], object] | None,
+) -> None:
+    request = urllib.request.Request(url)  # noqa: S310 - pinned https URL
     if received:
         request.add_header("Range", f"bytes={received}-")
     open_url = opener or (lambda req: urllib.request.urlopen(req))  # noqa: S310
@@ -168,8 +238,8 @@ def _download(
         on_progress(Progress(received, MODEL_SIZE))
     try:
         response = open_url(request)
-    except urllib.error.URLError as exc:
-        raise ModelError(f"Could not reach the model download: {exc}") from exc
+    except (urllib.error.URLError, OSError) as exc:
+        raise ModelError(f"could not be reached ({exc})") from exc
 
     # A server that ignores the Range header answers 200 and starts from zero;
     # appending that to what we already have would corrupt the file silently.
