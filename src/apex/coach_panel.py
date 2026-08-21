@@ -41,6 +41,7 @@ from f1coach_core import (
 )
 from racecoach.granite import host as gh
 from racecoach.granite import model as gm
+from racecoach.granite import server as gs
 from racecoach.granite.server import GraniteServer, ServerError
 
 CARD_STYLE = (
@@ -88,13 +89,18 @@ class _RestoreTask(QRunnable):
         self.signals.finished.emit(saved)
 
 
-def _endpoint_is_configured() -> bool:
-    """Whether somebody already told Apex where a model server lives.
+def _endpoint_is_configured(managed: str | None = None) -> bool:
+    """Whether somebody else's model server is what we should be talking to.
 
-    Set by a researcher who runs their own, and by the tests. It is the signal
-    that Apex should not manage a server of its own.
+    Whether a researcher pointed Apex at their own server is a fact about how it
+    was launched. The endpoint Apex starts for itself is not, and conflating the
+    two was a real fault: after the first successful preparation the panel saw
+    the variable it had just written, concluded somebody had configured a
+    server, and stopped managing one. A later click then neither downloaded nor
+    started anything -- it just failed to connect to whatever had died.
     """
-    return bool(os.environ.get("GRANITE_BASE_URL"))
+    configured = os.environ.get("GRANITE_BASE_URL") or ""
+    return bool(configured) and configured != (managed or "")
 
 
 class _PrepareSignals(QObject):
@@ -312,6 +318,7 @@ class CoachPanel(QWidget):
         self._task: _CoachTask | None = None
         self._prepare: _PrepareTask | None = None
         self._server = GraniteServer()
+        self._managed_endpoint: str | None = None
         self._capability: gh.Capability | None = None
         self._restore_task: _RestoreTask | None = None
         self.report: CoachingReport | None = None
@@ -431,7 +438,7 @@ class CoachPanel(QWidget):
         depend on which lap happens to be on screen -- a button that changed as
         the participant clicked between laps read as a fault, not a choice.
         """
-        if _endpoint_is_configured():
+        if _endpoint_is_configured(self._managed_endpoint):
             self._coach_button.setText("Analyze lap")
             return
         capability = self._capability or gh.capability()
@@ -453,7 +460,7 @@ class CoachPanel(QWidget):
             self._prepare.cancel()
             return
 
-        if _endpoint_is_configured():
+        if _endpoint_is_configured(self._managed_endpoint):
             # Somebody has pointed this at a server of their own -- a researcher's
             # workstation, or a test. Downloading 2.1 GB and starting a second
             # one on top of that would be presumptuous.
@@ -470,6 +477,25 @@ class CoachPanel(QWidget):
             self._start_preparation(download=capability.needs_download)
             return
         self._start_analysis()
+
+    def coach_state(self) -> str:
+        """What the coach would do next, and why. Shown when it fails.
+
+        A failure that does not say which of download, start-up or the request
+        went wrong costs a round trip to find out, and on a participant's own
+        laptop there may not be a second chance to ask.
+        """
+        weights = gm.model_path()
+        try:
+            size = weights.stat().st_size
+        except OSError:
+            size = 0
+        binary = gs.server_binary()
+        return (
+            f"model server: {binary or 'not installed'} · "
+            f"weights: {size / 1e9:.2f} of {gm.MODEL_SIZE / 1e9:.2f} GB at {weights} · "
+            f"endpoint: {os.environ.get('GRANITE_BASE_URL') or self._server.base_url}"
+        )
 
     def _start_preparation(self, *, download: bool) -> None:
         task = _PrepareTask(self._server, download=download)
@@ -497,6 +523,7 @@ class CoachPanel(QWidget):
         self._prepare = None
         self._capability = None  # the model is present now
         # The provider reads this, so a server we started is the one it talks to.
+        self._managed_endpoint = self._server.base_url
         os.environ["GRANITE_BASE_URL"] = self._server.base_url
         os.environ.setdefault("GRANITE_MODEL", gm.MODEL_REPO.replace("-GGUF", ""))
         self._start_analysis()
@@ -610,10 +637,13 @@ class CoachPanel(QWidget):
         text = f"Coaching failed: {message}"
         if "GRANITE_BASE_URL" in text or "not reachable" in text:
             self._server.stop()
+            self._managed_endpoint = None
+            os.environ.pop("GRANITE_BASE_URL", None)
             text = (
                 "The coach stopped responding. Press Analyze lap to start it again. "
                 "Your lap analysis below is measured from telemetry and is unaffected."
             )
+        text += f"\n\n{self.coach_state()}"
         if self.audit_path is not None:  # audited arrives first, so this is current
             text += "\n\nThe full run record (prompt and raw response) is under Audit…"
         self._placeholder.setText(text)

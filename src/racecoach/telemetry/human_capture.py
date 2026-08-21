@@ -259,6 +259,7 @@ def capture_human_runs(
         profile_dir = workspace_root() / "torcs-profiles" / config.preset.preset_id
         environment[TORCS_LOCAL_DIR_ENV] = str(profile_dir)
         _write_screen_config(profile_dir, binary, config.preset)
+        _reset_display_mode(profile_dir, binary)
     try:
         completed = runner(
             command,
@@ -534,6 +535,65 @@ def _write_screen_config(
         lambda m: f"{m.group(1)}{sizes[m.group('name')]}{m.group(4)}", text, count=2
     )
     if count != 2:  # an unfamiliar screen.xml: leave TORCS's own defaults alone
+        return
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(updated, encoding="utf-8")
+    except OSError:
+        return
+
+
+# The in-race overlays, restored to what TORCS itself ships with. These are the
+# defaults read in grboard.cpp, not chosen values: the study wants every
+# participant to see the same thing, and "the same" is least arguable when it is
+# also "unmodified". TRACK_MAP_NORMAL_WITH_OPPONENTS is 1<<2.
+#
+# Restored every session because TORCS cycles these with the number keys and
+# writes the result straight back into the profile (grboard.cpp: selectBoard).
+# The driver board cycles 2 -> 0 -> 1, and 0 draws nothing, so a single stray
+# press of "1" while driving hides the lap and time panel for that session and
+# every session after it. A comparison where some participants could see their
+# lap time and others could not is not comparing what it thinks it is.
+_DISPLAY_DEFAULTS = {
+    "driver board": 2,
+    "driver counter": 1,
+    "G graph": 1,
+    "arcade": 0,
+    "map mode": 1 << 2,
+}
+_DISPLAY_SECTION = re.compile(
+    r'(<section\s+name="Display Mode">)(.*?)(</section>)', re.DOTALL
+)
+_DISPLAY_ATTR = re.compile(
+    r'(<attnum\s+name="(?P<name>[^"]+)"[^>]*?\bval=")(?P<value>[^"]*)(")'
+)
+
+
+def _reset_display_mode(profile_dir: Path, torcs_binary: Path) -> None:
+    """Put the in-race overlays back to stock before launch.
+
+    A profile that has never had a key pressed carries no Display Mode section
+    at all, so there is nothing to reset and TORCS uses its own defaults --
+    which is the same outcome. Nothing here is worth failing a session over.
+    """
+    destination = profile_dir / "config" / "graph.xml"
+    source = torcs_raceman_dir(torcs_binary).parent / "graph.xml"
+    try:
+        text = (destination if destination.exists() else source).read_text(encoding="utf-8")
+    except OSError:
+        return
+
+    def fix_section(match: re.Match) -> str:
+        def fix_attr(attr: re.Match) -> str:
+            wanted = _DISPLAY_DEFAULTS.get(attr.group("name"))
+            if wanted is None:
+                return attr.group(0)
+            return f"{attr.group(1)}{wanted}{attr.group(4)}"
+
+        return match.group(1) + _DISPLAY_ATTR.sub(fix_attr, match.group(2)) + match.group(3)
+
+    updated, count = _DISPLAY_SECTION.subn(fix_section, text)
+    if not count or updated == text:
         return
     try:
         destination.parent.mkdir(parents=True, exist_ok=True)

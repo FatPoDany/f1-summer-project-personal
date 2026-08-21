@@ -612,3 +612,89 @@ def test_damage_is_recorded_but_can_never_end_a_participants_session():
 
     assert 'name="damage factor" val="1"' in xml  # damage accrues, so it can be counted
     assert 'name="maximum dammage" val="0"' in xml  # 0 disables retirement in simu.cpp
+
+
+def test_the_human_driver_can_actually_take_damage():
+    """A rookie multiplies every impact by zero, so incidents could never be counted.
+
+    simuv2/categories.cpp: simDammageFactor[] = {0.0, 0.5, 0.8, 1.0, 1.0}, indexed
+    by skill level from rookie upwards. The shipped default is rookie, which is why
+    a participant who drove into a barrier still recorded no damage at all -- on
+    any track. Changing the circuit was never going to fix that.
+    """
+    human = Path("integrations/torcs-1.3.9/overlay/src/drivers/human/human.xml")
+    text = human.read_text("latin-1")
+
+    assert 'name="skill level" val="rookie"' not in text
+    assert 'name="skill level" val="amateur"' in text
+
+
+def test_enabling_damage_does_not_quietly_switch_on_tyre_wear_as_well():
+    """pro would. simSkidFactor and the pro-only rules are the cost of going higher."""
+    human = Path("integrations/torcs-1.3.9/overlay/src/drivers/human/human.xml")
+    assert 'name="skill level" val="pro"' not in human.read_text("latin-1")
+
+
+def _profile_with_display(profile_dir: Path, board: int) -> Path:
+    graph = profile_dir / "config" / "graph.xml"
+    graph.parent.mkdir(parents=True, exist_ok=True)
+    graph.write_text(
+        '<?xml version="1.0"?>\n<params name="graph">\n'
+        '  <section name="Graphic Objects">\n'
+        '    <attnum name="arcade" val="99"/>\n'  # outside the section: not ours to touch
+        "  </section>\n"
+        '  <section name="Display Mode">\n'
+        '    <section name="0">\n'
+        f'      <attnum name="driver board" val="{board}"/>\n'
+        '      <attnum name="map mode" val="1"/>\n'
+        '      <attnum name="fov factor" val="2.0"/>\n'
+        "    </section>\n"
+        "  </section>\n</params>\n",
+        encoding="utf-8",
+    )
+    return graph
+
+
+def test_a_hidden_lap_panel_is_restored_before_the_next_session(tmp_path, torcs_binary):
+    """One stray press of "1" while driving hides it for every session after.
+
+    grboard.cpp cycles the driver board 2 -> 0 -> 1 and writes the new value into
+    the profile, and 0 draws nothing. A study where some participants can see
+    their lap time and others cannot is not comparing what it thinks it is.
+    """
+    from racecoach.telemetry.human_capture import _reset_display_mode
+
+    profile = tmp_path / "profile"
+    graph = _profile_with_display(profile, board=0)
+
+    _reset_display_mode(profile, torcs_binary)
+
+    text = graph.read_text("utf-8")
+    assert 'name="driver board" val="2"' in text  # TORCS's own default, restored
+    assert 'name="map mode" val="4"' in text  # NORMAL_WITH_OPPONENTS
+
+
+def test_resetting_the_overlays_leaves_the_rest_of_the_file_alone(tmp_path, torcs_binary):
+    from racecoach.telemetry.human_capture import _reset_display_mode
+
+    profile = tmp_path / "profile"
+    graph = _profile_with_display(profile, board=0)
+
+    _reset_display_mode(profile, torcs_binary)
+
+    text = graph.read_text("utf-8")
+    assert 'name="arcade" val="99"' in text  # a same-named key in another section
+    assert 'name="fov factor" val="2.0"' in text  # not an overlay setting
+
+
+def test_a_profile_nobody_has_touched_needs_no_reset(tmp_path, torcs_binary):
+    """No Display Mode section means TORCS uses its own defaults, which is the goal."""
+    from racecoach.telemetry.human_capture import _reset_display_mode
+
+    profile = tmp_path / "profile"
+    graph = profile / "config" / "graph.xml"
+    graph.parent.mkdir(parents=True)
+    graph.write_text('<params name="graph"/>\n', encoding="utf-8")
+
+    _reset_display_mode(profile, torcs_binary)
+    assert graph.read_text("utf-8") == '<params name="graph"/>\n'

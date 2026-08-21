@@ -66,7 +66,8 @@ class StudyView(QWidget):
         self._headline.setStyleSheet(f"color: {theme.TEXT_DIM};")
 
         refresh = QPushButton("Reload")
-        refresh.clicked.connect(self.reload)
+        # clicked emits `checked`, which would arrive as `roots`.
+        refresh.clicked.connect(lambda: self.reload())
         self._export = QPushButton("Export CSV…")
         self._export.setToolTip(
             "One row per participant per phase, for a paired test in R, SPSS or Python"
