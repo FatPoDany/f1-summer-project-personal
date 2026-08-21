@@ -1,10 +1,12 @@
 """Guided, no-terminal workflow for collecting human TORCS telemetry."""
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import QThreadPool, Signal
 from PySide6.QtWidgets import (
+    QDialog,
     QFrame,
     QLabel,
     QScrollArea,
@@ -14,8 +16,10 @@ from PySide6.QtWidgets import (
 )
 
 from apex import theme
+from apex.background_dialog import BackgroundDialog
 from apex.capture_pages import CaptureCompletePage, CaptureDrivePage, CaptureSetupPage
 from apex.capture_task import CaptureFunction, HumanCaptureTask
+from f1coach_core.participant import Background, load_background, save_background
 from racecoach.telemetry.human_capture import (
     HumanCaptureConfig,
     HumanCaptureResult,
@@ -61,6 +65,13 @@ def _saved_summary(run_dirs) -> str:
     )
 
 
+def _prompt_for_background(participant_id: str, parent: QWidget) -> Background | None:
+    dialog = BackgroundDialog(participant_id, parent=parent)
+    if dialog.exec() != QDialog.DialogCode.Accepted:
+        return None
+    return dialog.background()
+
+
 class CaptureGuideView(QWidget):
     """Three-stage research guide: prepare, drive, confirm saved evidence."""
 
@@ -76,9 +87,13 @@ class CaptureGuideView(QWidget):
         capture_fn: CaptureFunction = capture_human_runs,
         torcs_binary: str | Path | None = None,
         study_preset: TorcsStudyPreset | None = None,
+        ask_background: Callable[[str, QWidget], Background | None] | None = None,
     ) -> None:
         super().__init__(parent)
         self._capture_fn = capture_fn
+        # Injectable because it is a modal: a headless run has nobody to dismiss
+        # it, and a test that hangs on a dialog teaches nothing.
+        self._ask_background = ask_background or _prompt_for_background
         self._torcs_binary = Path(torcs_binary or default_torcs_binary())
         self._study_preset = study_preset or default_study_preset(self._torcs_binary)
         self._task: HumanCaptureTask | None = None
@@ -166,6 +181,7 @@ class CaptureGuideView(QWidget):
         if not all(check.isChecked() for check in self._readiness_checks):
             self._show_form_message("Complete all readiness checks before starting.", error=True)
             return
+        self._ask_background_once(config.participant_id)
         self._show_form_message("")
         self._pages.setCurrentWidget(self._drive_page)
         self._drive_status.setText("Launching TORCS… recording starts with the Human driver.")
@@ -239,6 +255,24 @@ class CaptureGuideView(QWidget):
         self._show_form_message(f"Collection could not finish — {message}.", error=True)
         self._update_start_state(keep_message=True)
         self.sessionFailed.emit(message)
+
+    def _ask_background_once(self, participant_id: str) -> None:
+        """Ask about prior experience the first time this participant appears.
+
+        Before driving, so that knowing how they did cannot colour how they
+        describe themselves, and once per id, because asking every session
+        collects contradictions rather than data. Declining is a normal outcome
+        and must never stop the session.
+        """
+        if load_background(participant_id) is not None:
+            return
+        answers = self._ask_background(participant_id, self)
+        if answers is None:
+            return
+        try:
+            save_background(answers)
+        except OSError:
+            pass  # a session must never be blocked by a questionnaire
 
     def _is_current(self, token: object) -> bool:
         return self._task is not None and token is self._task.token

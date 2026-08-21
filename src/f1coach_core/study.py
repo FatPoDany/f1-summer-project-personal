@@ -19,6 +19,7 @@ from statistics import mean, pstdev
 import numpy as np
 
 from f1coach_core.lap import Lap
+from f1coach_core.participant import BACKGROUND_COLUMNS, background_columns
 
 # One sample beyond the edge is noise or a wheel clipping a kerb. A tenth of a
 # second at 50 Hz is the shortest thing worth calling an excursion.
@@ -196,7 +197,7 @@ def summarise_all(laps: list[Lap]) -> list[PhaseSummary]:
     return summaries
 
 
-SUMMARY_COLUMNS = (
+PERFORMANCE_COLUMNS = (
     "driver",
     "phase",
     "laps",
@@ -209,10 +210,37 @@ SUMMARY_COLUMNS = (
 )
 
 
-def summary_csv(summaries: list[PhaseSummary]) -> str:
-    """One row per participant per phase, ready for a paired test."""
-    lines = [",".join(SUMMARY_COLUMNS)]
+def summary_columns(with_background: bool = True) -> tuple[str, ...]:
+    if not with_background:
+        return PERFORMANCE_COLUMNS
+    background: list[str] = []
+    for name in BACKGROUND_COLUMNS:
+        background += [name, f"{name}_rank"]
+    return PERFORMANCE_COLUMNS + tuple(background)
+
+
+SUMMARY_COLUMNS = summary_columns()
+
+
+def summary_csv(summaries: list[PhaseSummary], *, backgrounds: dict | None = None) -> str:
+    """One row per participant per phase, ready for a paired test.
+
+    Prior experience rides along on the same rows. Whether the groups were
+    comparable to begin with is not a separate question from whether they
+    differed afterwards -- it is the question that decides what the difference
+    means -- so an analyst should not have to join two files to ask it.
+    """
+    columns = summary_columns()
+    lines = [",".join(columns)]
     for summary in summaries:
         row = summary.to_row()
-        lines.append(",".join(str(row[column]) for column in SUMMARY_COLUMNS))
+        found = (backgrounds or {}).get(summary.driver)
+        row.update(background_columns(found))
+        lines.append(",".join(_csv_cell(row.get(column, "")) for column in columns))
     return "\n".join(lines) + "\n"
+
+
+def _csv_cell(value: object) -> str:
+    """Quote anything containing a comma. The bands are prose, not identifiers."""
+    text = str(value)
+    return f'"{text}"' if "," in text else text

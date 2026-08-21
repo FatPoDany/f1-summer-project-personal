@@ -10,6 +10,8 @@
     racecoach debrief <session>    coached debrief for a folder of canonical laps
     racecoach install-model <f>   adopt a Granite weights file you already have
     racecoach study-summary       per-participant, per-phase rows for statistics
+    racecoach package <dir>       bundle one capture into a file to hand over
+    racecoach collect <zips>      verify and pool handovers from participants
     racecoach capture-synthetic    run pinned unattended robot reference sessions
     racecoach report               render the post-race report
 
@@ -114,6 +116,22 @@ def main(argv: list[str] | None = None) -> int:
         help="served Granite model alias (or GRANITE_MODEL)",
     )
     from racecoach.telemetry.torcs_runtime import default_torcs_binary
+
+    package_cmd = commands.add_parser(
+        "package", help="bundle one capture folder into a single file to hand over"
+    )
+    package_cmd.add_argument("capture_dir", type=Path)
+    package_cmd.add_argument(
+        "--out", type=Path, default=None, help="destination .zip (default: alongside)"
+    )
+
+    collect_cmd = commands.add_parser(
+        "collect", help="verify and unpack handovers from several participants"
+    )
+    collect_cmd.add_argument("archives", nargs="+", type=Path)
+    collect_cmd.add_argument(
+        "--into", type=Path, required=True, help="folder to pool the sessions into"
+    )
 
     study_cmd = commands.add_parser(
         "study-summary",
@@ -353,6 +371,24 @@ def _dispatch(args: argparse.Namespace) -> int:
         print(f"Next: racecoach analyze {run_dir.name} · racecoach coach {run_dir.name}"
               f" · racecoach report --run {run_dir.name}")
         return 0
+    if args.command == "package":
+        from racecoach.telemetry.handover import package
+
+        out = args.out or args.capture_dir.with_suffix(".zip")
+        result = package(args.capture_dir, out)
+        print(f"{result.files} files ({result.laps} CSV) -> {result.path}")
+        print("Send this one file to the research team.")
+        return 0
+    if args.command == "collect":
+        from racecoach.telemetry.handover import collect
+
+        results = collect(args.archives, args.into)
+        for handover in results:
+            who = handover.participant_id or "(no id)"
+            print(f"{who}: {handover.files} files -> {handover.path}")
+        print(f"{len(results)} handover(s) verified into {args.into}")
+        print(f"Next: racecoach study-summary {args.into} --out summary.csv")
+        return 0
     if args.command == "study-summary":
         from f1coach_core.study import summarise_all, summary_csv
         from f1coach_core.workspace import list_sessions
@@ -374,12 +410,17 @@ def _dispatch(args: argparse.Namespace) -> int:
             raise RunImportError("No readable laps found to summarise.")
 
         summaries = summarise_all(laps)
+        from f1coach_core.participant import load_background
+
+        backgrounds = {
+            summary.driver: load_background(summary.driver) for summary in summaries
+        }
         if not summaries:
             raise RunImportError(
                 f"{len(laps)} laps found, but none carry both a driver and a phase, "
                 "so they cannot be assigned to a group."
             )
-        text = summary_csv(summaries)
+        text = summary_csv(summaries, backgrounds=backgrounds)
         if args.out:
             args.out.write_text(text, encoding="utf-8")
             print(f"{len(summaries)} rows from {len(laps)} laps -> {args.out}")
