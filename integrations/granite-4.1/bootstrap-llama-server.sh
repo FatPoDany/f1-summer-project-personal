@@ -5,8 +5,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-LLAMA_TAG="b10355"
-LLAMA_COMMIT="dd1ea524333b1e697489067d7a4c39c60d32beee"
+LLAMA_TAG="b10549"
+LLAMA_COMMIT="b2e5e9b28b2484fbf94b543432ece638996a8b97"
 SOURCE_DIR="${LLAMA_CPP_SOURCE:-${TMPDIR:-/tmp}/apex-llama.cpp-${LLAMA_TAG}}"
 INSTALL_DIR="${LLAMA_CPP_INSTALL:-${REPO_ROOT}/.tools/llama.cpp-${LLAMA_TAG}}"
 

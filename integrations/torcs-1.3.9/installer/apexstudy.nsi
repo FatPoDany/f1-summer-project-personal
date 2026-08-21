@@ -66,6 +66,9 @@ Section "Apex and TORCS" SecMain
     IfFileExists "$INSTDIR\torcs-runtime\wtorcs.exe" +3 0
         MessageBox MB_ICONSTOP "Payload incomplete: torcs-runtime\wtorcs.exe is missing."
         Abort
+    IfFileExists "$INSTDIR\granite-runtime\llama-server.exe" +3 0
+        MessageBox MB_ICONSTOP "Payload incomplete: granite-runtime\llama-server.exe is missing."
+        Abort
 
     FileOpen $0 "$INSTDIR\${PAYLOAD_MARKER}" w
     FileWrite $0 "${PRODUCT_NAME}$\r$\n"

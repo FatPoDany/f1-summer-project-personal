@@ -7,6 +7,7 @@
     racecoach run                  drive through the TORCS Granite/SCR bridge
     racecoach capture-human        record a human TORCS session without controlling it
     racecoach recover-capture      register laps a crashed session left unregistered
+    racecoach debrief <session>    coached debrief for a folder of canonical laps
     racecoach capture-synthetic    run pinned unattended robot reference sessions
     racecoach report               render the post-race report
 
@@ -111,6 +112,26 @@ def main(argv: list[str] | None = None) -> int:
         help="served Granite model alias (or GRANITE_MODEL)",
     )
     from racecoach.telemetry.torcs_runtime import default_torcs_binary
+
+    debrief_cmd = commands.add_parser(
+        "debrief",
+        help="write a coached debrief for a session folder of canonical laps",
+    )
+    debrief_cmd.add_argument(
+        "session_dir", type=Path, help="a sessions/<name> folder of lap CSVs"
+    )
+    debrief_cmd.add_argument(
+        "--out", type=Path, default=None, help="write markdown here instead of stdout"
+    )
+    debrief_cmd.add_argument(
+        "--no-model",
+        action="store_true",
+        help="measure only; do not start or contact a model",
+    )
+    debrief_cmd.add_argument(
+        "--granite-base-url", default=None, help="OpenAI-compatible /v1 endpoint"
+    )
+    debrief_cmd.add_argument("--granite-model", default=None, help="served model alias")
 
     recover_cmd = commands.add_parser(
         "recover-capture",
@@ -306,6 +327,44 @@ def _dispatch(args: argparse.Namespace) -> int:
                 print("Warning: Granite worker did not stop before its timeout", file=sys.stderr)
         print(f"Next: racecoach analyze {run_dir.name} · racecoach coach {run_dir.name}"
               f" · racecoach report --run {run_dir.name}")
+        return 0
+    if args.command == "debrief":
+        from racecoach.granite import report as granite_report
+        from racecoach.granite import server as granite_server
+
+        laps = granite_report.session_laps(args.session_dir)
+        if not laps:
+            raise RunImportError(f"No readable laps in {args.session_dir}")
+
+        base_url = model = None
+        managed = None
+        if not args.no_model:
+            base_url = args.granite_base_url or os.environ.get("GRANITE_BASE_URL")
+            model = args.granite_model or os.environ.get("GRANITE_MODEL")
+            if base_url is None:
+                # Nothing configured: bring up the bundled server ourselves, the
+                # same way the app does for a participant. A researcher running
+                # this over a folder someone emailed them should not have to.
+                try:
+                    managed = granite_server.GraniteServer()
+                    base_url = managed.start()
+                    model = model or granite_server.gm.MODEL_REPO.replace("-GGUF", "")
+                except granite_server.ServerError as exc:
+                    print(f"racecoach: coaching unavailable ({exc})", file=sys.stderr)
+                    base_url = model = None
+                    managed = None
+        try:
+            result = granite_report.build_report(laps, base_url=base_url, model=model)
+        finally:
+            if managed is not None:
+                managed.stop()
+
+        text = granite_report.render_markdown(result)
+        if args.out:
+            args.out.write_text(text, encoding="utf-8")
+            print(f"Debrief -> {args.out}")
+        else:
+            print(text)
         return 0
     if args.command == "recover-capture":
         from racecoach.telemetry.human_capture import finish_capture

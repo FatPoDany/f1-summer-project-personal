@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-LLAMA_TAG="b10355"
+LLAMA_TAG="b10549"
 SERVER_BIN="${LLAMA_SERVER_BIN:-${REPO_ROOT}/.tools/llama.cpp-${LLAMA_TAG}/bin/llama-server}"
 MODEL_ALIAS="${GRANITE_MODEL:-ibm-granite/granite-4.1-3b}"
 MODEL_CACHE="${GRANITE_MODEL_CACHE:-${TMPDIR:-/tmp}/apex-granite-models}"

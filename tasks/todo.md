@@ -650,15 +650,56 @@ itself worked; everything below is what the run exposed.
   display. The researcher-facing corner table still reports `exit_throttle_pct`
   straight from the channel and can therefore print above 100; decide whether
   that column should say "commanded" or clamp too.
-- [ ] Let a model narrate these points once Task 32 lands. The points are already
-  the evidence it would be given.
+- [x] A model narrates these points now that Task 32 has landed, under the
+  invented-number guard described there. The points were already the evidence it
+  needed.
 
 ## Task 32: Granite without a terminal
 
-- [ ] The app must start and manage the model itself. Participants cannot run a
-  server from a command line, so today the coaching path is unreachable for them.
-  Delivery method is an open decision: bundling the weights would take the
-  installer from 380 MB to several GB.
+- [x] Delivery decided against the actual constraint: participants install on
+  their own laptops and some have no university VPN, which rules out a
+  lab-hosted endpoint, and shipping API credentials in a distributed installer
+  rules out a hosted one. So the runtime ships and the weights do not. The
+  llama.cpp CPU build for Windows is 18 MB and rides in the installer; the
+  2.1 GB of weights download once, on first use, into the workspace rather than
+  the temp directory so a reboot cannot cost a participant the download.
+  CPU rather than CUDA because the machines vary: the archive carries a
+  `ggml-cpu-*.dll` per instruction set and picks at run time, whereas a CUDA
+  build is useless without a matching driver.
+- [x] Both llama.cpp pins moved to `b10549`
+  (`b2e5e9b28b2484fbf94b543432ece638996a8b97`) so the Linux source build and the
+  Windows binary are the same revision. A researcher reproducing a participant's
+  coaching must be talking to an identically configured server, so a test asserts
+  the pins match across `build-windows.ps1`, the bootstrap script and
+  `granite/server.py`, and another asserts the server arguments match
+  `start-server.sh`.
+- [x] `granite/model.py` owns the weights: workspace path, resumable download,
+  size-then-digest verification, `.part` renamed only once verified. A file
+  already in place that is not the pinned one stops rather than being
+  overwritten, because the usual cause is a hand-placed model someone believes
+  in. A ranged request answered with 200 restarts instead of appending.
+- [x] `granite/server.py` owns the process: finds the bundled binary, refuses to
+  start against unverified weights, waits for the endpoint to answer, and stops
+  only what it started -- a server already on the port belongs to somebody else.
+- [x] `granite/narrate.py` puts the measured debrief into words, and enforces
+  rather than requests the boundary: every number in a narration must be one of
+  the numbers it was given, or that narration is dropped and the measurement
+  stands alone. A coach that is silent is fine; one that is confident and wrong
+  would corrupt the study. The corner label counts as a source, or "Turn 3" would
+  make the digit 3 look invented every time the prose named its own corner.
+- [x] `granite/report.py` and `racecoach debrief <session>` give the second path
+  the study needs: a researcher can generate the same debrief from the folder a
+  participant handed over, for anyone whose laptop could not run it locally. The
+  measured findings are produced either way; a model failure is reported in the
+  output rather than leaving it looking like there was nothing to say.
+- [x] `apex/coach_bar.py` is the participant-facing control: checks memory before
+  offering anything, explains a refusal without blaming the machine, downloads
+  with progress and resumable cancel, and narrates on demand. Every outcome ends
+  with the measured debrief still on screen.
+- [ ] None of it has run on Windows yet. The download, the verification, the
+  unpack into `granite-runtime`, whether `server_binary()` finds
+  `llama-server.exe` in the installed layout, and how long a 3B model actually
+  takes to answer on a classmate's laptop are all unverified.
 
 ## Task 35: TORCS exits 0xC0000005 after a normal quit on Windows
 

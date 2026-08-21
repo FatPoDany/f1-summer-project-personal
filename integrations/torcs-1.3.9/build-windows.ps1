@@ -354,6 +354,56 @@ Copy-Tree $RuntimeDir (Join-Path $StageDir 'torcs-runtime')
 
 $stagedExe = Join-Path $StageDir 'torcs-runtime\wtorcs.exe'
 if (-not (Test-Path -LiteralPath $stagedExe)) { throw "Staging did not produce $stagedExe" }
+
+# --- 5b. The Granite model server -------------------------------------------
+#
+# Participants install this on their own laptops and are never going to build
+# llama.cpp or start a server from a terminal, so the prebuilt CPU binaries ship
+# with the app and racecoach.granite.server runs them. CPU rather than CUDA
+# because the machines vary: the archive carries a ggml-cpu-*.dll per instruction
+# set and llama.cpp picks at run time, whereas a CUDA build needs a matching
+# driver to be any use at all. The weights are NOT here -- 2.1 GB would dwarf the
+# installer, so the app downloads and verifies them on first use.
+#
+# Pinned and verified exactly like the TORCS archive, and for the same reason: a
+# download that quietly returns something else must fail the build rather than
+# produce a working installer around a broken payload.
+$LlamaTag = 'b10549'
+$LlamaAsset = "llama-$LlamaTag-bin-win-cpu-x64.zip"
+$LlamaSize = 18581129
+$LlamaSha256 = '11d38f2ed878489b2c3d02b3d1a67683c02fbfb3d265876b9ede749a8dff5f1c'
+$LlamaUrl = "https://github.com/ggml-org/llama.cpp/releases/download/$LlamaTag/$LlamaAsset"
+$LlamaZip = Join-Path $BuildRoot $LlamaAsset
+
+if (-not (Test-Path -LiteralPath $LlamaZip)) {
+    Write-Step "Downloading $LlamaAsset"
+    # curl.exe, not Invoke-WebRequest: the TORCS archive taught us that a server
+    # answering with something other than the file still counts as HTTP 200.
+    & curl.exe --fail --location --silent --show-error --retry 3 --retry-delay 2 `
+        --output $LlamaZip $LlamaUrl
+    if ($LASTEXITCODE -ne 0) { throw "curl failed with exit code $LASTEXITCODE" }
+}
+
+$actualSize = (Get-Item -LiteralPath $LlamaZip).Length
+if ($actualSize -ne $LlamaSize) {
+    Remove-Item -LiteralPath $LlamaZip -Force
+    throw "Refusing $LlamaAsset : expected $LlamaSize bytes, got $actualSize"
+}
+$actualSha = (Get-FileHash -LiteralPath $LlamaZip -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actualSha -ne $LlamaSha256) {
+    Remove-Item -LiteralPath $LlamaZip -Force
+    throw "Refusing $LlamaAsset :`n  Expected: $LlamaSha256`n  Actual:   $actualSha"
+}
+
+$graniteDir = Join-Path $StageDir 'granite-runtime'
+Write-Step "Staging the model server into granite-runtime"
+New-Item -ItemType Directory -Force -Path $graniteDir | Out-Null
+Expand-Archive -LiteralPath $LlamaZip -DestinationPath $graniteDir -Force
+$stagedServer = Join-Path $graniteDir 'llama-server.exe'
+if (-not (Test-Path -LiteralPath $stagedServer)) {
+    throw "The llama.cpp archive did not contain llama-server.exe: $LlamaZip"
+}
+
 Write-Host "Payload staged: $StageDir"
 
 if ($Action -eq 'stage') { exit 0 }

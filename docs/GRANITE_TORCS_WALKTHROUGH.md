@@ -51,8 +51,8 @@ and analysis dependencies still come from the main project install.
 integrations/granite-4.1/bootstrap-llama-server.sh
 ```
 
-The script pins llama.cpp release `b10355` at commit
-`dd1ea524333b1e697489067d7a4c39c60d32beee`. On the university Rocky 8 host it
+The script pins llama.cpp release `b10549` at commit
+`b2e5e9b28b2484fbf94b543432ece638996a8b97`. On the university Rocky 8 host it
 automatically selects the available GCC 13 toolchain because system GCC 8 is
 too old for this llama.cpp revision.
 

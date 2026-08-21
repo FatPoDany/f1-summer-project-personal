@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from apex import theme
+from apex.coach_bar import CoachBar
 from apex.coach_panel import CoachPanel
 from apex.widgets.replay_window import ReplayWindow
 from apex.widgets.strip_stack import StripStack
@@ -129,6 +130,10 @@ class AnalysisView(QWidget):
         self._debrief.itemClicked.connect(self._zoom_debrief_item)
         self._debrief.itemDoubleClicked.connect(self._replay_debrief_item)
         self._debrief.hide()
+        # Written coaching sits under the measurements, never in place of them.
+        self._coach_bar = CoachBar(self)
+        self._coach_bar.narrated.connect(self._apply_narration)
+        self._coach_bar.hide()
         self._debrief_points: list[DebriefPoint] = []
         self._replay_window: ReplayWindow | None = None
 
@@ -144,6 +149,7 @@ class AnalysisView(QWidget):
         charts_layout.addWidget(self._stack, stretch=1)
         charts_layout.addWidget(self._debrief_heading)
         charts_layout.addWidget(self._debrief)
+        charts_layout.addWidget(self._coach_bar)
         charts_layout.addWidget(self._corners)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -245,6 +251,25 @@ class AnalysisView(QWidget):
                 item.setToolTip(point.detail)
             self._debrief.addItem(item)
         self._debrief.setVisible(bool(points))
+        self._coach_bar.set_debrief(self._debrief_heading.text(), points)
+
+    def _apply_narration(self, result: object) -> None:
+        """Attach the model's prose to the rows it belongs to, and nowhere else.
+
+        A stretch the guard rejected keeps its measured row unchanged, so the
+        list never gains a sentence that has no measurement behind it.
+        """
+        points = getattr(result, "points", ())
+        if len(points) != self._debrief.count():
+            return
+        for row, narrated in enumerate(points):
+            item = self._debrief.item(row)
+            if narrated.narration:
+                item.setText(f"{self._debrief_points[row].headline}  —  {narrated.narration}")
+                item.setToolTip(self._debrief_points[row].detail or narrated.narration)
+        summary = getattr(result, "summary", "")
+        if summary:
+            self._debrief_heading.setText(summary)
 
     def _zoom_debrief_item(self, item: QListWidgetItem) -> None:
         row = self._debrief.row(item)
