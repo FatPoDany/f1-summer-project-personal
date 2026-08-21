@@ -887,3 +887,71 @@ itself worked; everything below is what the run exposed.
   from it, which cannot be a sane path. No observed symptom yet -- results saving
   may simply never be exercised in the study flow -- and it was deliberately left
   out of the Task 35/37 fix so that acceptance measures one change at a time.
+
+## Task 39: the evaluation the project is graded on
+
+The supervisor's framing: a comparative user study is what separates a working
+tool from a defensible one. Two groups, objective measures, and a check that the
+groups were comparable before the intervention. Everything below exists to make
+that arguable from recorded evidence rather than asserted.
+
+- [x] Objective measures beyond lap time. Leaving the track and taking damage
+  were in the recording and were not reaching the canonical lap, which is the
+  file every analysis reads -- so `track_pos` and `damage` joined the optional
+  columns. Lap time alone cannot carry the claim: a driver who goes quicker by
+  running wide every lap has not improved, and one who stops leaving the track
+  has, even if the clock barely moves.
+- [x] `f1coach_core.study` turns laps into the row a paired test consumes, one
+  per participant per phase. Excursions are counted as episodes rather than
+  samples (a wobble over the line and a two-second slide are different
+  problems), damage counts rises rather than the level it sits at (it is
+  cumulative across a race), and a channel the recording lacks reports blank
+  rather than zero -- scoring a missing signal as "no excursions" would reward
+  the participants whose data was incomplete.
+- [x] The study track moved to `aalborg`. On CG Speedway a participant measured
+  14 m outside the track edge still collected no damage at all, so the incident
+  count had no power to discriminate. Narrower circuit, barrier closer, and
+  `maximum dammage = 0` so a novice can never be retired mid-session: incidents
+  are a measurement, not a mechanism for removing people from the study.
+- [x] The car is now pinned by test. The raceman does not choose the human's
+  car -- TORCS takes it from the driver profile -- so `car7-trb1` was correct
+  only by coincidence, with nothing keeping the preset and the shipped
+  `human.xml` in step.
+- [x] Prior experience, asked once per participant before they drive. Coarse
+  ordinal bands, every item skippable, "prefer not to say" preselected so an
+  untouched form records a declined answer rather than asserting whatever sat at
+  the top. Before driving, so knowing how they did cannot colour how they
+  describe themselves. It rides in the study export as label and rank together.
+- [x] Hand-over as one checksummed file: `Save a file to send` on the completion
+  page, `racecoach package`, and `racecoach collect` to pool and verify. A
+  session that quietly lost a lap in transit looks exactly like a complete one,
+  and `collect` refuses the same session twice because a duplicate doubles that
+  participant's weight with nothing looking wrong.
+- [x] `Study Results` pairs each participant with themselves and exports the
+  rows. It reports measurements and stops there: choosing the test is the
+  analyst's call, and a p-value computed quietly by a viewer is worth less than
+  one they can defend. A test pins that.
+- [x] Live Pit Wall is out of a participant's reach. Live coaching is a
+  different intervention from the post-drive debrief under test, and a
+  participant who used it is no longer a subject who received only a debrief.
+- [x] Research tools are reachable again. `APEX_RESEARCH_MODE` alone hid them
+  from participants, which was the point, and from the researchers, who are not
+  going to set an environment variable before double-clicking a desktop app --
+  which is why Robot Pilot had been invisible to everyone. `View > Research
+  tools` is the usable half; the variable still wins for scripts and tests.
+
+- [ ] None of this has run on Windows. Acceptance, in one build:
+  - the questionnaire appears on a new participant id, and only the first time
+  - `Save a file to send` writes a zip to the Desktop, and `racecoach collect`
+    accepts it on the other machine
+  - `View > Research tools` reveals Study Results, Robot Pilot, Live Pit Wall
+    after a restart
+  - a session on aalborg records non-zero `damage` when the car hits a barrier.
+    This is the one that decides whether the incident metric is usable at all,
+    and it needs somebody to drive into a wall on purpose -- a robot will not.
+  - the coach downloads, starts and answers, and how long an answer takes on a
+    laptop is measured rather than assumed
+- [ ] Group assignment is not modelled. `phase` records what a participant did;
+  nothing records which arm they were allocated to, or that allocation was not
+  chosen by whoever ran the session. For a between-groups claim that has to be
+  decided before collection starts, not reconstructed afterwards.
