@@ -9,13 +9,20 @@ outside the workspace fall back to <workspace>/coaching/.
 """
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from f1coach_core.coach import CoachingReport, CoachingSchemaError, coaching_report_from_dict
+from f1coach_core.coach import (
+    CoachingReport,
+    CoachingSchemaError,
+    CoachProvider,
+    coaching_report_from_dict,
+)
 from f1coach_core.features import build_evidence_summary
 from f1coach_core.lap import Lap
+from f1coach_core.llm import build_coach_prompt
 from f1coach_core.workspace import _unique_dest, sessions_root, workspace_root
 
 AUDIT_DIR_NAME = "coaching"
@@ -27,6 +34,73 @@ class SavedCoachingReport:
 
     report: CoachingReport
     path: Path
+
+
+@dataclass(frozen=True)
+class AuditedCoachingAttempt:
+    """The publishable outcome and audit outcome of one requested analysis."""
+
+    report: CoachingReport | None
+    error: str | None
+    audit_path: Path | None
+    audit_error: str | None = None
+
+
+def run_audited_coaching(
+    lap: Lap,
+    reference: Lap | None,
+    *,
+    provider_name: str,
+    provider_factory: Callable[[], CoachProvider],
+    on_progress: Callable[[str], None] | None = None,
+) -> AuditedCoachingAttempt:
+    """Build, validate, and audit one report through a shared trusted path.
+
+    Provider construction is inside the attempt so a model-server start failure
+    is recorded against the lap just like a request or validation failure.
+    """
+    raw_text = ""
+
+    def progress(text: str) -> None:
+        nonlocal raw_text
+        raw_text = text
+        if on_progress is not None:
+            on_progress(text)
+
+    summary: dict | None = None
+    prompt: str | None = None
+    report: CoachingReport | None = None
+    error: str | None = None
+    try:
+        summary = build_evidence_summary(lap, reference)
+        prompt = build_coach_prompt(summary)
+        provider = provider_factory()
+        report = provider.generate(summary, on_progress=progress)
+    except Exception as exc:  # provider and imported telemetry are trust boundaries
+        error = str(exc)
+
+    audit_path: Path | None = None
+    audit_error: str | None = None
+    try:
+        audit_path = write_coaching_audit(
+            lap_source=lap.source,
+            provider=provider_name,
+            lap_name=lap.source.stem,
+            reference_name=reference.source.stem if reference is not None else None,
+            evidence_summary=summary,
+            prompt=prompt,
+            raw_response=raw_text,
+            report=report,
+            error=error,
+        )
+    except OSError as exc:
+        audit_error = str(exc)
+    return AuditedCoachingAttempt(
+        report=report,
+        error=error,
+        audit_path=audit_path,
+        audit_error=audit_error,
+    )
 
 
 def coaching_audit_dir(lap_source: str | Path | None) -> Path:

@@ -58,6 +58,15 @@ class ReplayWindow(QDialog):
         self._replay.cursorMoved.connect(self.cursorMoved)
 
         self._footage = FootagePane(self)
+        self._ai_evidence_note = QLabel(
+            "AI advice is based on validated telemetry. Video is shown only for "
+            "your review and is not sent to the model."
+        )
+        self._ai_evidence_note.setWordWrap(True)
+        self._ai_evidence_note.setStyleSheet(
+            f"color: {theme.TEXT_DIM}; font-size: 11px; padding: 2px 0;"
+        )
+        self._ai_evidence_note.setAccessibleName("AI evidence source")
 
         # The advice, beside the footage it is about. Reading "brake later here"
         # while watching the place it happened is a different thing from reading
@@ -86,6 +95,7 @@ class ReplayWindow(QDialog):
 
         right = QVBoxLayout()
         right.addWidget(self._footage, stretch=3)
+        right.addWidget(self._ai_evidence_note)
         right.addLayout(advice_column, stretch=2)
 
         panes = QHBoxLayout()
@@ -103,6 +113,7 @@ class ReplayWindow(QDialog):
         self._reference: Lap | None = None
         self._notes: dict[int, str] = {}
         self._advice_by_index: dict = {}
+        self._advice_complete = False
         self._recording: Recording | None = None
         self._windows: dict[int, Window] = {}
         self._clips_dir: Path | None = None
@@ -117,6 +128,7 @@ class ReplayWindow(QDialog):
         points: list[DebriefPoint] | None = None,
         notes: dict[int, str] | None = None,
         advice: dict | None = None,
+        advice_complete: bool = False,
         recording: Recording | None = None,
         clips_dir: Path | None = None,
     ) -> None:
@@ -130,6 +142,7 @@ class ReplayWindow(QDialog):
         self._reference = reference
         self._notes = dict(notes or {})
         self._advice_by_index = dict(advice or {})
+        self._advice_complete = advice_complete
         self._recording = recording
         self._clips_dir = clips_dir
         self._points = list(points) if points else [point]
@@ -152,6 +165,14 @@ class ReplayWindow(QDialog):
         self.show()
         self.raise_()
 
+    def update_advice(self, advice: dict, *, complete: bool) -> None:
+        """Refresh the visible instruction when background coaching finishes."""
+        self._advice_by_index = dict(advice)
+        self._advice_complete = complete
+        index = self._chooser.currentRow()
+        if 0 <= index < len(self._points):
+            self._describe(index, self._points[index], self._notes.get(index, ""))
+
     def _chosen(self, index: int) -> None:
         if 0 <= index < len(self._points):
             self._load(index)
@@ -169,6 +190,12 @@ class ReplayWindow(QDialog):
         self._observation.setText(observation or point.difference or fallback_note)
         if instruction:
             self._advice.setText(f"Next lap: {instruction}")
+            self._advice.show()
+        elif point.category and self._advice_complete:
+            self._advice.setText(
+                "The analysis is complete, but no validated AI advice cited this "
+                "exact stretch. The measured telemetry remains below."
+            )
             self._advice.show()
         elif point.category:
             # Measured, but not yet put into words. The analysis starts by itself

@@ -394,6 +394,49 @@ def test_managed_runner_terminates_the_active_torcs_process():
     assert result[0].returncode == -15
 
 
+def test_managed_runner_force_kills_torcs_that_ignores_normal_stop():
+    """Stop must finish even when TORCS does not honour terminate()."""
+    wait_started = threading.Event()
+    killed = threading.Event()
+
+    class StubbornProcess:
+        returncode = None
+
+        def wait(self):
+            wait_started.set()
+            assert killed.wait(1.0)
+            self.returncode = -9
+            return self.returncode
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            pass
+
+        def kill(self):
+            killed.set()
+
+    process = StubbornProcess()
+    runner = ManagedTorcsRunner(
+        popen_factory=lambda *a, **k: process,
+        stop_grace_s=0.01,
+    )
+    result = []
+    thread = threading.Thread(
+        target=lambda: result.append(runner(["torcs"], env={}, check=False))
+    )
+    thread.start()
+    assert wait_started.wait(1.0)
+
+    runner.request_stop()
+    thread.join(1.0)
+
+    assert killed.is_set()
+    assert not thread.is_alive()
+    assert result[0].returncode == -9
+
+
 def test_successful_torcs_exit_without_rows_is_a_readable_failure(torcs_binary):
     def runner(_command, **kwargs):
         output_dir = Path(kwargs["env"]["APEX_HUMAN_TELEMETRY_DIR"])

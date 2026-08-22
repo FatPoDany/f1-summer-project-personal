@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 import pytest
+from PySide6.QtCore import QThreadPool
 
 from apex.capture_view import CaptureGuideView
 from racecoach.telemetry.human_capture import (
@@ -48,6 +49,16 @@ def make_ready(view: CaptureGuideView) -> None:
     view._participant_id.setText("P001")
     for check in view._readiness_checks:
         check.setChecked(True)
+
+
+def test_capture_has_a_dedicated_worker_so_model_jobs_cannot_delay_torcs(
+    qtbot, torcs_binary, study_preset
+):
+    view = CaptureGuideView(torcs_binary=torcs_binary, study_preset=study_preset)
+    qtbot.addWidget(view)
+
+    assert view._pool is not QThreadPool.globalInstance()
+    assert view._pool.maxThreadCount() == 1
 
 
 def test_guide_requires_pseudonym_readiness_and_simulator_before_starting(
@@ -123,6 +134,73 @@ def test_capture_runs_off_the_gui_thread_and_shows_registered_result(
     with qtbot.waitSignal(view.resultsRequested) as requested:
         view._open_results_button.click()
     assert requested.args == [[str(run_dir)]]
+
+
+def test_completion_confirms_usable_race_window_footage(
+    qtbot, tmp_path, torcs_binary, study_preset
+):
+    capture_dir = tmp_path / "capture-with-video"
+    capture_dir.mkdir()
+    video = capture_dir / "session.mp4"
+    video.write_bytes(b"finished mp4")
+    (capture_dir / "manifest.json").write_text(
+        json.dumps({
+            "recording": {
+                "path": str(video),
+                "started_at": 1.0,
+                "duration_s": 42.0,
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    view = _completed_view(qtbot, tmp_path, torcs_binary, study_preset, capture_dir)
+
+    summary = view._result_summary.text().lower()
+    assert "race-window footage recorded" in summary
+    assert "ai coaching uses telemetry" in summary
+
+
+def test_completion_exposes_recording_failure_without_losing_telemetry(
+    qtbot, tmp_path, torcs_binary, study_preset
+):
+    capture_dir = tmp_path / "capture-without-video"
+    capture_dir.mkdir()
+    (capture_dir / "manifest.json").write_text(
+        json.dumps({"recording_error": "The TORCS window never appeared."}),
+        encoding="utf-8",
+    )
+
+    view = _completed_view(qtbot, tmp_path, torcs_binary, study_preset, capture_dir)
+
+    summary = view._result_summary.text().lower()
+    assert "telemetry is saved" in summary
+    assert "footage was unavailable" in summary
+    assert "window never appeared" in summary
+
+
+def test_untrusted_recording_manifest_cannot_break_the_completion_page(
+    qtbot, tmp_path, torcs_binary, study_preset
+):
+    capture_dir = tmp_path / "capture-with-invalid-video-path"
+    capture_dir.mkdir()
+    (capture_dir / "manifest.json").write_bytes(b"\xff")
+
+    view = _completed_view(qtbot, tmp_path, torcs_binary, study_preset, capture_dir)
+
+    summary = view._result_summary.text().lower()
+    assert "lap saved" in summary
+    assert "footage status is unavailable" in summary
+
+
+def test_drive_page_does_not_claim_torcs_is_open_before_it_appears(
+    qtbot, torcs_binary, study_preset
+):
+    view = CaptureGuideView(torcs_binary=torcs_binary, study_preset=study_preset)
+    qtbot.addWidget(view)
+
+    assert "opening torcs" in view._drive_page.heading.text().lower()
+    assert "is open" not in view._drive_page.heading.text().lower()
 
 
 def test_stop_ends_background_session_and_restores_the_guide(

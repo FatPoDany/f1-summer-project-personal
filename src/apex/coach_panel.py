@@ -29,27 +29,22 @@ from PySide6.QtWidgets import (
 
 from apex import theme
 from apex.coach_task import NarrationTask
+from apex.coaching_queue import MANAGED_TIMEOUT_S
 from f1coach_core import (
     CoachingReport,
     CoachProvider,
     Finding,
+    GraniteCoach,
     Lap,
     SavedCoachingReport,
-    build_coach_prompt,
-    build_evidence_summary,
     get_provider,
     latest_coaching_report,
-    write_coaching_audit,
+    run_audited_coaching,
 )
 from racecoach.granite import host as gh
 from racecoach.granite import model as gm
 from racecoach.granite import server as gs
 from racecoach.granite.server import GraniteServer, ServerError
-
-# What a locally managed CPU server is given to answer in. Generous on
-# purpose: the alternative to waiting is telling a participant the coach
-# is broken when it is merely thinking.
-MANAGED_TIMEOUT_S = 420
 
 CARD_STYLE = (
     "QFrame#findingCard { background: #1f1f1f; border: 1px solid #393939; border-radius: 6px; }"
@@ -164,54 +159,50 @@ class _PrepareTask(QRunnable):
 class _CoachTask(QRunnable):
     """Evidence summary + provider call, off the UI thread."""
 
-    def __init__(self, provider: CoachProvider, lap: Lap, reference: Lap | None) -> None:
+    def __init__(
+        self,
+        provider: CoachProvider,
+        lap: Lap,
+        reference: Lap | None,
+        *,
+        restore_before_run: bool = False,
+    ) -> None:
         super().__init__()
         self.signals = _CoachSignals()
         self._provider, self._lap, self._reference = provider, lap, reference
+        self._restore_before_run = restore_before_run
 
     def run(self) -> None:
-        raw = {"text": ""}
-
-        def progress(text: str) -> None:
-            raw["text"] = text
-            self.signals.progress.emit(text)
-
-        summary: dict | None = None
-        prompt: str | None = None
-        report: CoachingReport | None = None
-        error: str | None = None
-        try:
-            summary = build_evidence_summary(self._lap, self._reference)
-            prompt = build_coach_prompt(summary)
-            report = self._provider.generate(summary, on_progress=progress)
-        except Exception as exc:  # any failure must land as readable text, not a crash
-            error = str(exc)
-        self.signals.audited.emit(self._write_audit(summary, prompt, raw["text"], report, error))
-        if error is not None:
-            self.signals.failed.emit(error)
-        else:
-            self.signals.finished.emit(report)
-
-    def _write_audit(self, summary, prompt, raw_text, report, error) -> str:
-        try:
-            return str(
-                write_coaching_audit(
-                    lap_source=self._lap.source,
+        if self._restore_before_run:
+            try:
+                saved = latest_coaching_report(
+                    self._lap,
+                    self._reference,
                     provider=self._provider.name,
-                    lap_name=self._lap.source.stem,
-                    reference_name=(
-                        self._reference.source.stem if self._reference is not None else None
-                    ),
-                    evidence_summary=summary,
-                    prompt=prompt,
-                    raw_response=raw_text,
-                    report=report,
-                    error=error,
                 )
+            except (OSError, ValueError):
+                saved = None
+            if saved is not None:
+                self.signals.audited.emit(str(saved.path))
+                self.signals.finished.emit(saved.report)
+                return
+        attempt = run_audited_coaching(
+            self._lap,
+            self._reference,
+            provider_name=self._provider.name,
+            provider_factory=lambda: self._provider,
+            on_progress=self.signals.progress.emit,
+        )
+        if attempt.audit_error is not None:
+            print(
+                f"apex: couldn't write the coaching audit record: {attempt.audit_error}",
+                file=sys.stderr,
             )
-        except OSError as exc:  # auditing must not break the run it audits
-            print(f"apex: couldn't write the coaching audit record: {exc}", file=sys.stderr)
-            return ""
+        self.signals.audited.emit(str(attempt.audit_path or ""))
+        if attempt.error is not None:
+            self.signals.failed.emit(attempt.error)
+        else:
+            self.signals.finished.emit(attempt.report)
 
 
 class FindingCard(QFrame):
@@ -322,13 +313,26 @@ class CoachPanel(QWidget):
     reportReady = Signal(object)  # CoachingReport
     debriefNarrated = Signal(object)  # NarratedDebrief, for the replay to show
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        pool: QThreadPool | None = None,
+        server: GraniteServer | None = None,
+    ) -> None:
         super().__init__(parent)
+        # Model calls can occupy a worker for many minutes on a CPU. Keeping
+        # them on a dedicated serial pool prevents those calls from consuming
+        # every global Qt worker and leaving TORCS capture queued behind them.
+        self._pool = pool or QThreadPool(self)
+        if pool is None:
+            self._pool.setMaxThreadCount(1)
         self._lap: Lap | None = None
         self._reference: Lap | None = None
         self._task: _CoachTask | None = None
         self._prepare: _PrepareTask | None = None
-        self._server = GraniteServer()
+        self._restore_after_prepare = False
+        self._server = server or GraniteServer()
         self._managed_endpoint: str | None = None
         self._debrief_summary = ""
         self._debrief_points: list = []
@@ -340,7 +344,7 @@ class CoachPanel(QWidget):
         self._settle = QTimer(self)
         self._settle.setSingleShot(True)
         self._settle.setInterval(400)
-        self._settle.timeout.connect(self._run)
+        self._settle.timeout.connect(self._auto_run)
         self._capability: gh.Capability | None = None
         self._restore_task: _RestoreTask | None = None
         self.report: CoachingReport | None = None
@@ -446,7 +450,7 @@ class CoachPanel(QWidget):
                 lambda saved, current=restore: self._restore_finished(current, saved)
             )
             self._restore_task = restore
-            QThreadPool.globalInstance().start(restore)
+            self._pool.start(restore)
 
     def _context_key(self) -> tuple[str, str] | None:
         """What a run is *for*, so two of the same are never started."""
@@ -493,6 +497,24 @@ class CoachPanel(QWidget):
 
     # -- running ---------------------------------------------------------------
 
+    def _auto_run(self) -> None:
+        """Start ready coaching automatically, but never an implicit download."""
+        if self._lap is None or self._prepare is not None:
+            return
+        if _endpoint_is_configured(self._managed_endpoint):
+            self._run(force=False)
+            return
+        capability = self._capability or gh.capability()
+        self._capability = capability
+        if not capability.can_run:
+            self._refresh_button()
+            return
+        if capability.needs_download:
+            self._placeholder.setText(capability.reason)
+            self._refresh_button()
+            return
+        self._run(force=False)
+
     def _refresh_button(self) -> None:
         """Say what the next click will do.
 
@@ -515,7 +537,7 @@ class CoachPanel(QWidget):
             self._coach_button.setText("Analyze lap")
             self._coach_button.setToolTip("")
 
-    def _run(self) -> None:
+    def _run(self, _checked: bool = False, *, force: bool = True) -> None:
         if self._lap is None:
             return
         if self._prepare is not None:  # a download is running; this click cancels it
@@ -526,7 +548,7 @@ class CoachPanel(QWidget):
             # Somebody has pointed this at a server of their own -- a researcher's
             # workstation, or a test. Downloading 2.1 GB and starting a second
             # one on top of that would be presumptuous.
-            self._start_analysis()
+            self._start_analysis(restore_before_run=not force)
             return
 
         capability = self._capability or gh.capability()
@@ -536,9 +558,10 @@ class CoachPanel(QWidget):
             self._coach_button.setEnabled(False)
             return
         if capability.needs_download or not self._server.is_ready:
+            self._restore_after_prepare = not force
             self._start_preparation(download=capability.needs_download)
             return
-        self._start_analysis()
+        self._start_analysis(restore_before_run=not force)
 
     def set_debrief(self, summary: str, points: list) -> None:
         """The measured stretches this lap's coaching should talk about."""
@@ -563,7 +586,7 @@ class CoachPanel(QWidget):
         task.signals.failed.connect(
             lambda _message, current=task: self._debrief_narrated(current, None)
         )
-        QThreadPool.globalInstance().start(task)
+        self._pool.start(task)
 
     def _debrief_narrated(self, task, result) -> None:
         if task is not self._narration_task:
@@ -609,7 +632,7 @@ class CoachPanel(QWidget):
                 current, message, resumable
             )
         )
-        QThreadPool.globalInstance().start(task)
+        self._pool.start(task)
 
     def _prepared(self, task: _PrepareTask) -> None:
         if task is not self._prepare:
@@ -624,7 +647,9 @@ class CoachPanel(QWidget):
         # server is ours: somebody else's endpoint keeps whatever they chose.
         os.environ.setdefault("GRANITE_TIMEOUT_S", str(MANAGED_TIMEOUT_S))
         os.environ.setdefault("GRANITE_MODEL", gm.MODEL_REPO.replace("-GGUF", ""))
-        self._start_analysis()
+        restore_before_run = self._restore_after_prepare
+        self._restore_after_prepare = False
+        self._start_analysis(restore_before_run=restore_before_run)
 
     def _preparation_failed(
         self, task: _PrepareTask, message: str, resumable: bool
@@ -632,11 +657,12 @@ class CoachPanel(QWidget):
         if task is not self._prepare:
             return
         self._prepare = None
+        self._restore_after_prepare = False
         self._coach_button.setEnabled(True)
         self._coach_button.setText("Resume download" if resumable else "Try again")
         self._placeholder.setText(message)
 
-    def _start_analysis(self) -> None:
+    def _start_analysis(self, *, restore_before_run: bool = False) -> None:
         key = self._context_key()
         if key is not None and key in self._running:
             # Already being read. Starting a second run for the same pair would
@@ -646,7 +672,14 @@ class CoachPanel(QWidget):
             return
         self._restore_task = None  # a late disk read must not replace this new run
         try:
-            provider = get_provider(self.provider_name)
+            provider = (
+                get_provider(self.provider_name)
+                if _endpoint_is_configured(self._managed_endpoint)
+                else GraniteCoach(
+                    base_url=self._server.base_url,
+                    timeout_s=MANAGED_TIMEOUT_S,
+                )
+            )
         except ValueError as exc:
             self._placeholder.setText(str(exc))
             return
@@ -656,7 +689,12 @@ class CoachPanel(QWidget):
         self._chip.hide()
         self._clear_cards()
         self._placeholder.setText("Asking Granite 4.1…")
-        task = _CoachTask(provider, self._lap, self._reference)
+        task = _CoachTask(
+            provider,
+            self._lap,
+            self._reference,
+            restore_before_run=restore_before_run,
+        )
         task.signals.finished.connect(
             lambda report, current=task: self._task_finished(current, report)
         )
@@ -674,7 +712,7 @@ class CoachPanel(QWidget):
         if key is not None:
             self._running[key] = task
         self._show_working("Reading this lap…")
-        QThreadPool.globalInstance().start(task)
+        self._pool.start(task)
 
     def _task_finished(self, task: _CoachTask, report: CoachingReport) -> None:
         # Judged by what the run was *for*, not by which task object happens to
@@ -691,13 +729,18 @@ class CoachPanel(QWidget):
         current = key == self._context_key() if key is not None else task is self._task
         if not current:
             return  # still written to disk, so returning later restores it
-        self.show_report(report)
-        self._narrate_debrief()
+        try:
+            self.show_report(report)
+        except RuntimeError:
+            pass  # Qt children were deleted while this worker was finishing
 
     def _task_failed(self, task: _CoachTask, message: str) -> None:
         self._forget(task)
         if task is self._task:
-            self._failed(message)
+            try:
+                self._failed(message)
+            except RuntimeError:
+                pass  # the panel was closed while the request was in flight
 
     def _show_working(self, text: str) -> None:
         self._progress.show()
@@ -727,11 +770,17 @@ class CoachPanel(QWidget):
 
     def _task_progress(self, task: _CoachTask, text: str) -> None:
         if self._is_current(task):
-            self._on_progress(text)
+            try:
+                self._on_progress(text)
+            except RuntimeError:
+                pass  # the panel was closed while the stream was in flight
 
     def _task_audited(self, task: _CoachTask, path: str) -> None:
         if self._is_current(task):
-            self._on_audited(path)
+            try:
+                self._on_audited(path)
+            except RuntimeError:
+                pass  # the panel was closed while the audit was being written
 
     def _on_audited(self, path: str) -> None:
         self.audit_path = Path(path) if path else None

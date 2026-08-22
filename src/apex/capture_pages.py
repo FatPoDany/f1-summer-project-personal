@@ -145,8 +145,8 @@ class CaptureDrivePage(QWidget):
     def __init__(self, study_preset: TorcsStudyPreset) -> None:
         super().__init__()
         layout = QVBoxLayout(self)
-        heading = QLabel("TORCS is open — recording is active")
-        heading.setStyleSheet("font-size: 18px; font-weight: 600;")
+        self.heading = QLabel("Opening TORCS — recording waits for the race window")
+        self.heading.setStyleSheet("font-size: 18px; font-weight: 600;")
         detail = QLabel(
             "Complete these steps in the TORCS window. Apex will finish the import "
             "automatically when TORCS closes."
@@ -170,7 +170,7 @@ class CaptureDrivePage(QWidget):
         self.status.setStyleSheet(f"color: {theme.YELLOW};")
         self.stop_button = QPushButton("Stop this collection")
         self.stop_button.setMinimumHeight(44)
-        layout.addWidget(heading)
+        layout.addWidget(self.heading)
         layout.addWidget(detail)
         layout.addWidget(guide)
         layout.addWidget(self.status)

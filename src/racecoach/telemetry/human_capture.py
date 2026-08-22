@@ -61,10 +61,18 @@ class HumanCaptureCancelled(HumanCaptureError):
 class ManagedTorcsRunner:
     """A subprocess runner whose active TORCS process can be stopped by the UI."""
 
-    def __init__(self, *, popen_factory: Callable = subprocess.Popen) -> None:
+    def __init__(
+        self,
+        *,
+        popen_factory: Callable = subprocess.Popen,
+        stop_grace_s: float = 5.0,
+    ) -> None:
         self._popen_factory = popen_factory
+        self._stop_grace_s = max(0.0, float(stop_grace_s))
         self._lock = threading.Lock()
         self._stop_requested = threading.Event()
+        self._process_done = threading.Event()
+        self._stopping_process = None
         self._process = None
 
     def __call__(
@@ -76,15 +84,21 @@ class ManagedTorcsRunner:
         cwd: str | None = None,
     ) -> subprocess.CompletedProcess:
         process = self._popen_factory(command, env=env, cwd=cwd)
+        self._process_done.clear()
         with self._lock:
             self._process = process
             stop_now = self._stop_requested.is_set()
         if stop_now and process.poll() is None:
-            process.terminate()
-        returncode = process.wait()
-        with self._lock:
-            if self._process is process:
-                self._process = None
+            self._stop_process(process)
+        try:
+            returncode = process.wait()
+        finally:
+            with self._lock:
+                if self._process is process:
+                    self._process = None
+                if self._stopping_process is process:
+                    self._stopping_process = None
+            self._process_done.set()
         completed = subprocess.CompletedProcess(command, returncode)
         if check and returncode:
             raise subprocess.CalledProcessError(returncode, command)
@@ -95,7 +109,33 @@ class ManagedTorcsRunner:
         with self._lock:
             process = self._process
         if process is not None and process.poll() is None:
+            self._stop_process(process)
+
+    def _stop_process(self, process) -> None:
+        """Ask TORCS to stop, then force it down without blocking the caller."""
+        with self._lock:
+            if self._stopping_process is process:
+                return
+            self._stopping_process = process
+        try:
             process.terminate()
+        except OSError:
+            pass
+
+        def force_after_grace() -> None:
+            if self._process_done.wait(self._stop_grace_s):
+                return
+            try:
+                running = process.poll() is None
+            except OSError:
+                running = False
+            if running:
+                try:
+                    process.kill()
+                except OSError:
+                    pass
+
+        threading.Thread(target=force_after_grace, daemon=True).start()
 
 
 @dataclass(frozen=True)

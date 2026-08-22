@@ -9,7 +9,7 @@ import json
 import os
 from pathlib import Path
 
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QSettings, QThreadPool
 from PySide6.QtGui import (
     QAction,
     QActionGroup,
@@ -22,6 +22,7 @@ from PySide6.QtWidgets import QFileDialog, QMainWindow, QMessageBox, QStackedWid
 
 from apex.analysis_view import AnalysisView
 from apex.capture_view import CaptureGuideView, _saved_summary
+from apex.coaching_queue import GarageCoachingQueue
 from apex.compare_view import CompareView
 from apex.garage_view import GarageView
 from apex.live_view import LivePitWallView
@@ -37,6 +38,7 @@ from f1coach_core import (
     load_telemetry_csv,
 )
 from f1coach_core.lap import NO_IDENTITY
+from racecoach.granite.server import GraniteServer
 
 
 class MainWindow(QMainWindow):
@@ -48,10 +50,25 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
         self._opened_capture_runs: set[Path] = set()
 
+        # One model request at a time, shared by automatic Garage work and the
+        # interactive panel. Capture owns a different pool and can always start.
+        self._coaching_pool = QThreadPool(self)
+        self._coaching_pool.setMaxThreadCount(1)
+        self._coaching_server = GraniteServer()
+        self._coaching_queue = GarageCoachingQueue(
+            self,
+            pool=self._coaching_pool,
+            server=self._coaching_server,
+        )
+
         self._garage = GarageView(self)
         self._capture = CaptureGuideView(self)
         self._synthetic = SyntheticCaptureView(self) if _research_mode_enabled() else None
-        self._analysis = AnalysisView(self)
+        self._analysis = AnalysisView(
+            self,
+            coach_pool=self._coaching_pool,
+            coach_server=self._coaching_server,
+        )
         self._compare = CompareView(self)
         # Live coaching is a different intervention from the post-drive coaching
         # the study is testing. A participant who used it is no longer a subject
@@ -73,6 +90,8 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self._stacked)
 
         self._garage.lapOpened.connect(self.show_analysis)
+        self._garage.coachingRequested.connect(self._coaching_queue.queue_session)
+        self._coaching_queue.progress.connect(self._garage.apply_coaching_progress)
         self._garage.sessionDeleted.connect(self._session_deleted)
         self._garage.status.connect(lambda text: self.statusBar().showMessage(text))
         self._capture.resultsRequested.connect(self._open_captured_runs)
@@ -315,6 +334,7 @@ class MainWindow(QMainWindow):
             self._live.shutdown(timeout_s=2.0)
         # The model server is a child process holding 2.1 GB; leaving it behind
         # would keep that resident after the window is gone.
+        self._coaching_queue.shutdown()
         self._analysis.coach_shutdown()
         super().closeEvent(event)
 

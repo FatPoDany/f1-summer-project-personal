@@ -4,7 +4,7 @@ over a corner table, with the AI Race Engineer panel docked on the right
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThreadPool
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QComboBox,
@@ -36,6 +36,8 @@ from f1coach_core import (
     single_lap_corner_table,
 )
 from f1coach_core.workspace import session_recording
+from racecoach.granite.narrate import NarratedPoint
+from racecoach.granite.server import GraniteServer
 
 COMPARISON_HEADERS = (
     "Corner",
@@ -76,7 +78,13 @@ def _single_speed(value: float | None) -> str:
 
 
 class AnalysisView(QWidget):
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        coach_pool: QThreadPool | None = None,
+        coach_server: GraniteServer | None = None,
+    ) -> None:
         super().__init__(parent)
         self._lap: Lap | None = None
         self._session: Session | None = None
@@ -152,13 +160,15 @@ class AnalysisView(QWidget):
         # The narrated points themselves, so the review window can separate what
         # was observed from what to do about it.
         self._advice: dict = {}
+        self._advice_complete = False
         self._reference: Lap | None = None
         self._replay_window: ReplayWindow | None = None
 
-        self._panel = CoachPanel(self)
+        self._panel = CoachPanel(self, pool=coach_pool, server=coach_server)
         self._panel.setMinimumWidth(300)
         self._panel.evidenceRequested.connect(self._show_evidence)
         self._panel.viewResetRequested.connect(self._stack.reset_view)
+        self._panel.reportReady.connect(self._apply_report_advice)
         self._panel.debriefNarrated.connect(self._apply_narration)
 
         charts = QWidget()
@@ -227,15 +237,12 @@ class AnalysisView(QWidget):
             others = [lap for lap in self._session.laps if lap is not self._lap]
             for lap in others:
                 self._ref_combo.addItem(f"{lap.source.stem} · {lap.lap_time:.3f} s", lap)
-            # Default to their own best lap rather than to no reference at all.
-            # Everything a participant comes here for -- the debrief, the corners
-            # that cost time, the replay, anything the coach can say -- needs a
-            # lap to compare against, so defaulting to none meant opening a lap
-            # and being shown nothing, with no hint that a dropdown was the way
-            # out. "Your best lap" is also what the Garage already calls it.
-            if others:
-                best = min(others, key=lambda lap: lap.lap_time)
-                default = self._ref_combo.findData(best)
+            # Every non-best lap opens against the session best so its debrief is
+            # immediately useful. The best lap stays a single-lap technique review:
+            # comparing it to a slower lap would create a different context from
+            # the report the Garage has already generated and make Granite run twice.
+            if others and self._lap is not self._session.best_lap:
+                default = self._ref_combo.findData(self._session.best_lap)
         self._ref_combo.setCurrentIndex(max(default, 0))
         self._ref_combo.blockSignals(False)
 
@@ -257,10 +264,14 @@ class AnalysisView(QWidget):
 
     def _populate_debrief(self, reference: Lap | None) -> None:
         """Deterministic, and independent of whether a model ever runs."""
+        if self._replay_window is not None:
+            self._replay_window.close()
+            self._replay_window = None
         self._reference = reference
         self._debrief_points = []
         self._narration = {}
         self._advice = {}
+        self._advice_complete = False
         self._debrief.clear()
         if self._lap is None or reference is None or reference is self._lap:
             self._debrief_heading.hide()
@@ -310,6 +321,53 @@ class AnalysisView(QWidget):
         summary = getattr(result, "summary", "")
         if summary:
             self._debrief_heading.setText(summary)
+
+    def _apply_report_advice(self, report: object) -> None:
+        """Reuse validated report prose only where its citation matches the stretch.
+
+        The report has already passed the coaching response validator. Requiring
+        both the deterministic corner label and exact evidence span here prevents
+        a sound instruction for one turn from appearing beside another turn's
+        footage.
+        """
+        self._narration = {}
+        self._advice = {}
+        for row, point in enumerate(self._debrief_points):
+            entry = self._debrief.item(row)
+            if entry is not None:
+                entry.setToolTip(point.detail)
+        findings = getattr(report, "findings", ())
+        for row, point in enumerate(self._debrief_points):
+            finding = next(
+                (
+                    item
+                    for item in findings
+                    if any(
+                        evidence.corner == point.corner
+                        and evidence.span == point.span_m
+                        for evidence in item.evidence
+                    )
+                ),
+                None,
+            )
+            if finding is None:
+                continue
+            observation = " ".join(
+                text for text in (finding.issue, finding.cause) if text
+            )
+            narrated = NarratedPoint(
+                point=point,
+                narration=observation,
+                advice=finding.action,
+            )
+            self._advice[row] = narrated
+            self._narration[row] = narrated.full_text
+            entry = self._debrief.item(row)
+            if entry is not None:
+                entry.setToolTip(narrated.full_text)
+        self._advice_complete = True
+        if self._replay_window is not None:
+            self._replay_window.update_advice(self._advice, complete=True)
 
     def coach_shutdown(self) -> None:
         self._panel.shutdown()
@@ -370,6 +428,7 @@ class AnalysisView(QWidget):
             points=self._debrief_points,
             notes=self._narration,
             advice=self._advice,
+            advice_complete=self._advice_complete,
             recording=self._session_recording(),
             clips_dir=self._clips_dir(),
         )

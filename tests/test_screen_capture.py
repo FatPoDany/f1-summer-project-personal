@@ -126,6 +126,55 @@ def test_an_encoder_that_will_not_quit_is_eventually_stopped(ffmpeg, tmp_path):
     assert process.terminated
 
 
+def test_an_encoder_that_survives_kill_cannot_block_capture_completion(ffmpeg, tmp_path):
+    """Footage is optional; an unkillable encoder must not strand the session."""
+
+    class Unkillable(FakeProcess):
+        def wait(self, timeout=None):
+            raise subprocess.TimeoutExpired("ffmpeg", timeout or 0)
+
+        def terminate(self):
+            self.terminated = True
+
+        def kill(self):
+            self.killed = True
+
+    process = Unkillable()
+    recorder = sc.ScreenRecorder(
+        tmp_path / "out.mp4", popen=lambda *_a, **_k: process, clock=lambda: 1.0
+    )
+    recorder.start()
+    (tmp_path / "out.mp4").write_bytes(b"unfinished video")
+
+    assert recorder.stop(timeout_s=0.01) is None
+    assert process.terminated and process.killed
+    assert "could not be stopped" in recorder.error
+
+
+def test_encoder_stop_errors_are_contained_so_telemetry_can_finish(ffmpeg, tmp_path):
+    """OS-level terminate/kill failures belong to optional footage, not capture."""
+
+    class Unstoppable(FakeProcess):
+        def wait(self, timeout=None):
+            raise subprocess.TimeoutExpired("ffmpeg", timeout or 0)
+
+        def terminate(self):
+            raise OSError("terminate denied")
+
+        def kill(self):
+            raise OSError("kill denied")
+
+    recorder = sc.ScreenRecorder(
+        tmp_path / "out.mp4",
+        popen=lambda *_a, **_k: Unstoppable(),
+        clock=lambda: 1.0,
+    )
+    recorder.start()
+
+    assert recorder.stop(timeout_s=0.01) is None
+    assert "could not be stopped" in recorder.error
+
+
 def test_a_recording_that_produced_no_file_is_reported_not_returned(ffmpeg, tmp_path):
     recorder = sc.ScreenRecorder(
         tmp_path / "out.mp4", popen=lambda *_a, **_k: FakeProcess(), clock=lambda: 1.0
@@ -134,6 +183,27 @@ def test_a_recording_that_produced_no_file_is_reported_not_returned(ffmpeg, tmp_
 
     assert recorder.stop() is None
     assert "no video" in recorder.error
+
+
+def test_a_nonzero_encoder_exit_cannot_publish_a_nonempty_but_failed_video(
+    ffmpeg, tmp_path
+):
+    """File size alone is not proof that ffmpeg finalized the container."""
+
+    class FailedEncoder(FakeProcess):
+        def wait(self, timeout=None):
+            self.returncode = 1
+            return self.returncode
+
+    process = FailedEncoder()
+    recorder = sc.ScreenRecorder(
+        tmp_path / "out.mp4", popen=lambda *_a, **_k: process, clock=lambda: 1.0
+    )
+    recorder.start()
+    (tmp_path / "out.mp4").write_bytes(b"unfinished container")
+
+    assert recorder.stop() is None
+    assert "exited with code 1" in recorder.error
 
 
 def test_a_recorder_that_never_started_stops_quietly(ffmpeg, tmp_path):

@@ -95,6 +95,18 @@ def test_the_coachs_words_appear_beside_the_stretch_they_describe(qtbot):
     assert "braked earlier here" in window._replay._note.text()
 
 
+def test_review_states_that_video_is_not_ai_evidence(qtbot):
+    from apex.widgets.replay_window import ReplayWindow
+
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+    window.show_stretch(_positioned_lap(20.0), _point())
+
+    disclosure = window._ai_evidence_note.text().lower()
+    assert "telemetry" in disclosure
+    assert "not" in disclosure and "video" in disclosure
+
+
 def test_the_review_window_carries_the_whole_laps_stretches(qtbot):
     """Reviewing one corner usually means wanting the next one too."""
     from apex.widgets.replay_window import ReplayWindow
@@ -227,6 +239,24 @@ def test_a_measured_moment_without_words_yet_says_they_are_coming(qtbot):
     text = window._advice.text()
     assert "still being written" in text
     assert "Analyze lap" not in text  # there is no button to press any more
+
+
+def test_finished_analysis_says_when_no_validated_advice_matches_the_stretch(qtbot):
+    """A completed run must not leave the review looking permanently busy."""
+    from apex.widgets.replay_window import ReplayWindow
+
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+    window.show_stretch(
+        _positioned_lap(20.0),
+        _point(),
+        advice_complete=True,
+    )
+
+    text = window._advice.text().lower()
+    assert "analysis is complete" in text
+    assert "no validated ai advice" in text
+    assert "still being written" not in text
 
 
 def test_the_measurement_stays_on_screen_beneath_the_words(qtbot):

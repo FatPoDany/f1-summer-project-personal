@@ -235,13 +235,20 @@ coaching benefit.
 
 ## Step 9: Granite post-lap coaching
 
-After importing a run into an Apex session, open any complete lap in
-**Analysis** and press **Analyze lap**. The AI Race Engineer is fixed to local
-**Granite 4.1**; there is no provider selector. The default **Single-lap
-analysis** does not require a reference and sends a compact packet of
-deterministic technique checks. To make a lap-to-lap comparison, select another
-lap under **Compare with** before running Granite. The same loopback server from
-step 4 is used in both modes.
+After importing a run into an Apex session, open it in **Garage**. Apex checks
+every lap automatically and shows **AI QUEUED**, **AI GENERATING**, **AI READY**,
+**AI FAILED**, or a setup/availability state in the Status column. One request
+runs at a time. The session best uses a compact single-lap technique packet;
+each other lap is compared with the session best. Opening a lap in **Analysis**
+restores the same exact-context result, while **Compare with** can still select
+another context. There is no provider selector: the desktop is fixed to local
+**Granite 4.1** and uses the same loopback server from step 4.
+
+If the pinned weights are absent, opening Garage does not silently download
+2.1 GB; Status says **AI SETUP NEEDED** and the AI Race Engineer offers the
+explicit one-time download after a lap is opened. A packaged CPU's first
+response may take longer than seven minutes, so Apex's managed post-lap requests
+allow 900 seconds and keep a visible generating state throughout.
 
 The post-lap request uses server-sent events. Apex shows the accumulated model
 text as it arrives, while the pinned `llama-server` sends heartbeat comments
@@ -277,6 +284,12 @@ again with the same single-lap or selected-reference context, Apex restores the
 newest successful Granite report from that directory only after its frozen
 evidence packet and every citation pass validation again. Results are never
 reused across different reference selections.
+
+**Review a corner** uses advice from this same validated report only when its
+corner label and distance span exactly match the deterministic debrief point.
+Recorded race-window footage may be played beside it, but the installed Granite
+server is text-only: no video or frames are sent to the model, and no coaching
+claim is attributed to visual inspection.
 
 ## Why the output is trustworthy
 

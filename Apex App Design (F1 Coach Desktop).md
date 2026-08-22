@@ -18,14 +18,14 @@ Considered: **Tauri 2 + React** (only if M6 is far stronger in TS *and* someone 
 
 ## Experience requirements
 
-1. **Two clicks from file to insight** — import or auto-detect a lap from a watched folder → full analysis.
+1. **Two clicks from file to insight** — import or collect a lap into Garage → full analysis.
 2. **Every AI claim is clickable** — each Granite recommendation cites evidence; clicking highlights that zone on the charts (makes M7's grounding audit a feature).
 3. **Demos never depend on the network** — bundled sample session, Granite swappable for local model / canned responses.
 
 ## Screens
 
-- **Garage** — session library, lap table with deltas/status, import + watched folder, and confirmed deletion of Apex-managed session copies; first run opens the bundled sample session (zero credentials).
-- **Lap Analysis** (the core) — single-lap analysis by default, an optional **Compare with** lap, sector ribbon with timing-screen colors, synced speed/throttle/brake strips on a shared distance axis with one crosshair, corner table, and the Granite-only **AI Race Engineer panel**: findings rendered from a fixed JSON schema (issue / evidence / cause / action / confidence) with "◈ show" evidence-zoom and model + prompt-version provenance. The last successful report for an exact lap/reference context is restored from its audit record and revalidated before display.
+- **Garage** — session library, lap table with deltas, import, confirmed deletion of Apex-managed copies, and a visible automatic-coaching state for every lap. Missing exact-context reports are queued serially; Status distinguishes queued, generating, ready, failed, setup-needed, and unavailable. The Garage also states whether synchronized race-window footage is attached.
+- **Lap Analysis** (the core) — the session best opens as a single-lap technique review; every other lap opens against the session best, with other references still selectable. It combines a sector ribbon, synced speed/throttle/brake strips, corner table, and the Granite-only **AI Race Engineer panel**. Findings follow the fixed issue/evidence/cause/action/confidence schema with "◈ show" evidence zoom and trusted model/prompt provenance. Exact saved reports are revalidated before display. **Review a corner** reuses advice from that same report only when its validated corner and distance span match the deterministic debrief stretch.
 - **Compare** — cumulative time-delta trace for two laps/drivers; doubles as the **before/after-coaching** view for evaluation.
 - **Race Engineer Q&A** — stretch; a docked chat panel reusing the same evidence summary. Ships only if Phase 5 has room.
 - **Report export** — self-contained HTML/PDF per analysis; feeds blog, IBM status forms, final report.
@@ -39,13 +39,16 @@ Desktop shell (PySide6, M6)  — views, Qt signals, QThreadPool workers, streami
         │  imports (same process, no IPC)
 f1coach-core (pure Python, M2–M5) — loaders → features → analysis + evidence summary → coach client
         │                                   Workspace store: ~/Apex/sessions/… (parquet/csv + analysis.json + coaching.json)
-one provider interface with several tested backends; the desktop AI Race Engineer exposes only local IBM Granite:
-  watsonx.ai (ibm-watsonx-ai, keys in OS keychain via keyring)
-  local Ollama granite3.3:8b (offline demo insurance)
-  mock (canned schema-valid responses — UI dev, CI, M7 test laps)
+one validated provider interface; the desktop AI Race Engineer exposes only the
+pinned local IBM Granite 4.1 endpoint. The mock provider remains test-only.
 ```
 
 Rule: **the app never computes telemetry truth** — it renders what `f1coach-core` returns. CLI, notebooks, and app are three faces of one package.
+
+Long Granite work is serialized on a dedicated Qt pool; TORCS capture owns a
+different worker so model latency cannot delay driving. Optional ffmpeg footage
+is synchronized to deterministic telemetry for human replay only. The current
+text-only Granite path receives no pixels, frames, or clips.
 
 ### Contracts to agree in week one of Phase 3
 - **Telemetry file** (M2): csv/parquet, one row per sample — `t, dist, speed, throttle, brake, steer, gear, sector` + `schema_version`. `dist` is the shared x-axis; if the sim can't export it, the loader derives `cumsum(speed·Δt)`.
@@ -74,7 +77,8 @@ Lane fit: M6 owns the shell; M5's provider adapter is the assigned watsonx work;
 | Unsigned macOS build | README two-click bypass; demo from dev machine; ad-hoc signing if IBM asks |
 | Schema drift | `schema_version` + validating loader with readable errors → M7's reliability log |
 
-**Non-goals:** real-time in-sim overlay, Windows testing, multi-user, physics work.
+**Non-goals:** model control of the car, visual-AI claims from unvalidated video,
+multi-user services, or simulator-physics changes.
 
 ## Next steps (team meeting)
 

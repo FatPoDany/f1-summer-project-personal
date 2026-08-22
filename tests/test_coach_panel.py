@@ -5,9 +5,11 @@ import json
 from pathlib import Path
 
 import pytest
+from PySide6.QtCore import QThreadPool
 
 from apex import theme
 from apex.coach_panel import CoachPanel, FindingCard, _CoachTask
+from apex.coaching_queue import MANAGED_TIMEOUT_S
 from apex.main_window import MainWindow
 from f1coach_core import (
     CoachProvider,
@@ -23,6 +25,49 @@ from f1coach_core import (
 )
 from f1coach_core.coach import opportunity_catalog
 from f1coach_core.llm import report_from_llm_text
+
+
+def test_slow_ai_work_cannot_consume_the_capture_thread_pool(qtbot):
+    """Minutes-long model calls must never queue TORCS behind them."""
+    panel = CoachPanel()
+    qtbot.addWidget(panel)
+
+    assert panel._pool is not QThreadPool.globalInstance()
+    assert panel._pool.maxThreadCount() == 1
+
+
+def test_managed_cpu_coaching_allows_longer_than_the_observed_420_seconds():
+    """The packaged 3B model's first answer has already exceeded 420 seconds."""
+    assert MANAGED_TIMEOUT_S >= 900
+
+
+def test_automatic_task_rechecks_a_report_written_while_it_waited_in_the_pool(qtbot):
+    """Garage and Analysis can queue the same context during the settle timer."""
+    session = load_sample_session()
+    lap, reference = session.laps[2], session.best_lap
+    report, audit = _saved_granite_report(lap, reference)
+
+    class MustNotRun:
+        name = "granite"
+
+        def generate(self, _summary, on_progress=None):
+            raise AssertionError("the exact queued Garage result should be restored")
+
+    task = _CoachTask(
+        MustNotRun(),
+        lap,
+        reference,
+        restore_before_run=True,
+    )
+    restored = []
+    audited = []
+    task.signals.finished.connect(restored.append)
+    task.signals.audited.connect(audited.append)
+
+    task.run()
+
+    assert restored == [report]
+    assert audited == [str(audit)]
 
 
 @pytest.fixture(autouse=True)
@@ -315,6 +360,34 @@ def test_a_build_without_the_coach_disables_it_and_says_why(qtbot, tmp_path, mon
     assert "single lap" in panel._placeholder.text().lower()
 
 
+def test_automatic_analysis_never_starts_the_model_download(qtbot, monkeypatch):
+    from racecoach.granite.host import Capability
+
+    monkeypatch.delenv("GRANITE_BASE_URL", raising=False)
+    monkeypatch.setattr(
+        "apex.coach_panel.gh.capability",
+        lambda: Capability(
+            can_run=True,
+            reason="A one-off model download is required.",
+            model_present=False,
+            download_bytes=1,
+        ),
+    )
+    panel = CoachPanel()
+    qtbot.addWidget(panel)
+    panel._settle.setInterval(0)
+    preparations = []
+    panel._start_preparation = lambda *, download: preparations.append(download)
+
+    panel.set_context(load_sample_session().laps[0], None)
+    qtbot.waitUntil(lambda: panel._restore_task is None, timeout=2000)
+    qtbot.wait(20)
+
+    assert preparations == []
+    assert panel._coach_button.text() == "Download coach"
+    assert "download" in panel._placeholder.text().lower()
+
+
 def test_stale_worker_result_cannot_replace_a_new_context(qtbot):
     session = load_sample_session()
     panel = CoachPanel()
@@ -392,6 +465,22 @@ def test_closing_the_panel_mid_analysis_does_not_crash_the_app(qtbot, analysis):
     qtbot.wait(10)
 
     panel._restore_finished(task, None)  # must not raise
+
+
+def test_late_coaching_signals_ignore_a_deleted_panel(qtbot, analysis):
+    """Lambda-held workers can outlive Qt children during a quick close."""
+    panel = analysis._panel
+    task = _CoachTask(get_provider("mock"), analysis._lap, None)
+    panel._task = task
+    panel._running[panel._context_key()] = task
+    report = get_provider("mock").generate(build_evidence_summary(analysis._lap))
+
+    panel.deleteLater()
+    qtbot.wait(10)
+
+    panel._task_audited(task, "/tmp/late-audit.json")
+    panel._task_progress(task, "late text")
+    panel._task_finished(task, report)
 
 
 def test_a_result_is_shown_by_what_it_was_for_not_by_which_object_finished(

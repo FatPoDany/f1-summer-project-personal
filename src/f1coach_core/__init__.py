@@ -6,10 +6,12 @@ and render what it returns.
 
 from f1coach_core.analysis import sector_spans, sector_times
 from f1coach_core.audit import (
+    AuditedCoachingAttempt,
     SavedCoachingReport,
     coaching_audit_dir,
     latest_coaching_outcomes,
     latest_coaching_report,
+    run_audited_coaching,
     write_coaching_audit,
 )
 from f1coach_core.coach import (
@@ -53,6 +55,7 @@ from f1coach_core.workspace import (
 
 __all__ = [
     "SAMPLE_SESSION_NAME",
+    "AuditedCoachingAttempt",
     "SavedCoachingReport",
     "CoachProvider",
     "CoachingReport",
@@ -91,6 +94,7 @@ __all__ = [
     "load_session",
     "load_telemetry_csv",
     "render_html_report",
+    "run_audited_coaching",
     "sector_spans",
     "sector_times",
     "single_lap_corner_table",

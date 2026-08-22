@@ -266,3 +266,55 @@ Task 15 synthetic contract
   would mean patching simuv2 to publish its private `tWheel` forces, which turns
   the observe-only driver-module recorder into a physics-engine change. Raise it
   as a separate decision if coaching evidence ever needs those channels.
+
+# Implementation Plan: Garage Coaching Automation and Capture Recovery
+
+## Overview
+
+Restore bounded Collect Data lifecycle behavior, then add a serial, evidence-first
+Garage coaching queue and make corner review reuse the resulting validated report.
+Verify the existing footage chain without claiming that the text model reads video.
+
+## Architecture Decisions
+
+- Give capture and Granite separate single-purpose Qt pools.
+- Escalate graceful TORCS/ffmpeg shutdown to bounded force-stop behavior.
+- Share one serial Granite pool and managed server between the Garage queue and
+  CoachPanel; both use the core exact-context restore and audited-run path.
+- Use one report per lap context for both AI Race Engineer cards and matched corner
+  advice; keep footage as a parallel human-review surface.
+
+## Task List
+
+### Phase 1: Capture recovery
+
+- [x] Add failing tests for stubborn TORCS/ffmpeg shutdown and worker starvation.
+- [x] Bound shutdown and isolate capture from model workers.
+
+### Phase 2: Garage queue
+
+- [x] Request exact-context coaching for every lap when a session loads.
+- [x] Serialize missing Granite runs and publish live per-lap state.
+- [x] Render combined session-best and AI status with failure detail.
+
+### Phase 3: Corner advice and truth-in-UI
+
+- [x] Reuse matched, validated report findings in Review a corner.
+- [x] State explicitly that footage is not an AI input in the current build.
+
+### Checkpoint: Complete
+
+- [x] Focused and full pytest pass; Ruff is clean.
+- [x] Offscreen Qt interaction verifies state changes and replay advice.
+- [ ] A Windows TORCS/MP4 runtime check is run or reported as unavailable.
+
+## Risks and Mitigations
+
+| Risk | Impact | Mitigation |
+|---|---|---|
+| CPU model starves capture | High | Dedicated serial model pool and dedicated capture pool |
+| Batch work duplicates or races | High | Exact lap/reference keys and one queued/running task per key |
+| Old audit is treated as current | High | Restore through `latest_coaching_report`, which rebuilds and revalidates evidence |
+| Advice is shown for the wrong corner | High | Require cited corner/span match before reuse |
+| Opening Garage silently downloads 2.1 GB | Medium | Explicit setup-needed state; download stays user initiated |
+| Video presence is mistaken for visual AI | High | Truthful UI/docs and a separate future multimodal contract |

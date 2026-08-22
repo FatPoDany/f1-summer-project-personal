@@ -67,6 +67,46 @@ def _saved_summary(run_dirs) -> str:
     )
 
 
+def _recording_summary(capture_dir: str | Path) -> str:
+    """Describe the optional footage outcome without treating it as AI evidence."""
+    capture_dir = Path(capture_dir)
+    try:
+        manifest = json.loads((capture_dir / "manifest.json").read_text("utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return "Footage status is unavailable because the capture manifest could not be read."
+    if not isinstance(manifest, dict):
+        return "Footage status is unavailable because the capture manifest is invalid."
+
+    recording = manifest.get("recording")
+    if isinstance(recording, dict):
+        raw_path = recording.get("path")
+        if isinstance(raw_path, str) and raw_path:
+            video = Path(raw_path)
+            if not video.is_absolute():
+                video = capture_dir / video
+            try:
+                usable = video.is_file() and video.stat().st_size > 0
+            except OSError:
+                usable = False
+            if usable:
+                return (
+                    "Race-window footage recorded and linked to corner review. "
+                    "AI coaching uses telemetry, not this video."
+                )
+            return (
+                "Telemetry is saved, but the recorded race-window footage file "
+                "is now unavailable."
+            )
+
+    error = manifest.get("recording_error")
+    if isinstance(error, str) and error.strip():
+        # The manifest is imported data. Keep its useful diagnostic text bounded
+        # and on one line before showing it in the participant-facing page.
+        detail = " ".join(error.split())[:240]
+        return f"Telemetry is saved; race-window footage was unavailable: {detail}"
+    return "Telemetry is saved; no race-window footage was attached to this capture."
+
+
 def _prompt_for_background(participant_id: str, parent: QWidget) -> Background | None:
     dialog = BackgroundDialog(participant_id, parent=parent)
     if dialog.exec() != QDialog.DialogCode.Accepted:
@@ -98,6 +138,10 @@ class CaptureGuideView(QWidget):
         self._ask_background = ask_background or _prompt_for_background
         self._torcs_binary = Path(torcs_binary or default_torcs_binary())
         self._study_preset = study_preset or default_study_preset(self._torcs_binary)
+        # Capture must be runnable even while a slow model or clip worker is
+        # occupying the application's global pool.
+        self._pool = QThreadPool(self)
+        self._pool.setMaxThreadCount(1)
         self._task: HumanCaptureTask | None = None
         self._result_capture_dir: str | None = None
         self._result_run_dirs: list[str] = []
@@ -196,12 +240,15 @@ class CaptureGuideView(QWidget):
         task.signals.stopped.connect(self._on_stopped)
         task.signals.failed.connect(self._on_failed)
         self._task = task
-        QThreadPool.globalInstance().start(task)
+        self._pool.start(task)
 
     def stop_capture(self) -> None:
         if self._task is None:
             return
-        self._drive_status.setText("Stopping TORCS and preserving any raw evidence…")
+        self._drive_status.setText(
+            "Stopping TORCS and preserving any raw evidence… This can take up to "
+            "about 35 seconds while the recorder finishes the video."
+        )
         self._stop_button.setEnabled(False)
         self._task.request_stop()
 
@@ -227,7 +274,9 @@ class CaptureGuideView(QWidget):
         if not self._is_current(token):
             return
         self._task = None
-        self._result_summary.setText(_saved_summary(result.run_dirs))
+        self._result_summary.setText(
+            f"{_saved_summary(result.run_dirs)}\n{_recording_summary(result.capture_dir)}"
+        )
         self._result_path.setText(f"Send this folder to the researchers: {result.capture_dir}")
         self._result_run_dirs = [str(path) for path in result.run_dirs]
         self._result_capture_dir = str(result.capture_dir)

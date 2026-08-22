@@ -6,6 +6,7 @@ import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMessageBox
 
+from apex.coaching_queue import CoachingProgress, CoachingStage
 from apex.garage_view import GarageView
 from f1coach_core import (
     build_coach_prompt,
@@ -57,7 +58,7 @@ def test_status_column_speaks_the_mockup_vocabulary(qtbot):
 
     got = statuses(view)
     assert got[best.source.stem] == "SESSION BEST"
-    assert got[coach_me.source.stem] == f"ANALYSED · {len(report.findings)} findings"
+    assert got[coach_me.source.stem] == f"AI READY · {len(report.findings)} tips"
     assert got[fresh.source.stem] == "NEW — just captured"
 
     # opening the fresh lap consumes its NEW tag
@@ -69,6 +70,103 @@ def test_status_column_speaks_the_mockup_vocabulary(qtbot):
     view.lapOpened.connect(lambda lap, session: opened.append(lap))
     view._open_row(row)
     assert opened and statuses(view)[fresh.source.stem] == ""
+
+
+def test_loading_a_session_requests_automatic_coaching(qtbot):
+    ensure_sample_session()
+    view = GarageView()
+    qtbot.addWidget(view)
+
+    with qtbot.waitSignal(view.coachingRequested) as requested:
+        view.refresh_sessions()
+
+    assert requested.args[0] is view.session
+
+
+def test_garage_states_when_a_session_has_no_race_window_footage(qtbot):
+    ensure_sample_session()
+    view = GarageView()
+    qtbot.addWidget(view)
+    view.refresh_sessions()
+
+    text = view._footage_status.text().lower()
+    assert "no race-window footage" in text
+    assert "ai advice" in text and "telemetry" in text
+
+
+def test_garage_confirms_linked_footage_is_for_review_not_ai_input(qtbot):
+    session_dir = ensure_sample_session()
+    video = session_dir / "session.mp4"
+    video.write_bytes(b"finished mp4")
+    (session_dir / "recording.json").write_text(
+        json.dumps({"path": str(video), "started_at": 1.0, "duration_s": 5.0}),
+        encoding="utf-8",
+    )
+    view = GarageView()
+    qtbot.addWidget(view)
+    view.refresh_sessions()
+
+    text = view._footage_status.text().lower()
+    assert "footage available" in text
+    assert "ai advice uses telemetry, not video" in text
+
+
+def test_status_column_tracks_live_ai_work_and_keeps_session_best(qtbot):
+    ensure_sample_session()
+    view = GarageView()
+    qtbot.addWidget(view)
+    view.refresh_sessions()
+    session = view.session
+    assert session is not None
+    best = session.best_lap
+    other = next(lap for lap in session.laps if lap is not best)
+
+    view.apply_coaching_progress(
+        CoachingProgress(other.source, CoachingStage.QUEUED)
+    )
+    assert statuses(view)[other.source.stem] == "AI QUEUED"
+
+    view.apply_coaching_progress(
+        CoachingProgress(other.source, CoachingStage.GENERATING)
+    )
+    assert statuses(view)[other.source.stem] == "AI GENERATING…"
+
+    view.apply_coaching_progress(
+        CoachingProgress(best.source, CoachingStage.READY, findings=2)
+    )
+    assert statuses(view)[best.source.stem] == "SESSION BEST · AI READY · 2 tips"
+
+    view.apply_coaching_progress(
+        CoachingProgress(other.source, CoachingStage.FAILED, message="model timed out")
+    )
+    assert statuses(view)[other.source.stem] == "AI FAILED"
+    row = next(
+        row
+        for row in range(view._table.rowCount())
+        if view._table.item(row, 0).text() == other.source.stem
+    )
+    assert "model timed out" in view._table.item(row, 4).toolTip()
+
+
+@pytest.mark.parametrize(
+    ("stage", "label"),
+    [
+        (CoachingStage.SETUP_NEEDED, "AI SETUP NEEDED"),
+        (CoachingStage.UNAVAILABLE, "AI UNAVAILABLE"),
+    ],
+)
+def test_status_explains_when_automatic_coaching_cannot_start(qtbot, stage, label):
+    ensure_sample_session()
+    view = GarageView()
+    qtbot.addWidget(view)
+    view.refresh_sessions()
+    lap = view.session.laps[0]
+
+    view.apply_coaching_progress(
+        CoachingProgress(lap.source, stage, message="Install the local coach first.")
+    )
+
+    assert label in statuses(view)[lap.source.stem]
 
 
 def test_latest_outcomes_newest_wins_and_failures_are_skipped(tmp_path):

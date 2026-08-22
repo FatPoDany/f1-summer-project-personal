@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from apex import theme
+from apex.coaching_queue import CoachingProgress, CoachingStage
 from f1coach_core import (
     Session,
     TelemetrySchemaError,
@@ -33,6 +34,7 @@ from f1coach_core import (
     list_sessions,
     load_session,
 )
+from f1coach_core.workspace import RECORDING_POINTER, session_recording
 
 # Driver sits beside Lap so a researcher collecting several participants can
 # tell whose laps these are without opening the files.
@@ -41,6 +43,7 @@ TABLE_HEADERS = ("Lap", "Driver", "Time", "Δ best", "Status")
 
 class GarageView(QWidget):
     lapOpened = Signal(object, object)  # (Lap, Session)
+    coachingRequested = Signal(object)  # Session
     sessionDeleted = Signal(str)  # absolute managed session path
     status = Signal(str)
 
@@ -48,6 +51,7 @@ class GarageView(QWidget):
         super().__init__(parent)
         self._session: Session | None = None
         self._fresh: set[str] = set()  # lap stems imported this run, not yet opened
+        self._coaching_progress: dict[Path, CoachingProgress] = {}
 
         self._session_list = QListWidget()
         self._session_list.currentRowChanged.connect(lambda _row: self._load_selected())
@@ -79,6 +83,10 @@ class GarageView(QWidget):
         self._table.customContextMenuRequested.connect(self._lap_menu)
         self._table.setToolTip("Double-click to open, right-click to export")
 
+        self._footage_status = QLabel()
+        self._footage_status.setWordWrap(True)
+        self._footage_status.setAccessibleName("Race-window footage status")
+
         buttons = QHBoxLayout()
         buttons.addWidget(import_button)
         buttons.addStretch(1)
@@ -87,6 +95,7 @@ class GarageView(QWidget):
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.addLayout(buttons)
+        right_layout.addWidget(self._footage_status)
         right_layout.addWidget(self._table, stretch=1)
 
         splitter = QSplitter()
@@ -120,6 +129,7 @@ class GarageView(QWidget):
         else:
             self._session = None
             self._table.setRowCount(0)
+            self._footage_status.clear()
 
     def _load_selected(self) -> None:
         item = self._session_list.currentItem()
@@ -131,12 +141,15 @@ class GarageView(QWidget):
             return
         self._session = load_session(match)
         self._populate_table()
+        self.coachingRequested.emit(self._session)
 
     def _populate_table(self) -> None:
         session = self._session
         self._table.setRowCount(0)
         if session is None:
+            self._footage_status.clear()
             return
+        self._update_footage_status(session)
         best = session.best_lap
         coached = latest_coaching_outcomes(session.path)
         rows = len(session.laps) + len(session.problems)
@@ -144,7 +157,7 @@ class GarageView(QWidget):
         for row, lap in enumerate(session.laps):
             delta = session.delta_to_best(lap)
             is_best = lap is best
-            status, status_color = self._lap_status(lap.source.stem, is_best, coached)
+            status, status_color, status_tip = self._lap_status(lap, is_best, coached)
             cells = (
                 lap.label,
                 lap.identity.driver or "—",
@@ -158,6 +171,8 @@ class GarageView(QWidget):
                     item.setForeground(QColor(theme.PURPLE))
                 elif col == len(TABLE_HEADERS) - 1 and status_color:
                     item.setForeground(QColor(status_color))
+                if col == len(TABLE_HEADERS) - 1 and status_tip:
+                    item.setToolTip(status_tip)
                 self._table.setItem(row, col, item)
         for i, (name, message) in enumerate(session.problems):
             row = len(session.laps) + i
@@ -168,20 +183,77 @@ class GarageView(QWidget):
                 item.setToolTip(message)
                 self._table.setItem(row, col, item)
 
-    def _lap_status(self, stem: str, is_best: bool, coached: dict[str, int]) -> tuple[str, str]:
-        """Status vocabulary: SESSION BEST beats ANALYSED beats NEW beats blank."""
+    def _update_footage_status(self, session: Session) -> None:
+        recording = session_recording(session.path)
+        if recording is not None:
+            text = (
+                "Footage available for synchronized corner review. "
+                "AI advice uses telemetry, not video."
+            )
+            colour = theme.GREEN
+        elif (session.path / RECORDING_POINTER).exists():
+            text = (
+                "The race-window footage link is unavailable. AI advice still "
+                "uses the saved telemetry."
+            )
+            colour = theme.YELLOW
+        else:
+            text = (
+                "No race-window footage is attached to this session. AI advice "
+                "uses the saved telemetry."
+            )
+            colour = theme.TEXT_DIM
+        self._footage_status.setText(text)
+        self._footage_status.setStyleSheet(f"color: {colour};")
+
+    def _lap_status(
+        self, lap, is_best: bool, coached: dict[str, int]
+    ) -> tuple[str, str, str]:
+        """Combine lap significance with explicit automatic-coaching progress."""
+        progress = self._coaching_progress.get(lap.source.resolve(strict=False))
+        ai_status, ai_colour, detail = self._ai_status(progress, coached.get(lap.source.stem))
         if is_best:
-            return "SESSION BEST", theme.PURPLE
-        if stem in coached:
-            n = coached[stem]
-            # Past tense: the lap has been analysed, and N is how many
-            # conclusions the model returned for it.
-            return (
-                f"ANALYSED · {n} finding{'s' if n != 1 else ''}" if n else "ANALYSED · clean"
-            ), ""
-        if stem in self._fresh:
-            return "NEW — just captured", theme.GREEN
-        return "", ""
+            label = "SESSION BEST" + (f" · {ai_status}" if ai_status else "")
+            return label, theme.PURPLE, detail
+        if ai_status:
+            prefix = "NEW · " if lap.source.stem in self._fresh else ""
+            return prefix + ai_status, ai_colour, detail
+        if lap.source.stem in self._fresh:
+            return "NEW — just captured", theme.GREEN, ""
+        return "", "", ""
+
+    @staticmethod
+    def _ai_status(
+        progress: CoachingProgress | None, saved_findings: int | None
+    ) -> tuple[str, str, str]:
+        if progress is None:
+            if saved_findings is None:
+                return "", "", ""
+            return f"AI READY · {saved_findings} tips", theme.GREEN, ""
+        labels = {
+            CoachingStage.QUEUED: ("AI QUEUED", theme.YELLOW),
+            CoachingStage.GENERATING: ("AI GENERATING…", theme.YELLOW),
+            CoachingStage.FAILED: ("AI FAILED", theme.RED),
+            CoachingStage.SETUP_NEEDED: ("AI SETUP NEEDED", theme.YELLOW),
+            CoachingStage.UNAVAILABLE: ("AI UNAVAILABLE", theme.RED),
+        }
+        if progress.stage is CoachingStage.READY:
+            count = progress.findings or 0
+            return f"AI READY · {count} tips", theme.GREEN, progress.message
+        label, colour = labels[progress.stage]
+        return label, colour, progress.message
+
+    def apply_coaching_progress(self, update: CoachingProgress) -> None:
+        """Render a trusted queue update without letting stale sessions mutate data."""
+        if not isinstance(update, CoachingProgress):
+            return
+        source = update.lap_source.resolve(strict=False)
+        self._coaching_progress[source] = update
+        session = self._session
+        if session is not None and any(
+            lap.source.resolve(strict=False) == source for lap in session.laps
+        ):
+            self._populate_table()
 
     def _open_row(self, row: int, _col: int = 0) -> None:
         if self._session is not None and 0 <= row < len(self._session.laps):
@@ -292,5 +364,3 @@ class GarageView(QWidget):
             # tag is merely missed — it's a hint, not part of the audit trail
             self._fresh.add(path.stem)
             self.status.emit(summary)
-
-

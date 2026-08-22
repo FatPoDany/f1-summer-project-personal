@@ -7,7 +7,13 @@ click zooms the strips onto that corner's zone — same path as "◈ show".
 import pytest
 
 from apex.analysis_view import AnalysisView
-from f1coach_core import corner_table, load_sample_session, single_lap_corner_table
+from f1coach_core import (
+    build_evidence_summary,
+    corner_table,
+    get_provider,
+    load_sample_session,
+    single_lap_corner_table,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -137,6 +143,63 @@ def test_the_replay_button_opens_the_worst_stretch_when_none_is_selected(qtbot):
     # Ranked worst-first, so an unselected list replays the costliest stretch.
     assert view._debrief.currentRow() == 0
     assert view._replay_window is not None
+
+
+def test_validated_report_advice_is_reused_by_the_matching_corner_review(qtbot):
+    view, _session = make_view(qtbot)
+    reference = view._ref_combo.currentData()
+    report = get_provider("mock").generate(
+        build_evidence_summary(view._lap, reference)
+    )
+
+    view._panel.reportReady.emit(report)
+
+    assert len(view._advice) == len(view._debrief_points)
+    for row, point in enumerate(view._debrief_points):
+        finding = next(
+            finding
+            for finding in report.findings
+            if any(
+                citation.corner == point.corner and citation.span == point.span_m
+                for citation in finding.evidence
+            )
+        )
+        assert view._advice[row].point is point
+        assert view._advice[row].advice == finding.action
+
+    first_action = view._advice[0].advice
+    view._replay_button.click()
+    assert first_action in view._replay_window._advice.text()
+
+
+def test_a_new_report_clears_advice_that_it_does_not_cite(qtbot):
+    """A prior run's prose must not survive as if the latest report said it."""
+    from types import SimpleNamespace
+
+    view, _session = make_view(qtbot)
+    report = get_provider("mock").generate(
+        build_evidence_summary(view._lap, view._ref_combo.currentData())
+    )
+    view._panel.reportReady.emit(report)
+    assert view._advice
+
+    view._panel.reportReady.emit(SimpleNamespace(findings=()))
+
+    assert view._advice == {}
+    assert view._advice_complete
+
+
+def test_changing_analysis_context_closes_the_old_corner_review(qtbot):
+    """Late advice for a new lap must never be painted into an old lap's window."""
+    view, _session = make_view(qtbot)
+    view._replay_button.click()
+    old_review = view._replay_window
+    assert old_review is not None
+
+    view._ref_combo.setCurrentIndex(view._ref_combo.findData(None))
+
+    assert view._replay_window is None
+    assert not old_review.isVisible()
 
 
 def test_opening_a_lap_compares_it_with_the_drivers_best_by_default(qtbot):

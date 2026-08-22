@@ -50,6 +50,8 @@ CLIP_TAIL_S = 2.0
 # useless if it gives up first.
 WINDOW_WAIT_S = 90.0
 WINDOW_POLL_S = 0.5
+ENCODER_TERMINATE_WAIT_S = 5.0
+ENCODER_KILL_WAIT_S = 2.0
 
 
 def window_exists(title: str = WINDOW_TITLE) -> bool:
@@ -267,12 +269,33 @@ class ScreenRecorder:
             try:
                 process.wait(timeout=timeout_s)
             except subprocess.TimeoutExpired:
-                process.terminate()
                 try:
-                    process.wait(timeout=5)
+                    process.terminate()
+                except OSError:
+                    pass
+                try:
+                    process.wait(timeout=ENCODER_TERMINATE_WAIT_S)
                 except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
+                    try:
+                        process.kill()
+                    except OSError:
+                        pass
+                    try:
+                        process.wait(timeout=ENCODER_KILL_WAIT_S)
+                    except subprocess.TimeoutExpired:
+                        self.error = (
+                            "The screen recorder could not be stopped, so its "
+                            "unfinished video was not published."
+                        )
+                        return None
+
+        if process.returncode not in (0, None):
+            detail = _why(process)
+            self.error = (
+                f"The screen recorder exited with code {process.returncode}, so "
+                f"its video was not published. {detail}"
+            ).strip()
+            return None
 
         duration = self._clock() - self._started_at
         try:

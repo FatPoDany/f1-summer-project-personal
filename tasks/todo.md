@@ -955,3 +955,31 @@ that arguable from recorded evidence rather than asserted.
   nothing records which arm they were allocated to, or that allocation was not
   chosen by whoever ran the session. For a between-groups claim that has to be
   decided before collection starts, not reconstructed afterwards.
+
+## Task 40: Recover bounded Collect Data lifecycle
+
+- [x] TORCS capture and Granite use separate worker pools.
+- [x] A simulator that ignores terminate is force-stopped after a grace period.
+- [x] An encoder that cannot be stopped cannot strand capture completion.
+- Verify: focused capture, human-capture, screen-capture, and coach-panel tests.
+
+## Task 41: Automatically coach missing Garage laps
+
+- [x] Each loaded session checks every lap using the exact automatic reference.
+- [x] Missing work runs serially; existing valid audits are restored.
+- [x] Missing model/runtime never causes a silent download.
+- Verify: `QT_QPA_PLATFORM=offscreen .venv/bin/pytest -q tests/test_garage_view.py tests/test_coach_panel.py`.
+
+## Task 42: Show live coaching state
+
+- [x] Status reports queued, generating, ready, failed, setup-needed, and unavailable.
+- [x] `SESSION BEST` remains visible beside its AI state; failure reason is inspectable.
+- Verify: Garage Qt tests and offscreen runtime interaction.
+
+## Task 43: Reuse validated advice in corner review
+
+- [x] A report finding is attached only to a deterministic stretch with matching
+  cited corner/span.
+- [x] Review a corner distinguishes matched advice from measured-only fallback.
+- [x] UI/docs do not claim that Granite receives video frames.
+- Verify: Analysis/replay/footage tests and focused offscreen interaction.

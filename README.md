@@ -57,18 +57,16 @@ latency. TORCS' own Driver Board also shows the sidecar state and a bounded
 summary of fresh advice; press the number key **1** during the race if that
 board is hidden.
 
-For post-lap coaching, import a CSV into a session and open any complete lap in
-**Analysis**. **Single-lap analysis** is the default: press **Analyze lap** and
-the fixed **Granite 4.1 · local** race engineer reviews deterministic technique
-signals such as coasting, repeated pedal applications, and pedal overlap. A
-second lap is optional under **Compare with**; selecting one adds distance-
-aligned time, speed, braking, and throttle comparisons. Each card can zoom the
-plotted telemetry to the cited corner. The Python validator rejects any model
-citation whose corner, value, unit, or distance span does not exactly match the
-computed evidence packet. A successful Granite result is retained in that
-session's coaching audit directory; reopening the same lap with the same
-single-lap/reference selection restores its cards after revalidating the saved
-evidence. Sessions can be deleted from Garage after explicit confirmation;
+For post-lap coaching, import a CSV into a session or open a captured session in
+**Garage**. Apex checks every lap automatically: the session best receives
+single-lap technique checks and each other lap is compared with that best lap.
+The Status column shows queued, generating, ready, failed, or setup-required
+state while one local **Granite 4.1** request runs at a time. Opening a lap in
+**Analysis** restores that exact result; **Review a corner** reuses its validated
+advice only when the cited corner and distance span exactly match the measured
+stretch. Each card can zoom the plotted telemetry to its evidence. A successful
+result is retained in the session's coaching audit directory and is revalidated
+before reuse. Sessions can be deleted from Garage after explicit confirmation;
 only Apex-managed copies and their audits are removed.
 
 The deterministic Granite Bridge capture defaults to three laps through
@@ -78,9 +76,12 @@ complete.
 
 For human telemetry, open **Collect Data** in Apex. The guided workflow checks
 study readiness, shows the locked assignment, opens TORCS directly on the
-five-lap Human session, records the drive, validates the CSV, and opens complete
-laps in the Garage. Participants do not use a terminal or select the TORCS
-driver, track, vehicle, or lap count. See the
+three-lap `aalborg` Human session, records and validates the drive, and registers
+complete laps in the Garage. It also attempts to record only the TORCS race
+window and reports the footage outcome explicitly. That video is for synchronized
+human review; current AI coaching receives validated telemetry, not video frames.
+Participants do not use a terminal or select the TORCS driver, track, vehicle,
+or lap count. See the
 [human capture guide](docs/HUMAN_TELEMETRY_CAPTURE.md) for the build and pilot
 acceptance procedure.
 

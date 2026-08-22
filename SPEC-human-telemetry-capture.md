@@ -139,6 +139,6 @@ compatible with bounded filenames and buffered output.
   builds continue to use the verified user-local runtime.
 - The input-device questionnaire remains study metadata outside the raw row
   schema for this slice.
-- `g-track-1`, `car7-trb1`, and five laps are development defaults for proving
+- `aalborg`, `car7-trb1`, and three laps are the current development defaults for
   the controlled launch. The final study preset remains subject to the internal
   pilot and supervisor-approved protocol; changing it requires a new preset id.

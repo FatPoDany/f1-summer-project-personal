@@ -13,11 +13,13 @@ does not replace, delay, or change keyboard, gamepad, or wheel commands.
 3. Enter the assigned pseudonymous participant id and select the study phase.
 4. Complete the fixed-track/car, input-device, and quiet-space checks.
 5. Select **Open TORCS and start recording**.
-6. Apex opens the assigned five-lap Human session directly. Drive the session;
+6. Apex opens the assigned three-lap Human session directly. Drive the session;
    do not change the track, vehicle, driver, or lap count. Exit TORCS when the
    assigned laps are complete.
-7. Back in Apex, choose **Open captured laps** to split complete laps and enter
-   the Garage. No CSV selection or terminal command is required.
+7. Back in Apex, the completion page confirms the number of saved laps and
+   whether race-window footage was recorded. Complete laps are registered
+   automatically; choose **Open captured laps** to enter the Garage. No CSV
+   selection or terminal command is required.
 
 TORCS deliberately opens as a second, Apex-managed simulation window. Treating
 the two processes as one product avoids a fragile fork of TORCS' legacy OpenGL
@@ -74,7 +76,7 @@ the Apex desktop workflow does not. For a fallback session:
 ## Controlled graphical preset
 
 The desktop workflow uses `Apex Study v1` (`apex-study-v1`): road track
-`g-track-1`, the normal Human driver backed by `car7-trb1`, and five Practice
+`aalborg`, the normal Human driver backed by `car7-trb1`, and three Practice
 laps. Apex shows these assignments before Start, launches TORCS with the
 graphical `-R <race.xml>` entry, and stores the complete preset identity in
 `manifest.json`. Standard `-r` remains the console/headless path and is never
@@ -129,6 +131,13 @@ The callback pairs the current observable car state with the human control
 command selected for the next physics update. This is the normal control-loop
 meaning of one row; it is not a post-physics reconstruction.
 
+On Windows, Apex also asks ffmpeg to record the fixed `Apex TORCS` race window;
+it never requests a whole-desktop capture. The recorder waits for that window
+to appear, then stores `session.mp4` plus its wall-clock start and duration in
+the manifest so deterministic corner spans can be replayed at the right time.
+This is optional human-review footage. Granite 4.1 receives the frozen telemetry
+evidence packet only and does not inspect the MP4 or extracted clips.
+
 ## Integrity and failure handling
 
 `manifest.json` records the pseudonymous id, phase, exact TORCS command, locked
@@ -138,8 +147,9 @@ counts, SHA-256 hashes, and registered run ids. It is written atomically.
 - A missing/non-executable TORCS binary fails before a capture directory is made.
 - A missing preset file disables Start before a capture directory is made and
   gives the facilitator a repair message.
-- A non-zero simulator exit preserves raw files and marks the manifest failed;
-  it does not silently register them as valid observations.
+- A non-zero simulator exit is recorded. Complete telemetry that passes every
+  validation may register as `complete_after_abnormal_exit`; short or malformed
+  evidence still fails and remains in the capture directory.
 - Every CSV is checked before any file from the session is registered.
 - For a locked study launch, every non-empty CSV must report the assigned
   internal track id, car model, Human driver module, and initial lap count;
@@ -147,6 +157,12 @@ counts, SHA-256 hashes, and registered run ids. It is written atomically.
 - A header-only or absent CSV is a readable `no_data` failure.
 - Native writer errors disable recording and return immediately; they never
   change the driver's actuator values.
+- **Stop this collection** first terminates TORCS, then force-kills it after a
+  bounded grace period if necessary. ffmpeg shutdown is bounded too, so the UI
+  reaches a stopped/failed terminal state instead of waiting indefinitely.
+- A missing TORCS window, missing ffmpeg, or unusable MP4 is written as
+  `recording_error` and shown in Apex. It never invalidates otherwise valid
+  telemetry.
 
 Generated participant telemetry is local research data and must not be committed
 to Git. Back it up according to the approved data-management plan.
@@ -162,6 +178,8 @@ Before recruiting participants, collect one internal run and verify:
 - lap time matches the TORCS result within the documented start-line sampling
   tolerance;
 - off-track and damage events agree with an observer's notes or video.
+- on the packaged Windows build, the manifest contains `recording`, the named
+  MP4 is non-empty and playable, and a corner review opens the matching clip.
 
 Passing this check establishes engineering readiness only. It does not establish
 that coaching improves human driving; that requires the planned controlled study.
