@@ -119,13 +119,24 @@ class GraniteCoach(CoachProvider):
 
         response, streamed = self._request(payload, headers, on_progress)
         try:
-            raw_text = response["choices"][0]["message"]["content"]
+            choice = response["choices"][0]
+            raw_text = choice["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
             raise GraniteCoachError(
                 "Granite server response is missing choices[0].message.content"
             ) from exc
         if not isinstance(raw_text, str):
             raise GraniteCoachError("Granite server returned non-text message content")
+        # An answer that ran out of room is unfinished, not malformed, and the
+        # two look identical to the JSON parser downstream. Saying which one it
+        # is here is the difference between raising --ctx-size and hunting for a
+        # schema bug that is not there.
+        if isinstance(choice, dict) and choice.get("finish_reason") == "length":
+            raise GraniteCoachError(
+                "The model ran out of room before it finished its answer "
+                f"({len(raw_text)} characters written). Start llama-server with "
+                "a larger --ctx-size so the evidence and the answer both fit."
+            )
         if on_progress is not None and not streamed:
             on_progress(raw_text)
 
@@ -189,6 +200,7 @@ class GraniteCoach(CoachProvider):
     ) -> dict:
         text = ""
         served_model = self.model
+        finish_reason: str | None = None
         for chunk in chunks:
             if not isinstance(chunk, dict):
                 raise GraniteCoachError(
@@ -206,6 +218,7 @@ class GraniteCoach(CoachProvider):
                 continue
             try:
                 content = choices[0].get("delta", {}).get("content")
+                finish_reason = choices[0].get("finish_reason") or finish_reason
             except (AttributeError, IndexError, TypeError) as exc:
                 raise GraniteCoachError(
                     "Granite server stream is missing choices[0].delta.content"
@@ -219,5 +232,5 @@ class GraniteCoach(CoachProvider):
                 on_progress(text)
         return {
             "model": served_model,
-            "choices": [{"message": {"content": text}}],
+            "choices": [{"message": {"content": text}, "finish_reason": finish_reason}],
         }

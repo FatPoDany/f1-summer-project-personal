@@ -53,7 +53,7 @@ server_args=(
     --cors-origins localhost
     --host 127.0.0.1
     --port "${PORT}"
-    --ctx-size 4096
+    --ctx-size 8192
     --parallel 1
     --threads "${THREADS}"
 )
