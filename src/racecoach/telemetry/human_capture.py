@@ -200,7 +200,7 @@ def default_study_preset(torcs_binary: str | Path) -> TorcsStudyPreset:
         track_id="aalborg",
         track_category="road",
         car_id="car7-trb1",
-        laps=5,
+        laps=3,
         race_config=race_config,
     )
 
@@ -273,10 +273,11 @@ def capture_human_runs(
     recorder = None
     if record:
         recorder = ScreenRecorder(capture_dir / "session.mp4")
-        if not recorder.start():
-            manifest["recording_error"] = recorder.error
-            _write_manifest(capture_dir, manifest)
-            recorder = None
+        # Waits for the simulator window before recording anything: gdigrab
+        # resolves the window title once and fails outright if nothing matches,
+        # so starting alongside TORCS meant recording a window that did not
+        # exist yet -- which produced no video at all, every time.
+        recorder.start_when_window_appears()
 
     try:
         completed = runner(
@@ -373,6 +374,7 @@ def capture_human_runs(
                 phase=config.phase,
                 setup=None if config.preset is None else config.preset.preset_id,
             ),
+            recording=manifest.get("recording"),
         )
         run_dirs.append(run_dir)
         run_records.append(
@@ -432,7 +434,12 @@ def finish_capture(capture_dir: str | Path) -> HumanCaptureResult:
 
     run_dirs, run_records = [], []
     for path, frame in non_empty:
-        run_dir = import_run(path, capture="human-driver", identity=identity)
+        run_dir = import_run(
+            path,
+            capture="human-driver",
+            identity=identity,
+            recording=manifest.get("recording"),
+        )
         run_dirs.append(run_dir)
         run_records.append(
             {

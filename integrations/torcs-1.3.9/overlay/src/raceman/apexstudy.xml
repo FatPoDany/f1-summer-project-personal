@@ -26,7 +26,7 @@
     </section>
 
     <section name="Apex Study">
-        <attnum name="laps" val="5"/>
+        <attnum name="laps" val="3"/>
         <attstr name="type" val="practice"/>
         <attstr name="starting order" val="drivers list"/>
         <attstr name="restart" val="no"/>

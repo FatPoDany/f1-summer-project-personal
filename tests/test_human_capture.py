@@ -753,3 +753,89 @@ def test_a_profile_that_does_not_exist_yet_is_left_to_torcs(tmp_path, torcs_bina
 
     _reset_driver_profile(tmp_path / "profile", torcs_binary)  # must not raise
     assert not (tmp_path / "profile" / "drivers").exists()
+
+
+def test_the_recording_follows_the_capture_into_the_run_it_registers(
+    torcs_binary, tmp_path
+):
+    """A run is a copy of the capture CSV with no way back to the folder it came
+    from, so what it came with has to travel with it."""
+
+    def runner(_command, **kwargs):
+        output_dir = Path(kwargs["env"]["APEX_HUMAN_TELEMETRY_DIR"])
+        write_capture(output_dir / "human-1.csv")
+        (output_dir / "session.mp4").write_bytes(b"video")
+        return SimpleNamespace(returncode=0)
+
+    recorded = {}
+
+    class FakeRecorder:
+        def __init__(self, destination):
+            self.destination = Path(destination)
+            self.error = ""
+
+        def start_when_window_appears(self, **_kwargs):
+            recorded["destination"] = self.destination
+
+        def stop(self):
+            from racecoach.telemetry.screen_capture import Recording
+
+            return Recording(self.destination, started_at=1000.0, duration_s=42.0)
+
+    import racecoach.telemetry.human_capture as hc
+
+    original, hc.ScreenRecorder = hc.ScreenRecorder, FakeRecorder
+    try:
+        result = capture_human_runs(
+            HumanCaptureConfig("A001", "baseline", torcs_binary), runner=runner
+        )
+    finally:
+        hc.ScreenRecorder = original
+
+    assert recorded["destination"].name == "session.mp4"
+    meta = json.loads((result.run_dirs[0] / "meta.json").read_text("utf-8"))
+    assert meta["recording"]["started_at"] == 1000.0
+    manifest = json.loads((result.capture_dir / "manifest.json").read_text("utf-8"))
+    assert manifest["recording"]["duration_s"] == 42.0
+
+
+def test_a_session_that_could_not_be_recorded_still_registers_its_laps(
+    torcs_binary, tmp_path
+):
+    """Recording is layered on the telemetry; it never decides the outcome."""
+
+    def runner(_command, **kwargs):
+        write_capture(Path(kwargs["env"]["APEX_HUMAN_TELEMETRY_DIR"]) / "human-1.csv")
+        return SimpleNamespace(returncode=0)
+
+    class BrokenRecorder:
+        """Nothing to record: the window never appeared, or ffmpeg is absent.
+
+        Reported when it stops rather than when it starts, because the recorder
+        now waits for the simulator window in the background -- by which time the
+        caller is already blocked waiting for TORCS to exit.
+        """
+
+        def __init__(self, _destination):
+            self.error = "No ffmpeg with this install."
+
+        def start_when_window_appears(self, **_kwargs):
+            pass
+
+        def stop(self):
+            return None
+
+    import racecoach.telemetry.human_capture as hc
+
+    original, hc.ScreenRecorder = hc.ScreenRecorder, BrokenRecorder
+    try:
+        result = capture_human_runs(
+            HumanCaptureConfig("A001", "baseline", torcs_binary), runner=runner
+        )
+    finally:
+        hc.ScreenRecorder = original
+
+    assert len(result.run_dirs) == 1  # the drive is safe
+    manifest = json.loads((result.capture_dir / "manifest.json").read_text("utf-8"))
+    assert "No ffmpeg" in manifest["recording_error"]
+    assert "recording" not in manifest

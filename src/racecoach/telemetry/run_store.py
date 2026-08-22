@@ -49,6 +49,11 @@ class RunMeta:
     driver: str | None = None  # pseudonymous participant id, never a name
     phase: str | None = None
     setup: str | None = None  # assigned preset id
+    # Where the screen recording of this run lives, when there was one. Carried
+    # here because the run is a copy of the capture CSV with no way back to the
+    # folder it came from, and the review window needs to find the footage long
+    # after the session that produced it.
+    recording: dict | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -63,6 +68,7 @@ class RunMeta:
             n_columns=int(data["n_columns"]),
             car_names=tuple(data["car_names"]),
             laps_seen=tuple(int(lap) for lap in data["laps_seen"]),
+            recording=data.get("recording"),
             sim_time_span_s=float(data["sim_time_span_s"]),
             cadence_hz=None if data["cadence_hz"] is None else float(data["cadence_hz"]),
             capture=data["capture"],
@@ -89,6 +95,7 @@ def import_run(
     *,
     capture: str = "torcs-exporter",
     identity: StudyIdentity = NO_IDENTITY,
+    recording: dict | None = None,
 ) -> Path:
     """Copy an exporter CSV into the store; returns the new run directory."""
     src = Path(src)
@@ -103,7 +110,12 @@ def import_run(
     df = _read_frame(src)
     run_dir = new_run_dir(src.stem)
     meta = _build_meta(
-        df, run_id=run_dir.name, source_file=src.name, capture=capture, identity=identity
+        df,
+        run_id=run_dir.name,
+        source_file=src.name,
+        capture=capture,
+        identity=identity,
+        recording=recording,
     )
     shutil.copy2(src, run_dir / TELEMETRY_NAME)
     (run_dir / META_NAME).write_text(
@@ -166,6 +178,7 @@ def _build_meta(
     source_file: str,
     capture: str,
     identity: StudyIdentity = NO_IDENTITY,
+    recording: dict | None = None,
 ) -> RunMeta:
     sim_time = pd.to_numeric(df.get("sim_time_s"), errors="coerce").dropna()
     span = float(sim_time.max() - sim_time.min()) if len(sim_time) else 0.0
@@ -184,6 +197,7 @@ def _build_meta(
         n_columns=len(df.columns),
         car_names=cars,
         laps_seen=laps,
+        recording=recording,
         sim_time_span_s=round(span, 3),
         cadence_hz=cadence,
         capture=capture,

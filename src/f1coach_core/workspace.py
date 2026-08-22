@@ -73,7 +73,10 @@ def import_lap(src: str | Path, session_name: str) -> Path:
 
 
 def import_telemetry(
-    src: str | Path, session_name: str, identity: StudyIdentity = NO_IDENTITY
+    src: str | Path,
+    session_name: str,
+    identity: StudyIdentity = NO_IDENTITY,
+    recording: dict | None = None,
 ) -> str:
     """Import any supported telemetry file; returns a human-readable summary.
 
@@ -92,7 +95,7 @@ def import_telemetry(
         import_lap(src, session_name)
         return f"Imported {src.name}"
 
-    _carry_recording_pointer(src, session_name)
+    _carry_recording_pointer(src, session_name, recording)
     laps = split_torcs_run(src)
     complete = [lap for lap in laps if lap.complete]
     dest_dir = create_session(session_name)
@@ -129,7 +132,9 @@ def import_telemetry(
 RECORDING_POINTER = "recording.json"
 
 
-def _carry_recording_pointer(src: Path, session_name: str) -> None:
+def _carry_recording_pointer(
+    src: Path, session_name: str, recording: dict | None = None
+) -> None:
     """Note where this session's footage lives, if the capture recorded any.
 
     A pointer rather than a copy: the recording is hundreds of megabytes and
@@ -139,11 +144,16 @@ def _carry_recording_pointer(src: Path, session_name: str) -> None:
     """
     import json
 
-    manifest = src.parent / "manifest.json"
-    try:
-        recording = json.loads(manifest.read_text("utf-8")).get("recording")
-    except (OSError, ValueError, AttributeError):
-        return
+    if recording is None:
+        # Importing a capture folder directly, where the manifest is a sibling.
+        # The capture flow copies the CSV into a run first and hands the details
+        # over explicitly, because that copy has no way back to its origin.
+        try:
+            recording = json.loads(
+                (src.parent / "manifest.json").read_text("utf-8")
+            ).get("recording")
+        except (OSError, ValueError, AttributeError):
+            return
     if not isinstance(recording, dict) or not recording.get("path"):
         return
     try:

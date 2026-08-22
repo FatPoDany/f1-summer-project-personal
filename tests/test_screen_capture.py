@@ -218,3 +218,57 @@ def test_the_window_title_the_recorder_captures_is_the_one_torcs_sets():
     """Capturing by title only works while both sides agree on it."""
     patch = Path("integrations/torcs-1.3.9/patches/screen-size-init.patch").read_text("utf-8")
     assert f'glutSetWindowTitle("{sc.WINDOW_TITLE}")' in patch
+
+
+def test_recording_waits_for_the_window_rather_than_racing_the_simulator(ffmpeg, tmp_path):
+    """gdigrab resolves the title once and fails if nothing matches.
+
+    Starting the recorder alongside TORCS meant pointing it at a window that did
+    not exist yet, which produced no video at all -- every time.
+    """
+    appeared = iter([False, False, True])
+    slept = []
+
+    assert sc.wait_for_window(
+        exists=lambda: next(appeared), sleep=slept.append, clock=lambda: 0.0
+    )
+    assert slept == [sc.WINDOW_POLL_S, sc.WINDOW_POLL_S]
+
+
+def test_a_window_that_never_appears_gives_up_and_says_so(ffmpeg, tmp_path):
+    times = iter([0.0, 0.0, 1e9])
+    assert not sc.wait_for_window(
+        exists=lambda: False, sleep=lambda _s: None, clock=lambda: next(times)
+    )
+
+    recorder = sc.ScreenRecorder(tmp_path / "out.mp4")
+    recorder.start_when_window_appears(
+        exists=lambda: False, sleep=lambda _s: None, clock=iter([0.0, 0.0, 1e9]).__next__
+    )
+    recorder.stop()
+    assert "never appeared" in recorder.error
+
+
+def test_a_failure_reports_what_ffmpeg_said_about_it(ffmpeg, tmp_path):
+    """Discarding stderr once left "produced no video" as the whole explanation."""
+
+    class Explaining(FakeProcess):
+        def __init__(self):
+            super().__init__()
+            self.stderr = _Bytes(b"Could not find window with title 'Apex TORCS'")
+
+    recorder = sc.ScreenRecorder(
+        tmp_path / "out.mp4", popen=lambda *_a, **_k: Explaining(), clock=lambda: 1.0
+    )
+    recorder.start()
+
+    assert recorder.stop() is None
+    assert "Could not find window" in recorder.error
+
+
+class _Bytes:
+    def __init__(self, data: bytes) -> None:
+        self._data = data
+
+    def read(self):
+        return self._data

@@ -154,6 +154,7 @@ class MainWindow(QMainWindow):
                         telemetry,
                         session_name=run_dir.name,
                         identity=_run_identity(run_dir),
+                        recording=_run_recording(run_dir),
                     )
                 )
             except (TelemetrySchemaError, OSError) as exc:
@@ -367,6 +368,21 @@ def _research_mode_enabled() -> bool:
     if value.strip():
         return value.strip().lower() in {"1", "true", "yes", "on"}
     return bool(QSettings("Apex", "Apex").value(RESEARCH_SETTING, False, type=bool))
+
+
+def _run_recording(run_dir: Path) -> dict | None:
+    """Where this run's screen recording lives, from the run's own meta.json.
+
+    Read from the run rather than passed down from the capture form, for the
+    same reason the identity is: a run opened days later, or one captured on
+    another machine, still knows what it came with.
+    """
+    try:
+        meta = json.loads((run_dir / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    recording = meta.get("recording") if isinstance(meta, dict) else None
+    return recording if isinstance(recording, dict) else None
 
 
 def _run_identity(run_dir: Path) -> StudyIdentity:

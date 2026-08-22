@@ -23,6 +23,7 @@ wrong corner -- which is worse than having no clip at all.
 import os
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,6 +44,46 @@ PRESET = "veryfast"
 # approach to it, and a viewer needs a moment to recognise where they are.
 CLIP_LEAD_S = 3.0
 CLIP_TAIL_S = 2.0
+
+# How long to wait for the simulator window to exist before giving up on
+# recording. Loading a track takes a while on a laptop, and the recorder is
+# useless if it gives up first.
+WINDOW_WAIT_S = 90.0
+WINDOW_POLL_S = 0.5
+
+
+def window_exists(title: str = WINDOW_TITLE) -> bool:
+    """Whether a window with this exact title is open.
+
+    gdigrab resolves the title once, at start-up, and fails outright if nothing
+    matches -- it does not wait and does not retry. So the recorder has to know
+    when the window is there, rather than being started alongside the simulator
+    and hoping.
+    """
+    if sys.platform != "win32":
+        return True  # X11 grabs a display, which exists before TORCS does
+    import ctypes
+
+    try:
+        return bool(ctypes.windll.user32.FindWindowW(None, title))
+    except (AttributeError, OSError):  # pragma: no cover - not reachable off Windows
+        return False
+
+
+def wait_for_window(
+    *,
+    timeout_s: float = WINDOW_WAIT_S,
+    poll_s: float = WINDOW_POLL_S,
+    exists=window_exists,
+    sleep=time.sleep,
+    clock=time.monotonic,
+) -> bool:
+    deadline = clock() + timeout_s
+    while clock() < deadline:
+        if exists():
+            return True
+        sleep(poll_s)
+    return False
 
 
 class RecordingError(RuntimeError):
@@ -148,11 +189,33 @@ class ScreenRecorder:
         self._clock = clock
         self._process = None
         self._started_at: float | None = None
+        self._thread: threading.Thread | None = None
+        self._abandon = threading.Event()
         self.error: str = ""
 
     @property
     def running(self) -> bool:
         return self._process is not None and self._process.poll() is None
+
+    def start_when_window_appears(self, **wait_kwargs) -> None:
+        """Start recording once the simulator window exists, without blocking.
+
+        The caller launches TORCS and waits for it to exit, so this cannot wait
+        inline. Beginning a few seconds late costs nothing: every clip is placed
+        by the wall clock stamped on the telemetry, not by where the file starts.
+        """
+
+        def wait_then_start() -> None:
+            if not wait_for_window(**wait_kwargs):
+                self.error = (
+                    "The simulator window never appeared, so nothing was recorded."
+                )
+                return
+            if not self._abandon.is_set():
+                self.start()
+
+        self._thread = threading.Thread(target=wait_then_start, daemon=True)
+        self._thread.start()
 
     def start(self) -> bool:
         """Begin recording. False, with `error` set, if it could not start."""
@@ -166,7 +229,10 @@ class ScreenRecorder:
                 record_command(binary, self.destination),
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                # Kept, not discarded. Throwing this away once left "produced no
+                # video" as the only thing anybody could say about a failure, and
+                # ffmpeg had explained itself on this pipe the whole time.
+                stderr=subprocess.PIPE,
                 **_no_console_window(),
             )
         except OSError as exc:
@@ -183,6 +249,10 @@ class ScreenRecorder:
         corrupt file -- throwing away the whole session's footage at the last
         moment, after the participant has already driven it.
         """
+        self._abandon.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+            self._thread = None
         process, self._process = self._process, None
         if process is None or self._started_at is None:
             return None
@@ -210,7 +280,7 @@ class ScreenRecorder:
         except OSError:
             usable = False
         if not usable:
-            self.error = "The screen recording produced no video."
+            self.error = f"The screen recording produced no video. {_why(process)}".strip()
             return None
         return Recording(
             path=self.destination, started_at=self._started_at, duration_s=duration
@@ -276,6 +346,23 @@ def cut_clip(
         detail = (getattr(completed, "stderr", b"") or b"").decode("utf-8", "replace")
         raise RecordingError(f"Could not cut the clip: {detail.strip()[:200]}")
     return destination
+
+
+def _why(process) -> str:
+    """Whatever ffmpeg said on its way out, trimmed to something readable."""
+    stream = getattr(process, "stderr", None)
+    if stream is None:
+        return ""
+    try:
+        detail = stream.read() or b""
+    except (OSError, ValueError):
+        # The pipe is already closed or was never one. Reporting nothing is
+        # better than failing inside the code that reports a failure.
+        return ""
+    if isinstance(detail, bytes):
+        detail = detail.decode("utf-8", "replace")
+    detail = " ".join(detail.split())
+    return f"ffmpeg said: {detail[:300]}" if detail else ""
 
 
 def _no_console_window() -> dict:
