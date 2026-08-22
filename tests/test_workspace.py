@@ -101,3 +101,49 @@ def test_session_symlinks_are_never_listed_or_deleted(tmp_path):
     with pytest.raises(ValueError, match="symbolic link"):
         delete_session("linked")
     assert outside.is_dir()
+
+
+def test_a_session_remembers_where_its_footage_is_without_copying_it(tmp_path, monkeypatch):
+    """The recording is hundreds of MB and already sits in the capture folder."""
+    import json
+
+    from f1coach_core.workspace import session_recording
+
+    monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "ws"))
+    video = tmp_path / "capture" / "session.mp4"
+    video.parent.mkdir(parents=True)
+    video.write_bytes(b"video")
+    session = tmp_path / "ws" / "sessions" / "s"
+    session.mkdir(parents=True)
+    (session / "recording.json").write_text(
+        json.dumps({"path": str(video), "started_at": 1000.0, "duration_s": 60.0}),
+        encoding="utf-8",
+    )
+
+    recording = session_recording(session)
+    assert recording is not None and recording.started_at == 1000.0
+    assert recording.path.read_bytes() == b"video"
+
+
+def test_a_pointer_to_footage_that_has_been_deleted_reads_as_none(tmp_path, monkeypatch):
+    """A pointer outlives the file it names; failing here beats failing in ffmpeg."""
+    import json
+
+    from f1coach_core.workspace import session_recording
+
+    monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "ws"))
+    session = tmp_path / "ws" / "sessions" / "s"
+    session.mkdir(parents=True)
+    (session / "recording.json").write_text(
+        json.dumps({"path": str(tmp_path / "gone.mp4"), "started_at": 1.0}), encoding="utf-8"
+    )
+
+    assert session_recording(session) is None
+
+
+def test_a_session_that_was_never_recorded_reads_as_none(tmp_path, monkeypatch):
+    from f1coach_core.workspace import session_recording
+
+    monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "ws"))
+    (tmp_path / "s").mkdir()
+    assert session_recording(tmp_path / "s") is None

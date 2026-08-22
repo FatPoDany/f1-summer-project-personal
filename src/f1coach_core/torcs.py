@@ -229,7 +229,15 @@ def _with_study_channels(
     Each is optional and independent: a source that publishes one but not the
     other still contributes what it has.
     """
-    for name, source in (("track_pos", "track_pos"), ("damage", "damage")):
+    for name, source in (
+        ("track_pos", "track_pos"),
+        ("damage", "damage"),
+        # Without this a lap cannot be lined up with a screen recording at all,
+        # and a coaching clip would have to be placed by assuming the simulator
+        # kept real time -- which is exactly what it stops doing when a laptop
+        # struggles.
+        ("wall_clock_s", "wall_clock_s"),
+    ):
         if source not in seg.columns:
             continue
         values = pd.to_numeric(seg[source], errors="coerce").reindex(kept)

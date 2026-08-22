@@ -92,6 +92,7 @@ def import_telemetry(
         import_lap(src, session_name)
         return f"Imported {src.name}"
 
+    _carry_recording_pointer(src, session_name)
     laps = split_torcs_run(src)
     complete = [lap for lap in laps if lap.complete]
     dest_dir = create_session(session_name)
@@ -123,6 +124,51 @@ def import_telemetry(
     if details:
         summary += f" ({', '.join(details)})"
     return summary
+
+
+RECORDING_POINTER = "recording.json"
+
+
+def _carry_recording_pointer(src: Path, session_name: str) -> None:
+    """Note where this session's footage lives, if the capture recorded any.
+
+    A pointer rather than a copy: the recording is hundreds of megabytes and
+    already sits in the capture folder the participant hands over. Duplicating it
+    into the session would double that for no gain, and the clips cut from it are
+    small enough to travel on their own.
+    """
+    import json
+
+    manifest = src.parent / "manifest.json"
+    try:
+        recording = json.loads(manifest.read_text("utf-8")).get("recording")
+    except (OSError, ValueError, AttributeError):
+        return
+    if not isinstance(recording, dict) or not recording.get("path"):
+        return
+    try:
+        (sessions_root() / session_name / RECORDING_POINTER).write_text(
+            json.dumps(recording, indent=2), encoding="utf-8"
+        )
+    except OSError:
+        return
+
+
+def session_recording(session_dir: str | Path):
+    """The recording behind a session, or None when there is not a usable one."""
+    import json
+
+    from racecoach.telemetry.screen_capture import Recording
+
+    try:
+        data = json.loads((Path(session_dir) / RECORDING_POINTER).read_text("utf-8"))
+        recording = Recording.from_dict(data)
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    # A pointer outlives the file it names: a participant may have moved or
+    # deleted the capture folder, and a dangling path would fail deep inside
+    # ffmpeg rather than here.
+    return recording if recording.path.is_file() else None
 
 
 def _unique_dest(dest_dir: Path, name: str) -> Path:

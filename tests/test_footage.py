@@ -1,0 +1,87 @@
+"""Placing a coaching stretch inside a recording, or admitting it cannot be done."""
+
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from f1coach_core import footage
+from f1coach_core.debrief import DebriefPoint
+from f1coach_core.lap import Lap
+
+
+def make_lap(*, wall_clock: bool = True, start_epoch: float = 1_700_000_000.0) -> Lap:
+    n = 200
+    dist = np.linspace(0.0, 1000.0, n)
+    t = np.linspace(0.0, 40.0, n)
+    data = {
+        "t": t,
+        "dist": dist,
+        "speed": np.full(n, 25.0),
+        "throttle": np.ones(n),
+        "brake": np.zeros(n),
+        "steer": np.zeros(n),
+        "gear": np.full(n, 4),
+    }
+    if wall_clock:
+        data["wall_clock_s"] = start_epoch + t
+    return Lap(pd.DataFrame(data), Path("lap.csv"), schema_version=1, dist_derived=False)
+
+
+def point(span=(200.0, 400.0)):
+    return DebriefPoint(
+        corner="T3", apex_m=sum(span) / 2, span_m=span, time_lost_s=0.5,
+        difference="", detail="",
+    )
+
+
+def test_a_stretch_is_located_by_wall_clock_not_by_assuming_real_time():
+    lap = make_lap()
+    window = footage.window_for(lap, point((200.0, 400.0)))
+
+    assert window is not None
+    # 200 m and 400 m of a 1000 m lap driven in 40 s: 8 s and 16 s in.
+    assert window.from_wall_clock == pytest.approx(1_700_000_008.0, abs=0.3)
+    assert window.to_wall_clock == pytest.approx(1_700_000_016.0, abs=0.3)
+    assert window.seconds == pytest.approx(8.0, abs=0.5)
+
+
+def test_a_lap_without_the_clock_yields_no_footage_rather_than_a_guess():
+    """A clip that looks right and shows the wrong corner teaches the wrong thing."""
+    lap = make_lap(wall_clock=False)
+
+    assert not footage.has_wall_clock(lap)
+    assert footage.window_for(lap, point()) is None
+
+
+def test_a_stretch_past_the_end_of_the_lap_is_not_located():
+    lap = make_lap()
+    assert footage.window_for(lap, point((5000.0, 6000.0))) is None
+
+
+def test_a_clock_of_zero_is_treated_as_absent():
+    """Old recorders wrote no clock; a zero would place every clip at the epoch."""
+    lap = make_lap()
+    lap.df["wall_clock_s"] = 0.0
+
+    assert footage.window_for(lap, point()) is None
+
+
+def test_only_the_stretches_that_can_be_located_come_back():
+    lap = make_lap()
+    points = [point((200.0, 400.0)), point((5000.0, 6000.0)), point((600.0, 800.0))]
+
+    found = footage.windows_for(lap, points)
+
+    assert set(found) == {0, 2}  # indexed, so the caller knows which are missing
+
+
+def test_the_window_stops_inside_the_stretch_it_describes():
+    """It must not run past what the coaching is talking about."""
+    lap = make_lap()
+    window = footage.window_for(lap, point((200.0, 400.0)))
+    inside = lap.df[(lap.df["dist"] >= 200.0) & (lap.df["dist"] <= 400.0)]
+
+    assert window.from_wall_clock >= float(inside["wall_clock_s"].iloc[0]) - 1e-6
+    assert window.to_wall_clock <= float(inside["wall_clock_s"].iloc[-1]) + 1e-6

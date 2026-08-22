@@ -713,3 +713,43 @@ def test_a_profile_nobody_has_touched_needs_no_reset(tmp_path, torcs_binary):
 
     _reset_display_mode(profile, torcs_binary)
     assert graph.read_text("utf-8") == '<params name="graph"/>\n'
+
+
+def test_an_existing_profile_still_gets_this_builds_skill_level(tmp_path, torcs_binary):
+    """A profile is seeded once and then left alone, so a rookie stays a rookie.
+
+    That is how damage stayed at zero after the assignment moved to `amateur`:
+    every participant who had run Apex before kept multiplying impacts by zero,
+    and only a brand-new install would have recorded any.
+    """
+    from racecoach.telemetry.human_capture import _reset_driver_profile
+    from racecoach.telemetry.torcs_runtime import torcs_data_root
+
+    shipped = torcs_data_root(torcs_binary) / "drivers" / "human" / "human.xml"
+    if not shipped.is_file():
+        pytest.skip("no installed TORCS runtime on this machine")
+
+    profile = tmp_path / "profile" / "drivers" / "human"
+    profile.mkdir(parents=True)
+    stale = profile / "human.xml"
+    stale.write_text(
+        '<params name="Human">\n'
+        '  <attstr name="skill level" val="rookie"/>\n'
+        '  <attstr name="key up" val="Player-chosen"/>\n'
+        "</params>\n",
+        encoding="latin-1",
+    )
+
+    _reset_driver_profile(tmp_path / "profile", torcs_binary)
+
+    text = stale.read_text("latin-1")
+    assert 'name="skill level" val="rookie"' not in text
+    # Their own control bindings are theirs; only the assignment is re-applied.
+    assert 'name="key up" val="Player-chosen"' in text
+
+
+def test_a_profile_that_does_not_exist_yet_is_left_to_torcs(tmp_path, torcs_binary):
+    from racecoach.telemetry.human_capture import _reset_driver_profile
+
+    _reset_driver_profile(tmp_path / "profile", torcs_binary)  # must not raise
+    assert not (tmp_path / "profile" / "drivers").exists()

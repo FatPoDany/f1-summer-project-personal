@@ -40,11 +40,24 @@ track_pos --      lateral position, 0 at the centre line and +-1 at the track
 damage    --      cumulative damage, monotonically non-decreasing within a lap.
                   OPTIONAL. Increases mark incidents; the level itself is only
                   meaningful relative to where the lap started.
+wall_clock_s s    seconds since the Unix epoch when the sample was taken.
+                  OPTIONAL. The only thing that can line a lap up with something
+                  recorded outside the simulator: sim time tracks real time only
+                  while the machine keeps up, and coaching footage cut against a
+                  drifting clock shows the wrong corner.
 """
 
 SCHEMA_VERSION = 1
 SUPPORTED_VERSIONS = (1,)
 
 REQUIRED_COLUMNS = ("t", "speed", "throttle", "brake", "steer", "gear")
-OPTIONAL_COLUMNS = ("dist", "sector", "x", "y", "track_pos", "damage")
+OPTIONAL_COLUMNS = (
+    "dist",
+    "sector",
+    "x",
+    "y",
+    "track_pos",
+    "damage",
+    "wall_clock_s",
+)
 CANONICAL_ORDER = ("t", "dist", "speed", "throttle", "brake", "steer", "gear", "sector")

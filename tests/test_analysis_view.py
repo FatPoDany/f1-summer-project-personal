@@ -172,3 +172,19 @@ def test_a_lap_with_nothing_to_compare_against_still_opens(qtbot, tmp_path):
 
     assert view._ref_combo.currentData() is None
     assert not view._replay_button.isVisibleTo(view)
+
+
+def test_the_review_button_retracts_when_there_is_nothing_to_review(qtbot):
+    """It used to linger from the previous lap and do nothing when pressed."""
+    from f1coach_core import load_sample_session
+
+    session = load_sample_session()
+    view = AnalysisView()
+    qtbot.addWidget(view)
+    view.set_context(max(session.laps, key=lambda lap: lap.lap_time), session)
+    assert view._replay_button.isVisibleTo(view)
+
+    # Single-lap: no reference, so there is no stretch to review.
+    view._ref_combo.setCurrentIndex(view._ref_combo.findData(None))
+
+    assert not view._replay_button.isVisibleTo(view)

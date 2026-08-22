@@ -92,3 +92,72 @@ def test_the_coachs_words_appear_beside_the_stretch_they_describe(qtbot):
     )
 
     assert "braked earlier here" in window._replay._note.text()
+
+
+def test_the_review_window_carries_the_whole_laps_stretches(qtbot):
+    """Reviewing one corner usually means wanting the next one too."""
+    from apex.widgets.replay_window import ReplayWindow
+    from f1coach_core.debrief import DebriefPoint
+
+    points = [
+        _point(),
+        DebriefPoint(corner="T7", apex_m=700.0, span_m=(650.0, 780.0),
+                     time_lost_s=0.2, difference="", detail=""),
+    ]
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+    window.show_stretch(_positioned_lap(20.0), points[0], points=points)
+
+    assert window._chooser.count() == 2
+    assert window._chooser.isEnabled()
+    assert window._chooser.currentIndex() == 0
+
+
+def test_changing_stretch_reloads_without_leaving_the_window(qtbot):
+    from apex.widgets.replay_window import ReplayWindow
+    from f1coach_core.debrief import DebriefPoint
+
+    points = [
+        _point(),
+        DebriefPoint(corner="T7", apex_m=700.0, span_m=(650.0, 780.0),
+                     time_lost_s=0.2, difference="", detail=""),
+    ]
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+    window.show_stretch(_positioned_lap(20.0), points[0], points=points)
+
+    with qtbot.waitSignal(window.stretchChanged):
+        window._chooser.setCurrentIndex(1)
+    assert "T7" in window._replay._title.text()
+
+
+def test_a_single_stretch_leaves_the_chooser_inert(qtbot):
+    from apex.widgets.replay_window import ReplayWindow
+
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+    window.show_stretch(_positioned_lap(20.0), _point())
+
+    assert window._chooser.count() == 1
+    assert not window._chooser.isEnabled()
+
+
+def test_the_coachs_note_follows_the_stretch_it_belongs_to(qtbot):
+    from apex.widgets.replay_window import ReplayWindow
+    from f1coach_core.debrief import DebriefPoint
+
+    points = [
+        _point(),
+        DebriefPoint(corner="T7", apex_m=700.0, span_m=(650.0, 780.0),
+                     time_lost_s=0.2, difference="", detail=""),
+    ]
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+    window.show_stretch(
+        _positioned_lap(20.0), points[0], points=points,
+        notes={0: "Brake later here.", 1: "You lost momentum along this stretch."},
+    )
+    assert "Brake later here." in window._replay._note.text()
+
+    window._chooser.setCurrentIndex(1)
+    assert "lost momentum" in window._replay._note.text()

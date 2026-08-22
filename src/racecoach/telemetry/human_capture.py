@@ -24,7 +24,12 @@ from f1coach_core.lap import StudyIdentity
 from f1coach_core.torcs import is_torcs_export
 from f1coach_core.workspace import workspace_root
 from racecoach.telemetry.run_store import import_run
-from racecoach.telemetry.torcs_runtime import torcs_launch_cwd, torcs_raceman_dir
+from racecoach.telemetry.screen_capture import ScreenRecorder
+from racecoach.telemetry.torcs_runtime import (
+    torcs_data_root,
+    torcs_launch_cwd,
+    torcs_raceman_dir,
+)
 
 CAPTURE_SCHEMA_VERSION = "apex-human-capture-v1"
 TELEMETRY_DIR_ENV = "APEX_HUMAN_TELEMETRY_DIR"
@@ -209,6 +214,7 @@ def capture_human_runs(
     *,
     runner: Runner = subprocess.run,
     base_env: dict[str, str] | None = None,
+    record: bool = True,
     stop_requested: Callable[[], bool] | None = None,
 ) -> HumanCaptureResult:
     """Run TORCS and import every validated human-driver CSV it produces."""
@@ -260,6 +266,18 @@ def capture_human_runs(
         environment[TORCS_LOCAL_DIR_ENV] = str(profile_dir)
         _write_screen_config(profile_dir, binary, config.preset)
         _reset_display_mode(profile_dir, binary)
+        _reset_driver_profile(profile_dir, binary)
+    # Recording is layered on top and never decides anything. If it will not
+    # start, the session runs unrecorded and says so in the manifest rather than
+    # denying somebody the drive they came for.
+    recorder = None
+    if record:
+        recorder = ScreenRecorder(capture_dir / "session.mp4")
+        if not recorder.start():
+            manifest["recording_error"] = recorder.error
+            _write_manifest(capture_dir, manifest)
+            recorder = None
+
     try:
         completed = runner(
             command,
@@ -271,6 +289,16 @@ def capture_human_runs(
         manifest.update(status="launch_failed", error=str(exc))
         _write_manifest(capture_dir, manifest)
         raise HumanCaptureError(f"could not start TORCS: {exc}", capture_dir) from exc
+
+    if recorder is not None:
+        recording = recorder.stop()
+        if recording is None:
+            manifest["recording_error"] = recorder.error
+        else:
+            # The clips are cut long after the session, from the debrief that
+            # has not been computed yet, so where the footage starts on the wall
+            # clock has to survive in writing.
+            manifest["recording"] = recording.to_dict()
 
     manifest["returncode"] = int(completed.returncode)
     if stop_requested is not None and stop_requested():
@@ -618,6 +646,47 @@ def _reset_display_mode(profile_dir: Path, torcs_binary: Path) -> None:
     try:
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(updated, encoding="utf-8")
+    except OSError:
+        return
+
+
+_SKILL_ATTR = re.compile(r'(<attstr\s+name="skill level"[^>]*?\bval=")([^"]*)(")')
+
+
+def _reset_driver_profile(profile_dir: Path, torcs_binary: Path) -> None:
+    """Re-seed the human driver settings from the ones this build ships.
+
+    TORCS seeds a profile once and then leaves it alone, so a change to the
+    assignment reaches only people who have never run Apex before. That is how
+    the damage setting went unnoticed: the shipped human.xml moved to `amateur`,
+    which is what makes impacts register at all, and every existing profile
+    quietly stayed on `rookie` and kept multiplying damage by zero.
+
+    Only the skill level is rewritten, not the whole file: the profile also
+    carries the participant's own control bindings, and replacing those between
+    sessions would change what they are driving with.
+    """
+    destination = profile_dir / "drivers" / "human" / "human.xml"
+    source = torcs_data_root(torcs_binary) / "drivers" / "human" / "human.xml"
+    try:
+        shipped = source.read_text(encoding="latin-1")
+    except OSError:
+        return
+    wanted = _SKILL_ATTR.search(shipped)
+    if wanted is None:
+        return
+    try:
+        current = destination.read_text(encoding="latin-1")
+    except OSError:
+        return  # no profile copy yet: TORCS will seed it from the shipped file
+
+    updated, count = _SKILL_ATTR.subn(
+        lambda m: f"{m.group(1)}{wanted.group(2)}{m.group(3)}", current
+    )
+    if not count or updated == current:
+        return
+    try:
+        destination.write_text(updated, encoding="latin-1")
     except OSError:
         return
 

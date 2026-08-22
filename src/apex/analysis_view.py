@@ -35,6 +35,7 @@ from f1coach_core import (
     sector_times,
     single_lap_corner_table,
 )
+from f1coach_core.workspace import session_recording
 
 COMPARISON_HEADERS = (
     "Corner",
@@ -130,14 +131,20 @@ class AnalysisView(QWidget):
         self._debrief.itemClicked.connect(self._zoom_debrief_item)
         self._debrief.itemDoubleClicked.connect(self._replay_debrief_item)
         self._debrief.hide()
-        # A double-click on a list row is not a discoverable way to reach the
-        # main thing a participant is here for. The button says what it opens.
-        self._replay_button = QPushButton("Watch this corner")
+        # Beside the summary it acts on rather than as a strip under the charts:
+        # a control belongs next to the thing it opens, and a double-click on a
+        # list row is not a discoverable way to reach the main thing a
+        # participant is here for.
+        self._replay_button = QPushButton("Review a corner…")
         self._replay_button.setToolTip(
-            "Replay the selected stretch against your best lap, with the coach's note"
+            "Open the review window: your line against your best lap, with the "
+            "coach's note for that stretch"
         )
         self._replay_button.clicked.connect(self._replay_selected)
         self._replay_button.hide()
+        debrief_header = QHBoxLayout()
+        debrief_header.addWidget(self._debrief_heading, stretch=1)
+        debrief_header.addWidget(self._replay_button)
         self._debrief_points: list[DebriefPoint] = []
         # Prose the coach produced, by row, so a replay can show what was said
         # about the stretch it is playing.
@@ -156,9 +163,8 @@ class AnalysisView(QWidget):
         charts_layout.setContentsMargins(0, 0, 0, 0)
         charts_layout.setSpacing(4)
         charts_layout.addWidget(self._stack, stretch=1)
-        charts_layout.addWidget(self._debrief_heading)
+        charts_layout.addLayout(debrief_header)
         charts_layout.addWidget(self._debrief)
-        charts_layout.addWidget(self._replay_button)
         charts_layout.addWidget(self._corners)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -255,6 +261,9 @@ class AnalysisView(QWidget):
         if self._lap is None or reference is None or reference is self._lap:
             self._debrief_heading.hide()
             self._debrief.hide()
+            # Without this it keeps the previous lap's state and sits there
+            # doing nothing when pressed.
+            self._replay_button.hide()
             return
         try:
             points = lap_debrief(self._lap, reference)
@@ -305,6 +314,19 @@ class AnalysisView(QWidget):
             d0, d1 = self._debrief_points[row].span_m
             self._show_evidence(d0, d1)
 
+    def _session_dir(self) -> Path | None:
+        """The folder this lap's canonical CSV lives in, which is its session."""
+        return self._lap.source.parent if self._lap is not None else None
+
+    def _session_recording(self):
+        directory = self._session_dir()
+        return session_recording(directory) if directory is not None else None
+
+    def _clips_dir(self) -> Path:
+        """Beside the laps, so clips travel with the session they explain."""
+        directory = self._session_dir()
+        return (directory or Path.cwd()) / "clips"
+
     def _replay_selected(self) -> None:
         """Open the replay for whichever stretch is highlighted, or the worst one."""
         if not self._debrief_points:
@@ -337,6 +359,12 @@ class AnalysisView(QWidget):
             point,
             reference=self._reference,
             note=self._narration.get(row, ""),
+            # The whole lap's stretches travel with it, so the review window can
+            # move between corners without sending the participant back here.
+            points=self._debrief_points,
+            notes=self._narration,
+            recording=self._session_recording(),
+            clips_dir=self._clips_dir(),
         )
 
     # -- corner table ------------------------------------------------------

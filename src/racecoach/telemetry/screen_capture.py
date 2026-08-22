@@ -1,0 +1,285 @@
+"""Recording the race window, so coaching can point at what actually happened.
+
+A line on a map says a participant lost time at a corner. Footage of that corner
+says what they did there. The two together are the difference between being told
+and being shown, which is what the coaching is for.
+
+Two things this deliberately refuses to do:
+
+* Record the desktop. gdigrab will happily capture the whole screen and it would
+  be easier, but participants install this on their own laptops and whatever else
+  they have open is not ours to record. Only the simulator window, found by the
+  fixed title the overlay patch gives it.
+* Cost anybody their session. Recording is a convenience layered on top of the
+  telemetry; every failure here is reported and swallowed, never raised into the
+  capture that the study actually depends on.
+
+Clips are cut against the wall clock, not the simulator's. Telemetry rows carry
+``wall_clock_s`` for exactly this reason: simulator time only tracks real time
+while the machine keeps up, and a clip cut against a drifting clock points at the
+wrong corner -- which is worse than having no clip at all.
+"""
+
+import os
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from pathlib import Path
+
+WINDOW_TITLE = "Apex TORCS"  # set by patches/screen-size-init.patch
+FFMPEG_EXECUTABLE = "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg"
+
+FRAMERATE = 30
+# Constant Rate Factor: plenty for reviewing a driving line, and small enough
+# that a ten minute session is a few hundred MB rather than several GB.
+CRF = 28
+# The encoder must not compete with the simulator for CPU. A participant whose
+# frame rate drops because we are recording is driving a different car from one
+# whose does not, and the study is comparing how they drove.
+PRESET = "veryfast"
+
+# Padding either side of a coaching stretch. A corner makes no sense without the
+# approach to it, and a viewer needs a moment to recognise where they are.
+CLIP_LEAD_S = 3.0
+CLIP_TAIL_S = 2.0
+
+
+class RecordingError(RuntimeError):
+    """Recording could not start, or a clip could not be cut."""
+
+
+@dataclass(frozen=True)
+class Recording:
+    """A finished recording, and the wall-clock instant its first frame belongs to."""
+
+    path: Path
+    started_at: float  # seconds since the epoch
+    duration_s: float
+
+    def offset_of(self, wall_clock_s: float) -> float:
+        """Where a telemetry instant sits inside this file."""
+        return wall_clock_s - self.started_at
+
+    def to_dict(self) -> dict:
+        return {
+            "path": str(self.path),
+            "started_at": self.started_at,
+            "duration_s": round(self.duration_s, 3),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Recording":
+        return cls(
+            path=Path(data["path"]),
+            started_at=float(data["started_at"]),
+            duration_s=float(data.get("duration_s", 0.0)),
+        )
+
+
+def ffmpeg_binary() -> Path | None:
+    """The ffmpeg this install should use, or None if there is not one."""
+    configured = os.environ.get("APEX_FFMPEG")
+    if configured:
+        candidate = Path(configured)
+        return candidate if candidate.is_file() else None
+
+    roots: list[Path] = []
+    packaged = getattr(sys, "_MEIPASS", None)
+    if packaged:
+        roots.append(Path(packaged))
+    roots.append(Path(sys.executable).resolve().parent)
+    for root in roots:
+        for candidate in (root / "ffmpeg" / FFMPEG_EXECUTABLE, root / FFMPEG_EXECUTABLE):
+            if candidate.is_file():
+                return candidate
+
+    from shutil import which
+
+    found = which(FFMPEG_EXECUTABLE)
+    return Path(found) if found else None
+
+
+def is_available() -> bool:
+    return ffmpeg_binary() is not None
+
+
+def record_command(binary: Path, destination: Path) -> list[str]:
+    """Capture the simulator window only, never the desktop around it."""
+    if sys.platform == "win32":
+        source = ["-f", "gdigrab", "-i", f"title={WINDOW_TITLE}"]
+    else:
+        # X11 offers no title-based grab, so a display capture is the only option
+        # here. This branch exists for development; the study runs on Windows.
+        source = ["-f", "x11grab", "-i", os.environ.get("DISPLAY", ":0")]
+    return [
+        str(binary),
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-framerate",
+        str(FRAMERATE),
+        *source,
+        "-c:v",
+        "libx264",
+        "-preset",
+        PRESET,
+        "-crf",
+        str(CRF),
+        "-pix_fmt",
+        "yuv420p",
+        "-y",
+        str(destination),
+    ]
+
+
+class ScreenRecorder:
+    """An ffmpeg recording the race window for the length of one session."""
+
+    def __init__(
+        self,
+        destination: str | Path,
+        *,
+        popen=subprocess.Popen,
+        clock=time.time,
+    ) -> None:
+        self.destination = Path(destination)
+        self._popen = popen
+        self._clock = clock
+        self._process = None
+        self._started_at: float | None = None
+        self.error: str = ""
+
+    @property
+    def running(self) -> bool:
+        return self._process is not None and self._process.poll() is None
+
+    def start(self) -> bool:
+        """Begin recording. False, with `error` set, if it could not start."""
+        binary = ffmpeg_binary()
+        if binary is None:
+            self.error = "No ffmpeg with this install, so the session was not recorded."
+            return False
+        try:
+            self.destination.parent.mkdir(parents=True, exist_ok=True)
+            self._process = self._popen(
+                record_command(binary, self.destination),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                **_no_console_window(),
+            )
+        except OSError as exc:
+            self.error = f"Screen recording could not start: {exc}"
+            return False
+        self._started_at = self._clock()
+        return True
+
+    def stop(self, *, timeout_s: float = 20.0) -> Recording | None:
+        """End the recording and return it, or None if there is nothing usable.
+
+        ffmpeg is asked to quit through its own stdin rather than killed. A
+        terminated encoder leaves an mp4 with no index, which players treat as a
+        corrupt file -- throwing away the whole session's footage at the last
+        moment, after the participant has already driven it.
+        """
+        process, self._process = self._process, None
+        if process is None or self._started_at is None:
+            return None
+        if process.poll() is None:
+            try:
+                if process.stdin:
+                    process.stdin.write(b"q")
+                    process.stdin.flush()
+                    process.stdin.close()
+            except OSError:
+                pass
+            try:
+                process.wait(timeout=timeout_s)
+            except subprocess.TimeoutExpired:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+
+        duration = self._clock() - self._started_at
+        try:
+            usable = self.destination.is_file() and self.destination.stat().st_size > 0
+        except OSError:
+            usable = False
+        if not usable:
+            self.error = "The screen recording produced no video."
+            return None
+        return Recording(
+            path=self.destination, started_at=self._started_at, duration_s=duration
+        )
+
+
+def cut_clip(
+    recording: Recording,
+    from_wall_clock: float,
+    to_wall_clock: float,
+    destination: str | Path,
+    *,
+    lead_s: float = CLIP_LEAD_S,
+    tail_s: float = CLIP_TAIL_S,
+    runner=subprocess.run,
+) -> Path:
+    """Cut the footage of one coaching stretch out of a session recording.
+
+    Re-encoded rather than stream-copied: a copy can only cut on a keyframe, and
+    with a multi-second GOP that lands the clip well away from the corner being
+    discussed. Precision matters more here than a few seconds of CPU, because a
+    clip that shows the wrong corner is worse than no clip.
+    """
+    binary = ffmpeg_binary()
+    if binary is None:
+        raise RecordingError("No ffmpeg with this install, so no clip can be cut.")
+
+    start = max(0.0, recording.offset_of(from_wall_clock) - lead_s)
+    end = recording.offset_of(to_wall_clock) + tail_s
+    if end <= start:
+        raise RecordingError("That stretch is not inside the recording.")
+
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        str(binary),
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        # Before -i so ffmpeg seeks rather than decoding from the beginning,
+        # then -t for the length: a ten minute recording would otherwise be
+        # decoded in full for every clip.
+        "-ss",
+        f"{start:.3f}",
+        "-t",
+        f"{end - start:.3f}",
+        "-i",
+        str(recording.path),
+        "-c:v",
+        "libx264",
+        "-preset",
+        PRESET,
+        "-crf",
+        str(CRF),
+        "-pix_fmt",
+        "yuv420p",
+        "-an",  # the recording has no audio, and the study is not about sound
+        "-y",
+        str(destination),
+    ]
+    completed = runner(command, capture_output=True, **_no_console_window())
+    if completed.returncode != 0 or not destination.is_file():
+        detail = (getattr(completed, "stderr", b"") or b"").decode("utf-8", "replace")
+        raise RecordingError(f"Could not cut the clip: {detail.strip()[:200]}")
+    return destination
+
+
+def _no_console_window() -> dict:
+    """Keep a console window from flashing up in the participant's face."""
+    if sys.platform != "win32":
+        return {}
+    return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}

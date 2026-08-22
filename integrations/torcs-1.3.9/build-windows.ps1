@@ -395,6 +395,53 @@ if ($actualSha -ne $LlamaSha256) {
     throw "Refusing $LlamaAsset :`n  Expected: $LlamaSha256`n  Actual:   $actualSha"
 }
 
+# --- 5c. ffmpeg, for recording the race window -------------------------------
+#
+# Bundled rather than downloaded on first use, unlike the model weights. Whether
+# a session is recorded is part of the experimental condition, so it has to work
+# identically for every participant; a download some of them fail would produce
+# two different conditions in the same study. It is also the larger reliability
+# risk, given one participant's network could not reach the model host at all.
+#
+# Only ffmpeg.exe is kept. The archive carries ffprobe and a shared build too,
+# and nothing here reads them.
+$FfmpegTag = 'autobuild-2026-08-19-19-21'
+$FfmpegAsset = 'ffmpeg-N-126217-ge1e325235e-win64-gpl.zip'
+$FfmpegSize = 170644098
+$FfmpegSha256 = 'fe5a8f090b9fbc77d5e64c7d8b404b8837e05a09663ed9768ba19284cf929b20'
+$FfmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/$FfmpegTag/$FfmpegAsset"
+$FfmpegZip = Join-Path $BuildRoot $FfmpegAsset
+
+if (-not (Test-Path -LiteralPath $FfmpegZip)) {
+    Write-Step "Downloading $FfmpegAsset"
+    & curl.exe --fail --location --silent --show-error --retry 3 --retry-delay 2 `
+        --output $FfmpegZip $FfmpegUrl
+    if ($LASTEXITCODE -ne 0) { throw "curl failed with exit code $LASTEXITCODE" }
+}
+
+$actualSize = (Get-Item -LiteralPath $FfmpegZip).Length
+if ($actualSize -ne $FfmpegSize) {
+    Remove-Item -LiteralPath $FfmpegZip -Force
+    throw "Refusing $FfmpegAsset : expected $FfmpegSize bytes, got $actualSize"
+}
+$actualSha = (Get-FileHash -LiteralPath $FfmpegZip -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actualSha -ne $FfmpegSha256) {
+    Remove-Item -LiteralPath $FfmpegZip -Force
+    throw "Refusing $FfmpegAsset :`n  Expected: $FfmpegSha256`n  Actual:   $actualSha"
+}
+
+$ffmpegDir = Join-Path $StageDir 'ffmpeg'
+Write-Step 'Staging ffmpeg.exe'
+New-Item -ItemType Directory -Force -Path $ffmpegDir | Out-Null
+$ffmpegUnpack = Join-Path $BuildRoot 'ffmpeg-unpack'
+if (Test-Path -LiteralPath $ffmpegUnpack) { Remove-Item -Recurse -Force $ffmpegUnpack }
+Expand-Archive -LiteralPath $FfmpegZip -DestinationPath $ffmpegUnpack -Force
+$ffmpegExe = Get-ChildItem -LiteralPath $ffmpegUnpack -Recurse -Filter 'ffmpeg.exe' |
+    Select-Object -First 1
+if (-not $ffmpegExe) { throw "The ffmpeg archive did not contain ffmpeg.exe: $FfmpegZip" }
+Copy-Item -LiteralPath $ffmpegExe.FullName -Destination (Join-Path $ffmpegDir 'ffmpeg.exe')
+Remove-Item -Recurse -Force $ffmpegUnpack
+
 $graniteDir = Join-Path $StageDir 'granite-runtime'
 Write-Step "Staging the model server into granite-runtime"
 New-Item -ItemType Directory -Force -Path $graniteDir | Out-Null
