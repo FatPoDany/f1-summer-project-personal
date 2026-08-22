@@ -127,6 +127,8 @@ def test_evidence_zoom_targets_the_span(qtbot, analysis):
 
 
 def test_export_report_roundtrip(qtbot, analysis, tmp_path):
+    # Single-lap: this test is about the report, not about what it compares to.
+    analysis._ref_combo.setCurrentIndex(analysis._ref_combo.findData(None))
     panel = analysis._panel
     with qtbot.waitSignal(panel.reportReady, timeout=5000):
         panel._run()
@@ -150,7 +152,11 @@ def test_every_run_writes_an_audit_record(qtbot, analysis):
     record = json.loads(panel.audit_path.read_text(encoding="utf-8"))
     assert record["ok"] is True and record["error"] is None
     assert record["provider"] == "mock" and record["model"] == "mock"
-    assert record["lap"] == "lap_03" and record["reference"] is None
+    # The reference is whatever the analysis was actually run against, and it is
+    # recorded: a coaching record that did not say what the lap was compared
+    # with could not be reproduced from the file.
+    assert record["lap"] == "lap_03"
+    assert record["reference"] == analysis._ref_combo.currentData().source.stem
     assert record["prompt"] == build_coach_prompt(record["evidence_summary"])
     assert record["raw_response"].lstrip().startswith("{")  # the raw stream, verbatim
     assert len(record["report"]["findings"]) == len(panel.report.findings)

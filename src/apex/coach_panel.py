@@ -45,6 +45,11 @@ from racecoach.granite import model as gm
 from racecoach.granite import server as gs
 from racecoach.granite.server import GraniteServer, ServerError
 
+# What a locally managed CPU server is given to answer in. Generous on
+# purpose: the alternative to waiting is telling a participant the coach
+# is broken when it is merely thinking.
+MANAGED_TIMEOUT_S = 420
+
 CARD_STYLE = (
     "QFrame#findingCard { background: #1f1f1f; border: 1px solid #393939; border-radius: 6px; }"
 )
@@ -562,6 +567,10 @@ class CoachPanel(QWidget):
         # The provider reads this, so a server we started is the one it talks to.
         self._managed_endpoint = self._server.base_url
         os.environ["GRANITE_BASE_URL"] = self._server.base_url
+        # A 3B model on a laptop CPU takes minutes for its first answer, not the
+        # 60 s a client talking to a GPU server would allow. Only set when the
+        # server is ours: somebody else's endpoint keeps whatever they chose.
+        os.environ.setdefault("GRANITE_TIMEOUT_S", str(MANAGED_TIMEOUT_S))
         os.environ.setdefault("GRANITE_MODEL", gm.MODEL_REPO.replace("-GGUF", ""))
         self._start_analysis()
 
@@ -673,7 +682,11 @@ class CoachPanel(QWidget):
         # Never tell a participant to start a server or set an environment
         # variable: they installed a desktop app, and doing that is our job.
         text = f"Coaching failed: {message}"
-        if "GRANITE_BASE_URL" in text or "not reachable" in text:
+        # A slow model is not a stopped one, and restarting the server would
+        # only make the next answer slower still.
+        if "did not finish within" not in text and (
+            "GRANITE_BASE_URL" in text or "not reachable" in text
+        ):
             self._server.stop()
             self._managed_endpoint = None
             os.environ.pop("GRANITE_BASE_URL", None)

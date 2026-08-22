@@ -55,7 +55,8 @@ def test_garage_lists_sample_session_and_opens_laps(qtbot):
     assert window._analysis.lap is garage.session.laps[1]
 
 
-def test_analysis_defaults_to_single_lap_and_keeps_comparison_optional(qtbot):
+def test_analysis_opens_against_the_best_lap_and_keeps_single_lap_available(qtbot):
+    """Opening against nothing showed a participant an empty screen."""
     session = load_sample_session()
     best = session.best_lap
     window = MainWindow()
@@ -64,6 +65,10 @@ def test_analysis_defaults_to_single_lap_and_keeps_comparison_optional(qtbot):
 
     view = window._analysis
     assert view._ref_combo.count() == 3  # single-lap + two optional references
+    # This lap IS the session best, so the reference is the best of the others.
+    assert view._ref_combo.currentData() is not None
+    assert view._ref_combo.findData(None) >= 0  # single-lap is still one click away
+    view._ref_combo.setCurrentIndex(view._ref_combo.findData(None))
     assert view._ref_combo.currentData() is None
 
     stack = view._stack

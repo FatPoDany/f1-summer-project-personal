@@ -24,8 +24,10 @@ def make_view(qtbot):
     return view, session
 
 
-def test_single_lap_corner_table_is_the_default(qtbot):
+def test_single_lap_corner_table_is_available_when_chosen(qtbot):
+    """No longer the default: opening a lap now compares it with the driver's best."""
     view, session = make_view(qtbot)
+    view._ref_combo.setCurrentIndex(view._ref_combo.findData(None))
     assert view._ref_combo.currentData() is None
 
     rows = single_lap_corner_table(session.laps[2])
@@ -106,3 +108,67 @@ def test_debrief_is_absent_without_a_reference_lap(qtbot):
 
     assert view._debrief.count() == 0
     assert not view._debrief_heading.isVisible()
+
+
+def test_the_replay_has_a_button_not_just_a_hidden_double_click(qtbot):
+    """The main thing a participant is here for cannot be a double-click on a row."""
+    from f1coach_core import load_sample_session
+
+    session = load_sample_session()
+    view = AnalysisView()
+    qtbot.addWidget(view)
+    view.set_context(max(session.laps, key=lambda lap: lap.lap_time), session)
+
+    assert view._replay_button.isVisibleTo(view)
+    assert "corner" in view._replay_button.text().lower()
+
+
+def test_the_replay_button_opens_the_worst_stretch_when_none_is_selected(qtbot):
+    from f1coach_core import load_sample_session
+
+    session = load_sample_session()
+    view = AnalysisView()
+    qtbot.addWidget(view)
+    view.set_context(max(session.laps, key=lambda lap: lap.lap_time), session)
+    assert view._debrief_points  # the sample session has findings to replay
+
+    view._replay_button.click()
+
+    # Ranked worst-first, so an unselected list replays the costliest stretch.
+    assert view._debrief.currentRow() == 0
+    assert view._replay_window is not None
+
+
+def test_opening_a_lap_compares_it_with_the_drivers_best_by_default(qtbot):
+    """Defaulting to no reference showed a participant nothing at all.
+
+    The debrief, the corner losses, the replay and anything the coach can say
+    all need a lap to compare against. Opening a lap and finding an empty screen,
+    with a dropdown as the only way out, is not something anybody discovers.
+    """
+    from f1coach_core import load_sample_session
+
+    session = load_sample_session()
+    slowest = max(session.laps, key=lambda lap: lap.lap_time)
+    best = min((lap for lap in session.laps if lap is not slowest), key=lambda lap: lap.lap_time)
+
+    view = AnalysisView()
+    qtbot.addWidget(view)
+    view.set_context(slowest, session)
+
+    assert view._ref_combo.currentData() is best
+    assert view._debrief_points  # so there is something to coach and to replay
+
+
+def test_a_lap_with_nothing_to_compare_against_still_opens(qtbot, tmp_path):
+    """A single loose CSV has no session best, and must not become an error."""
+    from f1coach_core import load_telemetry_csv
+
+    csv = tmp_path / "loose.csv"
+    csv.write_text("t,speed,throttle,brake,steer,gear\n0.0,10,1,0,0,3\n1.0,20,1,0,0,3\n")
+    view = AnalysisView()
+    qtbot.addWidget(view)
+    view.set_context(load_telemetry_csv(csv), None)
+
+    assert view._ref_combo.currentData() is None
+    assert not view._replay_button.isVisibleTo(view)

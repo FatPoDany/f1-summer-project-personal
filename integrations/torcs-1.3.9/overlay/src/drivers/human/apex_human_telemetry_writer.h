@@ -26,6 +26,12 @@ struct ApexWheelTelemetry {
 struct ApexHumanTelemetrySample {
     double simTimeS;
     double deltaTimeS;
+    // Seconds since the Unix epoch, taken when the sample was written. The
+    // simulator clock alone cannot be lined up with anything outside the
+    // process: a screen recording started by Apex knows only wall time, and a
+    // coaching clip cut against a drifting clock points at the wrong corner,
+    // which is worse than having no clip at all.
+    double wallClockS;
     int carIndex;
     std::string carName;
     std::string carModel;

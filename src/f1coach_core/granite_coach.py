@@ -130,10 +130,26 @@ class GraniteCoach(CoachProvider):
             raise GraniteCoachError(
                 f"Granite server returned HTTP {exc.code}{_http_error_detail(exc)}"
             ) from exc
-        except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+        except TimeoutError as exc:
+            # Not the same failure as an unreachable server, and it used to be
+            # reported as one. A 3B model answering on a laptop CPU is slow, not
+            # absent, and "the coach stopped responding" sent everybody looking
+            # for a connection problem that was not there.
             raise GraniteCoachError(
-                f"Granite server is not reachable at {self.endpoint} ({exc}). "
-                "Start the local Granite server and check GRANITE_BASE_URL."
+                f"The model did not finish within {self.timeout_s:.0f} s. It is "
+                "running, just slowly -- on a CPU the first answer of a session "
+                "takes the longest. Set GRANITE_TIMEOUT_S higher to wait longer."
+            ) from exc
+        except (urllib.error.URLError, ConnectionError) as exc:
+            reason = getattr(exc, "reason", None)
+            if isinstance(reason, TimeoutError):
+                raise GraniteCoachError(
+                    f"The model did not finish within {self.timeout_s:.0f} s. It is "
+                    "running, just slowly -- on a CPU the first answer of a session "
+                    "takes the longest. Set GRANITE_TIMEOUT_S higher to wait longer."
+                ) from exc
+            raise GraniteCoachError(
+                f"Granite server is not reachable at {self.endpoint} ({exc})."
             ) from exc
         except json.JSONDecodeError as exc:
             raise GraniteCoachError(f"Granite server returned non-JSON data: {exc}") from exc

@@ -14,7 +14,7 @@
 namespace {
 
 const unsigned int kFlushRows = 50;
-const char *kSchemaVersion = "apex-human-v2";
+const char *kSchemaVersion = "apex-human-v3";  // adds wall_clock_s
 const char *kWheelNames[4] = {"fr", "fl", "rr", "rl"};
 
 /* The filename needs one value that differs per concurrent simulator, and
@@ -35,7 +35,7 @@ ApexWheelTelemetry::ApexWheelTelemetry()
       tireTemperatureC(0.0), tirePressureKpa(0.0), tireGraining(0.0) {}
 
 ApexHumanTelemetrySample::ApexHumanTelemetrySample()
-    : simTimeS(0.0), deltaTimeS(0.0), carIndex(0), raceType(0), raceLap(0),
+    : simTimeS(0.0), deltaTimeS(0.0), wallClockS(0.0), carIndex(0), raceType(0), raceLap(0),
       remainingLaps(0), racePosition(0), state(0), damage(0), collision(0),
       simCollision(0), collisionCount(0), currentLapTimeS(0.0), lastLapTimeS(0.0),
       bestLapTimeS(0.0), distFromStartM(0.0), distRacedM(0.0), trackToStartM(0.0),
@@ -89,8 +89,12 @@ bool ApexHumanTelemetryWriter::open(const std::string &directory, int driverInde
 
 bool ApexHumanTelemetryWriter::write(const ApexHumanTelemetrySample &sample) {
     if (!output_.is_open()) return false;
+    const std::streamsize previous = output_.precision(6);
     output_ << kSchemaVersion << ',' << sampleIndex_++ << ',' << sample.simTimeS << ','
-            << sample.deltaTimeS << ',' << sample.carIndex << ',' << csvText(sample.carName)
+            << sample.deltaTimeS << ',' << std::fixed << sample.wallClockS
+            << std::defaultfloat;
+    output_.precision(previous);
+    output_ << ',' << sample.carIndex << ',' << csvText(sample.carName)
             << ',' << csvText(sample.carModel) << ',' << csvText(sample.driverModule) << ','
             << csvText(sample.trackName) << ',' << csvText(sample.trackInternalName) << ','
             << sample.raceType << ',' << sample.raceLap << ',' << sample.remainingLaps << ','
@@ -148,7 +152,7 @@ const std::string &ApexHumanTelemetryWriter::path() const { return path_; }
 bool ApexHumanTelemetryWriter::isOpen() const { return output_.is_open(); }
 
 void ApexHumanTelemetryWriter::writeHeader() {
-    output_ << "schema_version,sample,sim_time_s,delta_time_s,car_index,car_name,"
+    output_ << "schema_version,sample,sim_time_s,delta_time_s,wall_clock_s,car_index,car_name,"
                "car_model,driver_module,track_name,track_internal_name,race_type,race_lap,"
                "remaining_laps,race_pos,state,damage,collision,simcollision,collision_count,"
                "cur_lap_time_s,last_lap_time_s,best_lap_time_s,dist_from_start_m,dist_raced_m,"

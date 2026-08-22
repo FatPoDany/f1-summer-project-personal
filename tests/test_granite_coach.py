@@ -125,13 +125,45 @@ def test_rejects_invalid_timeout(value):
         GraniteCoach(timeout_s=value)
 
 
-def test_connection_failure_is_actionable(summary):
+def test_connection_failure_names_the_endpoint_it_could_not_reach(summary):
+    """No longer tells anybody to start a server: Apex starts its own."""
+
     def transport(url, payload, headers, timeout):
         raise urllib.error.URLError("connection refused")
 
-    with pytest.raises(GraniteCoachError, match="Start the local Granite server") as caught:
+    with pytest.raises(GraniteCoachError, match="not reachable") as caught:
         GraniteCoach(transport=transport).generate(summary)
-    assert "GRANITE_BASE_URL" in str(caught.value)
+    message = str(caught.value)
+    assert "connection refused" in message
+    assert "Start the local Granite server" not in message
+
+
+def test_a_slow_model_is_not_reported_as_an_absent_one(summary):
+    """A 3B model on a laptop CPU is slow, not missing.
+
+    Both used to land in one branch, so a first answer that overran the timeout
+    said "the coach stopped responding" and sent everybody hunting a connection
+    problem that was not there.
+    """
+
+    def transport(url, payload, headers, timeout):
+        raise TimeoutError("timed out")
+
+    with pytest.raises(GraniteCoachError, match="did not finish within") as caught:
+        GraniteCoach(transport=transport).generate(summary)
+    message = str(caught.value)
+    assert "not reachable" not in message
+    assert "GRANITE_TIMEOUT_S" in message  # what to change if it needs longer
+
+
+def test_a_timeout_wrapped_in_a_url_error_is_still_a_timeout(summary):
+    """urllib reports socket timeouts this way, which is how it slipped through."""
+
+    def transport(url, payload, headers, timeout):
+        raise urllib.error.URLError(TimeoutError("timed out"))
+
+    with pytest.raises(GraniteCoachError, match="did not finish within"):
+        GraniteCoach(transport=transport).generate(summary)
 
 
 def test_http_failure_preserves_status_and_server_detail(summary):

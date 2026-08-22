@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QPushButton,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -129,6 +130,14 @@ class AnalysisView(QWidget):
         self._debrief.itemClicked.connect(self._zoom_debrief_item)
         self._debrief.itemDoubleClicked.connect(self._replay_debrief_item)
         self._debrief.hide()
+        # A double-click on a list row is not a discoverable way to reach the
+        # main thing a participant is here for. The button says what it opens.
+        self._replay_button = QPushButton("Watch this corner")
+        self._replay_button.setToolTip(
+            "Replay the selected stretch against your best lap, with the coach's note"
+        )
+        self._replay_button.clicked.connect(self._replay_selected)
+        self._replay_button.hide()
         self._debrief_points: list[DebriefPoint] = []
         # Prose the coach produced, by row, so a replay can show what was said
         # about the stretch it is playing.
@@ -149,6 +158,7 @@ class AnalysisView(QWidget):
         charts_layout.addWidget(self._stack, stretch=1)
         charts_layout.addWidget(self._debrief_heading)
         charts_layout.addWidget(self._debrief)
+        charts_layout.addWidget(self._replay_button)
         charts_layout.addWidget(self._corners)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -203,11 +213,21 @@ class AnalysisView(QWidget):
         self._ref_combo.blockSignals(True)
         self._ref_combo.clear()
         self._ref_combo.addItem("Single-lap analysis", None)
+        default = 0
         if self._session is not None and self._lap is not None:
             others = [lap for lap in self._session.laps if lap is not self._lap]
             for lap in others:
                 self._ref_combo.addItem(f"{lap.source.stem} · {lap.lap_time:.3f} s", lap)
-        self._ref_combo.setCurrentIndex(0)
+            # Default to their own best lap rather than to no reference at all.
+            # Everything a participant comes here for -- the debrief, the corners
+            # that cost time, the replay, anything the coach can say -- needs a
+            # lap to compare against, so defaulting to none meant opening a lap
+            # and being shown nothing, with no hint that a dropdown was the way
+            # out. "Your best lap" is also what the Garage already calls it.
+            if others:
+                best = min(others, key=lambda lap: lap.lap_time)
+                default = self._ref_combo.findData(best)
+        self._ref_combo.setCurrentIndex(max(default, 0))
         self._ref_combo.blockSignals(False)
 
     def _apply_reference(self) -> None:
@@ -252,6 +272,7 @@ class AnalysisView(QWidget):
                 item.setToolTip(point.detail)
             self._debrief.addItem(item)
         self._debrief.setVisible(bool(points))
+        self._replay_button.setVisible(bool(points))
         self._panel.set_debrief(self._debrief_heading.text(), points)
 
     def _apply_narration(self, result: object) -> None:
@@ -283,6 +304,18 @@ class AnalysisView(QWidget):
         if 0 <= row < len(self._debrief_points):
             d0, d1 = self._debrief_points[row].span_m
             self._show_evidence(d0, d1)
+
+    def _replay_selected(self) -> None:
+        """Open the replay for whichever stretch is highlighted, or the worst one."""
+        if not self._debrief_points:
+            return
+        row = self._debrief.currentRow()
+        if row < 0:
+            row = 0  # ranked worst-first, so this is the one that cost most
+            self._debrief.setCurrentRow(0)
+        item = self._debrief.item(row)
+        if item is not None:
+            self._replay_debrief_item(item)
 
     def _replay_debrief_item(self, item: QListWidgetItem) -> None:
         """Play the stretch back on the track, in its own window.

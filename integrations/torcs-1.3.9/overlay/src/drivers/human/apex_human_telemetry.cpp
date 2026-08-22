@@ -1,6 +1,7 @@
 #include "apex_human_telemetry.h"
 
 #include <cmath>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -107,6 +108,10 @@ void ApexHumanTelemetryRecord(int index, tCarElt *car, tSituation *s, tTrack *tr
     try {
         ApexHumanTelemetrySample sample;
         sample.simTimeS = s->currentTime;
+        sample.wallClockS =
+            std::chrono::duration<double>(
+                std::chrono::system_clock::now().time_since_epoch())
+                .count();
         sample.deltaTimeS = s->deltaTime;
         sample.carIndex = car->index;
         sample.carName = textOrEmpty(car->_name);

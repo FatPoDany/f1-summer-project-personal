@@ -1,6 +1,6 @@
 --- a/src/libs/tgfclient/screen.cpp
 +++ b/src/libs/tgfclient/screen.cpp
-@@ -279,6 +279,8 @@ void GfScrInit(int argc, char *argv[])
+@@ -280,6 +280,8 @@
  	maxfreq = (int)GfParmGetNum(handle, GFSCR_SECT_PROP, GFSCR_ATT_MAXREFRESH, (char*)NULL, 160);
  	GfViewWidth = xw;
  	GfViewHeight = yw;
@@ -9,3 +9,15 @@
  	GfScrCenX = xw / 2;
  	GfScrCenY = yw / 2;
  
+@@ -416,6 +418,11 @@
+ 		glutInitWindowPosition(0, 0);
+ 		glutInitWindowSize(winX, winY);
+ 		Window = glutCreateWindow(argv[0]);
++		/* A fixed title, because the stock one is argv[0] -- on Windows the whole
++		   path Apex launched it with. Screen recording has to name the window it
++		   captures: capturing the desktop instead would record whatever else a
++		   participant has open on their own laptop, which is not ours to record. */
++		glutSetWindowTitle("Apex TORCS");
+ 		if (!Window) {
+ 			printf("Error, couldn't open window\n");
+ 			GfScrShutdown();

@@ -89,6 +89,14 @@ class NarrationTask(QRunnable):
         self._narrate = narrate
 
     def run(self) -> None:  # pragma: no cover - exercised through the view
+        try:
+            self._run()
+        except RuntimeError:
+            # The panel went away while the model was thinking -- a participant
+            # clicked another lap, or the window closed. Nobody is left to tell.
+            return
+
+    def _run(self) -> None:
         self.signals.started.emit(self.token)
         server = self._server_factory()
         try:
