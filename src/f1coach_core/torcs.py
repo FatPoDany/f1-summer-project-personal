@@ -150,9 +150,7 @@ def write_canonical_lap(
     identity: StudyIdentity = NO_IDENTITY,
 ) -> None:
     """Write one split lap as a canonical v1 CSV with provenance comments."""
-    Path(dest).write_text(
-        canonical_lap_text(lap, source_name, identity), encoding="utf-8"
-    )
+    Path(dest).write_bytes(canonical_lap_text(lap, source_name, identity).encode("utf-8"))
 
 
 def canonical_lap_text(
@@ -180,7 +178,9 @@ def canonical_lap_text(
             output.write(f"# {key}: {value}\n")
     output.write(f"# {provenance}\n")
     output.write("# sector: derived as thirds of track length (TORCS exports no sectors)\n")
-    lap.df.to_csv(output, index=False)
+    # Pandas otherwise uses the platform newline, which made the canonical bytes
+    # (and therefore duplicate detection and hashes) differ on Windows.
+    lap.df.to_csv(output, index=False, lineterminator="\n")
     return output.getvalue()
 
 

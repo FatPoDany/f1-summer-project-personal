@@ -27,7 +27,7 @@ from racecoach.telemetry.synthetic_capture import (
     synthetic_command,
     synthetic_session_id,
 )
-from racecoach.telemetry.torcs_runtime import torcs_launch_cwd
+from racecoach.telemetry.torcs_runtime import torcs_launch_cwd, torcs_raceman_dir
 
 
 @pytest.fixture(autouse=True)
@@ -232,15 +232,7 @@ def test_default_robot_preset_resolves_from_the_torcs_runtime(torcs_binary):
 
     assert preset.preset_id == "apex-robot-study-v2"
     assert preset.laps == 3
-    assert preset.race_config == (
-        torcs_binary.resolve().parent.parent
-        / "share"
-        / "games"
-        / "torcs"
-        / "config"
-        / "raceman"
-        / "apexrobotstudy.xml"
-    )
+    assert preset.race_config == torcs_raceman_dir(torcs_binary) / "apexrobotstudy.xml"
 
 
 def test_command_uses_validated_unattended_preset_without_a_shell(torcs_binary, tmp_path):
@@ -604,7 +596,12 @@ def test_synthetic_capture_refuses_a_symlinked_storage_root(
     captures.mkdir(parents=True)
     outside = tmp_path / "outside"
     outside.mkdir()
-    (captures / "synthetic").symlink_to(outside, target_is_directory=True)
+    try:
+        (captures / "synthetic").symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        if os.name == "nt" and getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows symbolic links require Developer Mode or elevation")
+        raise
     launched = False
 
     def runner(*_args, **_kwargs):

@@ -13,11 +13,36 @@ duplicated per recorder.
 
 import os
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 WINDOWS = os.name == "nt"
 TORCS_EXECUTABLE_NAME = "wtorcs.exe" if WINDOWS else "torcs"
 PACKAGED_RUNTIME_DIR = "torcs-runtime"
+
+
+def graphical_session_issue(environ: Mapping[str, str] | None = None) -> str | None:
+    """Explain why participant driving cannot start in this desktop session.
+
+    The legacy TORCS renderer needs a local Windows OpenGL/input session.  RDP
+    is unsuitable even when it happens to expose a software renderer: its input
+    latency invalidates a participant measurement, and some hosts cannot create
+    the required context at all.  Windows publishes the session kind through
+    ``SESSIONNAME`` (normally ``RDP-Tcp#...`` or ``rdp-sxs...``).
+
+    Return a participant-facing sentence rather than a boolean so every caller
+    gives the same actionable recovery instruction.
+    """
+    if not WINDOWS:
+        return None
+    environment = os.environ if environ is None else environ
+    session_name = (environment.get("SESSIONNAME") or "").strip().casefold()
+    if not session_name.startswith("rdp"):
+        return None
+    return (
+        "TORCS driving cannot run reliably through Remote Desktop. Sign in at "
+        "this Windows PC locally, then reopen Apex and collect the session there."
+    )
 
 
 def torcs_executable(runtime_root: str | Path) -> Path:

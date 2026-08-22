@@ -16,7 +16,7 @@ from racecoach.telemetry.human_capture import (
     capture_human_runs,
 )
 from racecoach.telemetry.run_store import list_runs, load_run
-from racecoach.telemetry.torcs_runtime import torcs_launch_cwd
+from racecoach.telemetry.torcs_runtime import torcs_data_root, torcs_launch_cwd
 
 
 @pytest.fixture(autouse=True)
@@ -289,7 +289,8 @@ def test_a_crash_that_produced_nothing_still_fails_and_registers_nothing(torcs_b
         )
 
     manifest = json.loads((failure.value.capture_dir / "manifest.json").read_text("utf-8"))
-    assert manifest["status"] == "no_data" and manifest["returncode"] == 7
+    assert manifest["status"] == "simulator_failed" and manifest["returncode"] == 7
+    assert "status 7" in manifest["error"]
     assert list_runs() == []
 
 
@@ -343,7 +344,8 @@ def test_a_crash_part_way_through_is_still_rejected(torcs_binary):
 
     assert list_runs() == []
     manifest = json.loads((failure.value.capture_dir / "manifest.json").read_text("utf-8"))
-    assert manifest["status"] == "no_data"
+    assert manifest["status"] == "simulator_failed"
+    assert "status 3221225477" in manifest["error"]
 
 
 def test_requested_stop_is_recorded_as_cancelled_not_simulator_failure(torcs_binary):
@@ -470,9 +472,9 @@ def test_all_outputs_are_validated_before_any_run_is_registered(torcs_binary):
 
 def test_study_session_fixes_the_torcs_window_size_before_launch(tmp_path, torcs_binary):
     """640x480 is too small to place a car, and maximising it does not work."""
-    # Lay out a runtime the way the autotools install does, with TORCS's own
-    # screen.xml as the source to be adapted.
-    data_root = torcs_binary.parent.parent / "share" / "games" / "torcs"
+    # Use the platform's supported runtime layout, with TORCS's own screen.xml
+    # as the source to be adapted.
+    data_root = torcs_data_root(torcs_binary)
     (data_root / "config" / "raceman").mkdir(parents=True)
     (data_root / "config" / "screen.xml").write_text(
         '<?xml version="1.0" encoding="UTF-8"?>\n'

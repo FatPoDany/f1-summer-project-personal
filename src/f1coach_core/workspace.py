@@ -99,8 +99,14 @@ def import_telemetry(
     laps = split_torcs_run(src)
     complete = [lap for lap in laps if lap.complete]
     dest_dir = create_session(session_name)
+    # ``Path.write_text`` translates newlines on Windows, while the in-memory
+    # canonical form always uses LF.  Comparing those raw byte strings made the
+    # same TORCS run look new on every Windows import.  Normalize older CRLF
+    # files too, then write new canonical laps without platform translation.
     existing_contents = {
-        existing.read_bytes() for existing in dest_dir.glob("*.csv") if existing.is_file()
+        existing.read_bytes().replace(b"\r\n", b"\n")
+        for existing in dest_dir.glob("*.csv")
+        if existing.is_file()
     }
     imported = 0
     already_present = 0
@@ -111,7 +117,7 @@ def import_telemetry(
             already_present += 1
             continue
         dest = _unique_dest(dest_dir, f"{src.stem}-lap{lap.lap_label:02d}.csv")
-        dest.write_text(content, encoding="utf-8")
+        dest.write_bytes(encoded)
         existing_contents.add(encoded)
         imported += 1
     skipped = len(laps) - len(complete)

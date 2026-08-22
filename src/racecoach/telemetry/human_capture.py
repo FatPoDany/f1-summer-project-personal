@@ -373,11 +373,6 @@ def capture_human_runs(
         raise
     non_empty = [(path, frame) for path, frame in zip(csv_files, frames, strict=True) if len(frame)]
     if not non_empty:
-        manifest.update(
-            status="no_data",
-            finished_at=datetime.now(UTC).isoformat(timespec="seconds"),
-        )
-        _write_manifest(capture_dir, manifest)
         # The recorder creates its file when a race starts, so no file at all
         # means the simulator never got that far -- a failure to launch, not a
         # failure to drive. Those need opposite things from the person sitting
@@ -401,6 +396,15 @@ def capture_human_runs(
                 f"TORCS produced no non-empty telemetry CSV in {capture_dir}. "
                 "Select a human driver and complete a Practice or Quick Race session."
             )
+        manifest.update(
+            # A clean simulator that recorded no rows is a driving/data outcome.
+            # A non-zero process result is a simulator failure, even though the
+            # same missing evidence means neither outcome can be registered.
+            status="simulator_failed" if completed.returncode else "no_data",
+            error=reason,
+            finished_at=datetime.now(UTC).isoformat(timespec="seconds"),
+        )
+        _write_manifest(capture_dir, manifest)
         raise HumanCaptureError(reason, capture_dir)
 
     run_dirs = []

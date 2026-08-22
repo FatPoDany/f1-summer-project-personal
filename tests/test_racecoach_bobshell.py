@@ -5,6 +5,7 @@ stands in — the same pattern as the SCR stub used for `racecoach run`.
 """
 
 import json
+import os
 from datetime import date
 
 import pytest
@@ -19,6 +20,10 @@ from racecoach.ibm.bobshell import (
 )
 from racecoach.telemetry.run_store import import_run, list_runs, load_run
 from test_racecoach_analysis import make_run_frame
+
+pytestmark = pytest.mark.skipif(
+    os.name == "nt", reason="the Bob Shell test double is a POSIX shell script"
+)
 
 TODAY = date.today().isoformat()
 ANSWER = "The controller brakes on lookahead curvature and steers on track-angle error."

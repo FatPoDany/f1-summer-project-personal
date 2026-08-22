@@ -24,6 +24,9 @@ does not replace, delay, or change keyboard, gamepad, or wheel commands.
 TORCS deliberately opens as a second, Apex-managed simulation window. Treating
 the two processes as one product avoids a fragile fork of TORCS' legacy OpenGL
 renderer while still giving participants one launcher and one guided workflow.
+On Windows this must be a local sign-in: Apex disables Start in Remote Desktop
+sessions because the legacy OpenGL/input path is not reliable there and remote
+input latency would invalidate a participant measurement.
 
 ## Build once
 
@@ -147,6 +150,8 @@ counts, SHA-256 hashes, and registered run ids. It is written atomically.
 - A missing/non-executable TORCS binary fails before a capture directory is made.
 - A missing preset file disables Start before a capture directory is made and
   gives the facilitator a repair message.
+- A Windows Remote Desktop session disables Start before TORCS is launched and
+  tells the participant to sign in locally instead.
 - A non-zero simulator exit is recorded. Complete telemetry that passes every
   validation may register as `complete_after_abnormal_exit`; short or malformed
   evidence still fails and remains in the capture directory.
@@ -154,7 +159,8 @@ counts, SHA-256 hashes, and registered run ids. It is written atomically.
 - For a locked study launch, every non-empty CSV must report the assigned
   internal track id, car model, Human driver module, and initial lap count;
   otherwise the whole capture is rejected as `invalid_telemetry`.
-- A header-only or absent CSV is a readable `no_data` failure.
+- A header-only or absent CSV after a clean exit is a readable `no_data`
+  failure; with a non-zero simulator exit it is recorded as `simulator_failed`.
 - Native writer errors disable recording and return immediately; they never
   change the driver's actuator values.
 - **Stop this collection** first terminates TORCS, then force-kills it after a

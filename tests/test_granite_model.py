@@ -291,6 +291,8 @@ def test_the_interface_check_does_not_digest_two_gigabytes(cache, monkeypatch):
     cache.mkdir(parents=True)
     (cache / gm.MODEL_FILE).write_bytes(b"x" * len(payload))
 
+    real_digest = gm.digest_of
+
     def refuse(_path):  # pragma: no cover - proves the digest is skipped
         raise AssertionError("hashed the whole model just to draw a button")
 
@@ -298,5 +300,7 @@ def test_the_interface_check_does_not_digest_two_gigabytes(cache, monkeypatch):
     assert gm.looks_present() is True  # right length is all the interface asks
 
     # The real check still rejects it where correctness matters.
-    monkeypatch.undo()
+    # Restore only the digest function: undoing the whole fixture also discarded
+    # the isolated cache and accidentally inspected a participant's real model.
+    monkeypatch.setattr(gm, "digest_of", real_digest)
     assert gm.available() is False
