@@ -243,6 +243,12 @@ deterministic technique checks. To make a lap-to-lap comparison, select another
 lap under **Compare with** before running Granite. The same loopback server from
 step 4 is used in both modes.
 
+The post-lap request uses server-sent events. Apex shows the accumulated model
+text as it arrives, while the pinned `llama-server` sends heartbeat comments
+during long prompt processing so a slow CPU is not mistaken for a failed
+request. Only the completed response can become a coaching report; if streaming
+or validation fails, any partial text remains evidence in the run's audit.
+
 The deterministic analysis measures, per detected corner:
 
 - brake onset, peak pressure and release point;

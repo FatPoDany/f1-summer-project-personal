@@ -561,12 +561,30 @@ _DISPLAY_DEFAULTS = {
     "arcade": 0,
     "map mode": 1 << 2,
 }
-_DISPLAY_SECTION = re.compile(
-    r'(<section\s+name="Display Mode">)(.*?)(</section>)', re.DOTALL
-)
+_SECTION_TAG = re.compile(r"<section\b|</section>")
 _DISPLAY_ATTR = re.compile(
     r'(<attnum\s+name="(?P<name>[^"]+)"[^>]*?\bval=")(?P<value>[^"]*)(")'
 )
+
+
+def _display_mode_span(text: str) -> tuple[int, int] | None:
+    """The bounds of the Display Mode section, counting nesting rather than
+    guessing at it.
+
+    A regex cannot bracket nested XML, and trying cost a real bug: a lazy match
+    to the first ``</section>`` stopped inside the first *sub*section, so the
+    driver board setting -- which lives in a later sibling -- was never reached
+    and the hidden panel stayed hidden.
+    """
+    start = text.find('<section name="Display Mode">')
+    if start == -1:
+        return None
+    depth = 0
+    for match in _SECTION_TAG.finditer(text, start):
+        depth += 1 if match.group(0) == "<section" else -1
+        if depth == 0:
+            return start, match.end()
+    return None  # unbalanced: leave the file alone rather than half-edit it
 
 
 def _reset_display_mode(profile_dir: Path, torcs_binary: Path) -> None:
@@ -583,17 +601,19 @@ def _reset_display_mode(profile_dir: Path, torcs_binary: Path) -> None:
     except OSError:
         return
 
-    def fix_section(match: re.Match) -> str:
-        def fix_attr(attr: re.Match) -> str:
-            wanted = _DISPLAY_DEFAULTS.get(attr.group("name"))
-            if wanted is None:
-                return attr.group(0)
-            return f"{attr.group(1)}{wanted}{attr.group(4)}"
+    span = _display_mode_span(text)
+    if span is None:
+        return
 
-        return match.group(1) + _DISPLAY_ATTR.sub(fix_attr, match.group(2)) + match.group(3)
+    def fix_attr(attr: re.Match) -> str:
+        wanted = _DISPLAY_DEFAULTS.get(attr.group("name"))
+        if wanted is None:
+            return attr.group(0)
+        return f"{attr.group(1)}{wanted}{attr.group(4)}"
 
-    updated, count = _DISPLAY_SECTION.subn(fix_section, text)
-    if not count or updated == text:
+    start, end = span
+    updated = text[:start] + _DISPLAY_ATTR.sub(fix_attr, text[start:end]) + text[end:]
+    if updated == text:
         return
     try:
         destination.parent.mkdir(parents=True, exist_ok=True)

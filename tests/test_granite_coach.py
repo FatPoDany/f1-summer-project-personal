@@ -45,13 +45,123 @@ def test_posts_to_openai_endpoint_with_strict_dynamic_schema_and_stamps_model(su
     assert captured["headers"]["Authorization"] == "Bearer test-only"
     assert captured["payload"]["model"] == "ibm-granite/granite-4.1-3b"
     assert captured["payload"]["temperature"] == 0.0
-    assert captured["payload"]["stream"] is False
+    assert captured["payload"]["stream"] is True
     assert captured["payload"]["response_format"] == build_coach_response_format(summary)
     assert captured["payload"]["response_format"]["type"] == "json_schema"
     assert captured["payload"]["response_format"]["json_schema"]["strict"] is True
     assert "never invent values" in captured["payload"]["messages"][0]["content"]
     assert report.model == "served/granite-4.1-3b"
     assert progress == [raw]
+
+
+def test_streams_openai_chunks_and_reports_accumulated_progress(summary):
+    captured = {}
+
+    def transport(url, payload, headers, timeout):
+        captured.update(payload=payload)
+        return iter(
+            [
+                {
+                    "model": "served/granite-4.1-3b",
+                    "choices": [{"delta": {"content": '{"findings":'}}],
+                },
+                {"choices": [{"delta": {"content": "[]}"}}]},
+                {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+            ]
+        )
+
+    progress = []
+    report = GraniteCoach(transport=transport).generate(
+        summary, on_progress=progress.append
+    )
+
+    assert captured["payload"]["stream"] is True
+    assert progress == ['{"findings":', '{"findings":[]}']
+    assert report.findings == ()
+    assert report.model == "served/granite-4.1-3b"
+
+
+def test_default_transport_reads_sse_and_ignores_heartbeats(
+    summary, monkeypatch
+):
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return None
+
+        def __iter__(self):
+            return iter(
+                [
+                    b": keep-alive\n",
+                    b'data: {"model":"served/granite","choices":'
+                    b'[{"delta":{"content":"{\\"findings\\":"}}]}\n',
+                    b"\n",
+                    b'data: {"choices":[{"delta":{"content":"[]}"}}]}\n',
+                    b"data: [DONE]\n",
+                ]
+            )
+
+    captured = {}
+
+    def urlopen(request, timeout):
+        captured["payload"] = json.loads(request.data)
+        captured["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr(
+        "f1coach_core.granite_coach.urllib.request.urlopen", urlopen
+    )
+    progress = []
+
+    report = GraniteCoach(timeout_s=9).generate(
+        summary, on_progress=progress.append
+    )
+
+    assert captured["timeout"] == 9
+    assert captured["payload"]["stream"] is True
+    assert progress == ['{"findings":', '{"findings":[]}']
+    assert report.findings == ()
+    assert report.model == "served/granite"
+
+
+def test_stream_error_is_readable_and_preserves_partial_progress(summary):
+    def transport(url, payload, headers, timeout):
+        return iter(
+            [
+                {"choices": [{"delta": {"content": '{"findings":'}}]},
+                {"error": {"message": "slot unavailable"}},
+            ]
+        )
+
+    progress = []
+    with pytest.raises(GraniteCoachError, match="slot unavailable"):
+        GraniteCoach(transport=transport).generate(
+            summary, on_progress=progress.append
+        )
+
+    assert progress == ['{"findings":']
+
+
+def test_non_utf8_stream_data_is_reported_as_a_domain_error(summary, monkeypatch):
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return None
+
+        def __iter__(self):
+            return iter([b"data: \xff\n"])
+
+    monkeypatch.setattr(
+        "f1coach_core.granite_coach.urllib.request.urlopen",
+        lambda request, timeout: Response(),
+    )
+
+    with pytest.raises(GraniteCoachError, match="UTF-8"):
+        GraniteCoach().generate(summary)
 
 
 def test_granite_validates_single_lap_guidance_without_a_reference():

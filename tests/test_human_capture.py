@@ -636,6 +636,12 @@ def test_enabling_damage_does_not_quietly_switch_on_tyre_wear_as_well():
 
 
 def _profile_with_display(profile_dir: Path, board: int) -> Path:
+    """The shape TORCS actually writes: several sibling subsections.
+
+    The first version of this fixture had one subsection, and the code passed it
+    while failing on a real profile -- a lazy regex stopped at the first closing
+    tag, inside "Player", and never reached the settings in the later section.
+    """
     graph = profile_dir / "config" / "graph.xml"
     graph.parent.mkdir(parents=True, exist_ok=True)
     graph.write_text(
@@ -644,11 +650,18 @@ def _profile_with_display(profile_dir: Path, board: int) -> Path:
         '    <attnum name="arcade" val="99"/>\n'  # outside the section: not ours to touch
         "  </section>\n"
         '  <section name="Display Mode">\n'
+        '    <section name="Player">\n'
+        '      <attnum name="camera" val="0"/>\n'
+        "    </section>\n"
         '    <section name="0">\n'
+        '      <attnum name="fovy-0-0" val="40"/>\n'
         f'      <attnum name="driver board" val="{board}"/>\n'
         '      <attnum name="map mode" val="1"/>\n'
         '      <attnum name="fov factor" val="2.0"/>\n'
         "    </section>\n"
+        "  </section>\n"
+        '  <section name="Sound">\n'
+        '    <attnum name="arcade" val="7"/>\n'
         "  </section>\n</params>\n",
         encoding="utf-8",
     )
@@ -683,7 +696,9 @@ def test_resetting_the_overlays_leaves_the_rest_of_the_file_alone(tmp_path, torc
     _reset_display_mode(profile, torcs_binary)
 
     text = graph.read_text("utf-8")
-    assert 'name="arcade" val="99"' in text  # a same-named key in another section
+    assert 'name="arcade" val="99"' in text  # a same-named key before the section
+    assert 'name="arcade" val="7"' in text  # and one after it
+    assert 'name="camera" val="0"' in text  # a sibling subsection, untouched
     assert 'name="fov factor" val="2.0"' in text  # not an overlay setting
 
 
