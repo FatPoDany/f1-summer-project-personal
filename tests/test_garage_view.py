@@ -83,6 +83,22 @@ def test_loading_a_session_requests_automatic_coaching(qtbot):
     assert requested.args[0] is view.session
 
 
+def test_selected_lap_has_a_visible_analysis_action(qtbot):
+    """AI setup must not depend on discovering a hidden double-click gesture."""
+    ensure_sample_session()
+    view = GarageView()
+    qtbot.addWidget(view)
+    view.refresh_sessions()
+
+    assert not view._open_button.isEnabled()
+    view._table.selectRow(1)
+    assert view._open_button.isEnabled()
+
+    with qtbot.waitSignal(view.lapOpened) as opened:
+        view._open_button.click()
+    assert opened.args[0] is view.session.laps[1]
+
+
 def test_garage_states_when_a_session_has_no_race_window_footage(qtbot):
     ensure_sample_session()
     view = GarageView()

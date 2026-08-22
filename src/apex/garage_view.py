@@ -72,16 +72,29 @@ class GarageView(QWidget):
         import_button = QPushButton("Import…")
         import_button.clicked.connect(self._import_files)
 
+        # Opening a lap used to be available only through a hidden double-click
+        # or context-menu gesture.  That left a selected row beside a disabled
+        # Lap Analysis toolbar action and made the AI setup state look broken.
+        self._open_button = QPushButton("Analyze selected lap")
+        self._open_button.setEnabled(False)
+        self._open_button.setToolTip(
+            "Open Lap Analysis, including the AI Race Engineer and technique review"
+        )
+        self._open_button.clicked.connect(self._open_selected)
+
         self._table = QTableWidget(0, len(TABLE_HEADERS))
         self._table.setHorizontalHeaderLabels(TABLE_HEADERS)
         self._table.horizontalHeader().setStretchLastSection(True)
         self._table.verticalHeader().setVisible(False)
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._table.itemSelectionChanged.connect(self._update_open_state)
         self._table.cellDoubleClicked.connect(self._open_row)
         self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._lap_menu)
-        self._table.setToolTip("Double-click to open, right-click to export")
+        self._table.setToolTip(
+            "Select a lap and choose Analyze selected lap; double-click also opens it"
+        )
 
         self._footage_status = QLabel()
         self._footage_status.setWordWrap(True)
@@ -90,6 +103,7 @@ class GarageView(QWidget):
         buttons = QHBoxLayout()
         buttons.addWidget(import_button)
         buttons.addStretch(1)
+        buttons.addWidget(self._open_button)
 
         right = QWidget()
         right_layout = QVBoxLayout(right)
@@ -130,6 +144,7 @@ class GarageView(QWidget):
             self._session = None
             self._table.setRowCount(0)
             self._footage_status.clear()
+            self._update_open_state()
 
     def _load_selected(self) -> None:
         item = self._session_list.currentItem()
@@ -182,6 +197,7 @@ class GarageView(QWidget):
                 item.setForeground(QColor(theme.RED))
                 item.setToolTip(message)
                 self._table.setItem(row, col, item)
+        self._update_open_state()
 
     def _update_footage_status(self, session: Session) -> None:
         recording = session_recording(session.path)
@@ -262,6 +278,15 @@ class GarageView(QWidget):
                 self._fresh.discard(lap.source.stem)
                 self._populate_table()
             self.lapOpened.emit(lap, self._session)
+
+    def _update_open_state(self) -> None:
+        row = self._table.currentRow()
+        ready = self._session is not None and 0 <= row < len(self._session.laps)
+        self._open_button.setEnabled(ready)
+
+    def _open_selected(self) -> None:
+        if self._open_button.isEnabled():
+            self._open_row(self._table.currentRow())
 
     # -- import / watch ------------------------------------------------------
 

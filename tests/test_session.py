@@ -1,5 +1,7 @@
 """Session loading: a directory of laps, with problems reported not raised."""
 
+import os
+
 import pytest
 
 from f1coach_core import load_sample_session, load_session
@@ -32,6 +34,7 @@ def test_load_session_mixes_laps_and_problems(tmp_path):
     assert session.delta_to_best(best) == 0.0
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows ACLs do not follow POSIX chmod bits")
 def test_unreadable_file_is_a_problem_not_a_crash(tmp_path):
     (tmp_path / "a_fast.csv").write_text(GOOD_FAST)
     locked = tmp_path / "locked.csv"

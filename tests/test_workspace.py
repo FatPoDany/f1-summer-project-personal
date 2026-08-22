@@ -1,5 +1,7 @@
 """Workspace store: ~/Apex relocated via APEX_WORKSPACE (tests always relocate)."""
 
+import os
+
 import pytest
 
 from f1coach_core import (
@@ -95,7 +97,12 @@ def test_session_symlinks_are_never_listed_or_deleted(tmp_path):
     outside.mkdir()
     root = sessions_root()
     root.mkdir(parents=True)
-    (root / "linked").symlink_to(outside, target_is_directory=True)
+    try:
+        (root / "linked").symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        if os.name == "nt" and getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows symbolic links require Developer Mode or elevation")
+        raise
 
     assert list_sessions() == []
     with pytest.raises(ValueError, match="symbolic link"):

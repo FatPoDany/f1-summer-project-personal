@@ -62,7 +62,9 @@ For post-lap coaching, import a CSV into a session or open a captured session in
 single-lap technique checks and each other lap is compared with that best lap.
 The Status column shows queued, generating, ready, failed, or setup-required
 state while one local **Granite 4.1** request runs at a time. Opening a lap in
-**Analysis** restores that exact result; **Review a corner** reuses its validated
+**Analysis** (select it and choose **Analyze selected lap**, or double-click it)
+restores that exact result and exposes the one-time coach download when needed;
+**Review a corner** reuses its validated
 advice only when the cited corner and distance span exactly match the measured
 stretch. Each card can zoom the plotted telemetry to its evidence. A successful
 result is retained in the session's coaching audit directory and is revalidated

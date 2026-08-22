@@ -10,6 +10,7 @@ from racecoach.telemetry.human_capture import default_study_preset
 from racecoach.telemetry.synthetic_capture import default_robot_study_preset
 from racecoach.telemetry.torcs_runtime import (
     default_torcs_binary,
+    graphical_session_issue,
     torcs_data_root,
     torcs_executable,
     torcs_raceman_dir,
@@ -106,3 +107,23 @@ def test_windows_reports_the_packaged_path_when_nothing_is_installed(
     monkeypatch.setattr(sys, "executable", str(tmp_path / "Apex.exe"))
 
     assert default_torcs_binary() == tmp_path.resolve() / "torcs-runtime" / "wtorcs.exe"
+
+
+@pytest.mark.parametrize("name", ["RDP-Tcp#4", "rdp-sxs2208211527"])
+def test_windows_remote_desktop_session_has_an_actionable_graphics_issue(
+    windows_layout, name
+):
+    issue = graphical_session_issue({"SESSIONNAME": name})
+
+    assert issue is not None
+    assert "Remote Desktop" in issue
+    assert "locally" in issue
+
+
+def test_local_windows_and_non_windows_sessions_are_supported(
+    windows_layout, monkeypatch
+):
+    assert graphical_session_issue({"SESSIONNAME": "Console"}) is None
+
+    monkeypatch.setattr(torcs_runtime, "WINDOWS", False)
+    assert graphical_session_issue({"SESSIONNAME": "RDP-Tcp#4"}) is None

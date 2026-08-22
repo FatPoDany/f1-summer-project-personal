@@ -20,6 +20,9 @@ from racecoach.telemetry.human_capture import (
 @pytest.fixture(autouse=True)
 def workspace(tmp_path, monkeypatch):
     monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "ws"))
+    # The test host may itself be reached over RDP; individual tests choose the
+    # unsupported state explicitly rather than inheriting the runner session.
+    monkeypatch.setenv("SESSIONNAME", "Console")
 
 
 @pytest.fixture
@@ -269,6 +272,25 @@ def test_missing_study_preset_disables_start_with_facilitator_message(
     assert not view._start_button.isEnabled()
     assert "preset" in view._simulator_status.text().lower()
     assert "facilitator" in view._simulator_help.text().lower()
+
+
+def test_remote_desktop_disables_capture_before_torcs_can_crash(
+    qtbot, torcs_binary, study_preset, monkeypatch
+):
+    monkeypatch.setattr(
+        "apex.capture_view.graphical_session_issue",
+        lambda: (
+            "TORCS driving cannot run reliably through Remote Desktop. "
+            "Sign in locally and reopen Apex."
+        ),
+    )
+    view = CaptureGuideView(torcs_binary=torcs_binary, study_preset=study_preset)
+    qtbot.addWidget(view)
+    make_ready(view)
+
+    assert not view._start_button.isEnabled()
+    assert "remote desktop" in view._simulator_status.text().lower()
+    assert "locally" in view._simulator_help.text().lower()
 
 
 def test_the_saved_summary_counts_laps_not_recordings(tmp_path):

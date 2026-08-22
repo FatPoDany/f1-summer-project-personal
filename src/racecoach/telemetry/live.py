@@ -303,7 +303,10 @@ def _identify(
         sock.send(hello)
         try:
             reply = sock.recv(scr.MAX_DATAGRAM_BYTES).decode("ascii", errors="replace")
-        except (TimeoutError, ConnectionRefusedError):
+        except (TimeoutError, ConnectionRefusedError, ConnectionResetError):
+            # A connected UDP socket reports an ICMP "port unreachable" as
+            # WSAECONNRESET on Windows.  It means the same thing as a timeout
+            # here: no bridge answered this identification attempt.
             continue
         if scr.IDENTIFIED in reply:
             return

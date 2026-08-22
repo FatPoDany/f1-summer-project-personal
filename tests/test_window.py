@@ -50,10 +50,13 @@ def test_garage_lists_sample_session_and_opens_laps(qtbot):
     assert garage._table.rowCount() == 3
     assert garage._table.item(1, 4).text().startswith("SESSION BEST")  # lap_02
 
+    garage._table.selectRow(1)
+    assert garage._open_button.isEnabled()
     with qtbot.waitSignal(garage.lapOpened):
-        garage._open_row(1)
+        garage._open_button.click()
     assert window._stacked.currentWidget() is window._analysis
     assert window._analysis.lap is garage.session.laps[1]
+    assert window._analysis_action.isEnabled()
 
 
 def test_main_window_wires_garage_sessions_to_visible_coaching_state(qtbot, monkeypatch):

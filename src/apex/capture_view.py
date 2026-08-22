@@ -29,7 +29,7 @@ from racecoach.telemetry.human_capture import (
     capture_human_runs,
     default_study_preset,
 )
-from racecoach.telemetry.torcs_runtime import default_torcs_binary
+from racecoach.telemetry.torcs_runtime import default_torcs_binary, graphical_session_issue
 
 
 def _completed_laps(run_dirs) -> int | None:
@@ -170,7 +170,11 @@ class CaptureGuideView(QWidget):
         steps.setAccessibleName("Collection progress: prepare, drive, saved")
 
         self._pages = QStackedWidget()
-        self._setup_page = CaptureSetupPage(self._torcs_binary, self._study_preset)
+        self._setup_page = CaptureSetupPage(
+            self._torcs_binary,
+            self._study_preset,
+            session_issue=graphical_session_issue(),
+        )
         self._drive_page = CaptureDrivePage(self._study_preset)
         self._complete_page = CaptureCompletePage()
         self._bind_page_controls()

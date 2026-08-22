@@ -21,10 +21,17 @@ from racecoach.telemetry.human_capture import TorcsStudyPreset
 
 
 class CaptureSetupPage(QWidget):
-    def __init__(self, torcs_binary: Path, study_preset: TorcsStudyPreset) -> None:
+    def __init__(
+        self,
+        torcs_binary: Path,
+        study_preset: TorcsStudyPreset,
+        *,
+        session_issue: str | None = None,
+    ) -> None:
         super().__init__()
         self.torcs_binary = torcs_binary
         self.study_preset = study_preset
+        self.session_issue = session_issue
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 4, 0, 0)
 
@@ -111,6 +118,7 @@ class CaptureSetupPage(QWidget):
             self.torcs_binary.is_file()
             and os.access(self.torcs_binary, os.X_OK)
             and self.study_preset.race_config.is_file()
+            and self.session_issue is None
         )
 
     def show_message(self, text: str, *, error: bool = False) -> None:
@@ -133,6 +141,12 @@ class CaptureSetupPage(QWidget):
             self.simulator_help.setText(
                 "Ask the study facilitator to repair or reinstall the complete Apex build."
             )
+        elif self.session_issue is not None:
+            self.simulator_status.setText(
+                "Simulator recording is unavailable in this Remote Desktop session."
+            )
+            self.simulator_status.setStyleSheet(f"color: {theme.RED};")
+            self.simulator_help.setText(self.session_issue)
         else:
             self.simulator_status.setText("Ready — the Apex simulator component is available.")
             self.simulator_status.setStyleSheet(f"color: {theme.GREEN};")
