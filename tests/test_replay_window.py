@@ -36,6 +36,7 @@ def _point():
     return DebriefPoint(
         corner="T3", apex_m=400.0, span_m=(300.0, 500.0), time_lost_s=0.4,
         difference="braked 12 m earlier", detail="you 118 m, best 130 m",
+        category="braking",
     )
 
 
@@ -110,7 +111,7 @@ def test_the_review_window_carries_the_whole_laps_stretches(qtbot):
 
     assert window._chooser.count() == 2
     assert window._chooser.isEnabled()
-    assert window._chooser.currentIndex() == 0
+    assert window._chooser.currentRow() == 0
 
 
 def test_changing_stretch_reloads_without_leaving_the_window(qtbot):
@@ -127,11 +128,12 @@ def test_changing_stretch_reloads_without_leaving_the_window(qtbot):
     window.show_stretch(_positioned_lap(20.0), points[0], points=points)
 
     with qtbot.waitSignal(window.stretchChanged):
-        window._chooser.setCurrentIndex(1)
+        window._chooser.setCurrentRow(1)
     assert "T7" in window._replay._title.text()
 
 
-def test_a_single_stretch_leaves_the_chooser_inert(qtbot):
+def test_a_single_moment_still_lists_itself(qtbot):
+    """How many things there are to work on is part of the answer."""
     from apex.widgets.replay_window import ReplayWindow
 
     window = ReplayWindow()
@@ -139,7 +141,7 @@ def test_a_single_stretch_leaves_the_chooser_inert(qtbot):
     window.show_stretch(_positioned_lap(20.0), _point())
 
     assert window._chooser.count() == 1
-    assert not window._chooser.isEnabled()
+    assert "T3" in window._chooser.item(0).text()
 
 
 def test_the_coachs_note_follows_the_stretch_it_belongs_to(qtbot):
@@ -159,5 +161,80 @@ def test_the_coachs_note_follows_the_stretch_it_belongs_to(qtbot):
     )
     assert "Brake later here." in window._replay._note.text()
 
-    window._chooser.setCurrentIndex(1)
+    window._chooser.setCurrentRow(1)
     assert "lost momentum" in window._replay._note.text()
+
+
+def _narrated(observation="", advice=""):
+    from racecoach.granite.narrate import NarratedPoint
+
+    return NarratedPoint(point=_point(), narration=observation, advice=advice)
+
+
+def test_a_moment_is_labelled_by_the_kind_of_driving_it_is_about(qtbot):
+    """"Turn 3, braking" is something to work on; "stretch 1" is not."""
+    from apex.widgets.replay_window import ReplayWindow
+
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+    window.show_stretch(_positioned_lap(20.0), _point())
+
+    assert "braking" in window._chooser.item(0).text()
+    assert "braking" in window._headline.text()
+
+
+def test_the_instruction_is_shown_as_something_to_do_next_lap(qtbot):
+    from apex.widgets.replay_window import ReplayWindow
+
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+    window.show_stretch(
+        _positioned_lap(20.0),
+        _point(),
+        advice={0: _narrated("You braked 12 m earlier.", "Hold on to 130 m first.")},
+    )
+
+    assert "You braked 12 m earlier." in window._observation.text()
+    assert window._advice.text().startswith("Next lap:")
+    assert "130 m" in window._advice.text()
+
+
+def test_a_moment_nothing_explains_says_so_instead_of_inventing_advice(qtbot):
+    """The loss is real; the remedy was never measured."""
+    from apex.widgets.replay_window import ReplayWindow
+    from f1coach_core.debrief import DebriefPoint
+
+    unexplained = DebriefPoint(
+        corner="T5", apex_m=500.0, span_m=(450.0, 560.0), time_lost_s=0.3,
+        difference="", detail="", category="",
+    )
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+    window.show_stretch(_positioned_lap(20.0), unexplained)
+
+    assert "no advice" in window._advice.text()
+    assert "unexplained" in window._headline.text()
+
+
+def test_a_measured_moment_without_words_yet_says_they_are_coming(qtbot):
+    """The analysis starts by itself, so this is a wait, not an instruction."""
+    from apex.widgets.replay_window import ReplayWindow
+
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+    window.show_stretch(_positioned_lap(20.0), _point())  # no advice supplied
+
+    text = window._advice.text()
+    assert "still being written" in text
+    assert "Analyze lap" not in text  # there is no button to press any more
+
+
+def test_the_measurement_stays_on_screen_beneath_the_words(qtbot):
+    """The prose is a convenience; the numbers are the finding."""
+    from apex.widgets.replay_window import ReplayWindow
+
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+    window.show_stretch(_positioned_lap(20.0), _point())
+
+    assert "118 m" in window._measured.text()

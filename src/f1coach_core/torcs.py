@@ -117,8 +117,8 @@ def split_torcs_run(path: str | Path) -> list[TorcsLap]:
         # marker: the human recorder emits neither `race_finished` nor
         # `capture_lap_closed`, because it runs inside the driver callback and
         # the race engine stops calling that at the finish line. Requiring a
-        # marker silently discarded the last lap of every human capture -- a
-        # participant driving the assigned five laps had four imported. Those
+        # marker silently discarded the last lap of every human capture: when
+        # the assignment was five laps, participants had four imported. Those
         # columns remain in the raw CSVs as provenance.
         #
         # Coverage stays necessary rather than merely one option among markers,

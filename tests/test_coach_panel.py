@@ -330,3 +330,138 @@ def test_stale_worker_result_cannot_replace_a_new_context(qtbot):
 
     assert panel.report is None
     assert session.laps[1].source.stem in panel._placeholder.text()
+
+
+def test_analysis_starts_by_itself_rather_than_waiting_to_be_asked(qtbot, analysis):
+    """Waiting for a click on a minutes-long job only means waiting longer."""
+    panel = analysis._panel
+    panel._settle.setInterval(0)
+
+    with qtbot.waitSignal(panel.reportReady, timeout=5000):
+        panel.set_context(analysis._lap, analysis._ref_combo.currentData())
+
+    assert panel.report is not None
+
+
+def test_changing_the_comparison_does_not_throw_away_work_in_progress(qtbot, analysis):
+    """It used to orphan the run and ask somebody to press the button again."""
+    panel = analysis._panel
+    key = panel._context_key()
+
+    class Pending:
+        pass
+
+    panel._running[key] = Pending()  # a run already under way for this pair
+    panel._settle.stop()  # clear anything an earlier context scheduled
+    panel._restore_into_view(panel._restore_task, None)
+
+    assert "Still reading" in panel._placeholder.text()
+    assert not panel._settle.isActive()  # this restore queued no second run
+
+
+def test_a_run_that_finishes_for_a_lap_nobody_is_looking_at_is_still_kept(
+    qtbot, analysis
+):
+    """The task writes its audit either way, so coming back restores it."""
+    panel = analysis._panel
+    with qtbot.waitSignal(panel.reportReady, timeout=5000):
+        panel._run()
+    saved = panel.audit_path
+
+    assert saved is not None and saved.is_file()
+    assert panel._running == {}  # and nothing is left marked as running
+
+
+def test_the_progress_bar_says_it_is_working_and_stops_when_it_is_not(qtbot, analysis):
+    """A 3B model on a CPU gives no honest estimate, so presence is the signal."""
+    panel = analysis._panel
+    assert panel._progress.isHidden()
+
+    with qtbot.waitSignal(panel.reportReady, timeout=5000):
+        panel._run()
+
+    assert panel._progress.isHidden()
+    assert panel._progress.minimum() == 0 and panel._progress.maximum() == 0
+
+
+def test_closing_the_panel_mid_analysis_does_not_crash_the_app(qtbot, analysis):
+    """Its Qt children are gone; there is nobody left to show anything to."""
+    panel = analysis._panel
+    task = panel._restore_task or object()
+    panel.deleteLater()
+    qtbot.wait(10)
+
+    panel._restore_finished(task, None)  # must not raise
+
+
+def test_a_result_is_shown_by_what_it_was_for_not_by_which_object_finished(
+    qtbot, analysis
+):
+    """Somebody who looks at another lap and comes back is owed this result.
+
+    By then `_task` is a different object, so identity alone left them watching a
+    progress bar for a run that had already finished. Driven directly rather than
+    raced against the pool, because the point is the rule, not the timing.
+    """
+    from f1coach_core import load_sample_session
+
+    session = load_sample_session()
+    panel = analysis._panel
+    panel._settle.stop()
+
+    first = analysis._lap
+    other = next(lap for lap in session.laps if lap is not first)
+
+    panel.set_context(first, None)
+    key = panel._context_key()
+    pending = _CoachTask(get_provider("mock"), first, None)
+    panel._running[key] = pending
+
+    panel.set_context(other, None)  # away...
+    assert panel._running[key] is pending  # nothing cancelled it
+    panel.set_context(first, None)  # ...and back
+    panel._task = None  # a different object is current by now
+
+    report = get_provider("mock").generate(build_evidence_summary(first))
+    panel._task_finished(pending, report)
+
+    assert panel.report is report
+    assert panel._running == {}
+
+
+def test_a_result_for_a_lap_the_participant_left_is_kept_but_not_shown(qtbot, analysis):
+    """The task writes its audit either way, so returning later restores it."""
+    from f1coach_core import load_sample_session
+
+    session = load_sample_session()
+    panel = analysis._panel
+    panel._settle.stop()
+
+    first = analysis._lap
+    other = next(lap for lap in session.laps if lap is not first)
+    panel.set_context(first, None)
+    pending = _CoachTask(get_provider("mock"), first, None)
+    panel._running[panel._context_key()] = pending
+
+    panel.set_context(other, None)
+    panel._task = None
+    panel._task_finished(pending, get_provider("mock").generate(
+        build_evidence_summary(first)
+    ))
+
+    assert panel.report is None  # not shown: it is about a lap they left
+
+
+def test_the_same_pair_is_never_read_twice_at_once(qtbot, analysis):
+    """Two runs under one key left one of them unable to find itself."""
+    panel = analysis._panel
+    panel._settle.stop()
+    panel.set_context(analysis._lap, None)
+    panel._start_analysis()
+    key = panel._context_key()
+    first = panel._running[key]
+
+    panel._start_analysis()  # asked again before the first finished
+
+    assert panel._running[key] is first
+    assert "Still reading" in panel._placeholder.text()

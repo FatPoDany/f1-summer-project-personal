@@ -37,15 +37,35 @@ class DebriefPoint:
     time_lost_s: float
     difference: str  # empty when nothing exceeded a reporting threshold
     detail: str  # the two measurements behind `difference`
+    # What kind of driving this is about, so advice can be about that rather than
+    # about a stretch of graph. Empty when no measurement moved far enough to
+    # say -- an unexplained loss must not be given a category it did not earn.
+    category: str = ""
 
     @property
     def headline(self) -> str:
         return f"{self.corner} · {self.time_lost_s:.2f} s"
 
 
-def _candidates(fact: dict) -> list[tuple[float, str, str]]:
-    """(how far past its threshold, difference, detail) for each measured gap."""
-    out: list[tuple[float, str, str]] = []
+BRAKING = "braking"
+CORNER_SPEED = "corner speed"
+THROTTLE = "throttle"
+COASTING = "coasting"
+
+# What each category is about, in the terms a driver would use. Handed to the
+# model so its advice is about braking or about throttle, rather than about a
+# stretch of graph.
+CATEGORY_FOCUS = {
+    BRAKING: "where to start braking for the corner",
+    CORNER_SPEED: "how much speed to carry through the corner",
+    THROTTLE: "when to get back on the throttle on the way out",
+    COASTING: "the time spent neither braking nor accelerating",
+}
+
+
+def _candidates(fact: dict) -> list[tuple[float, str, str, str]]:
+    """(how far past its threshold, difference, detail, category) per measured gap."""
+    out: list[tuple[float, str, str, str]] = []
 
     def gap(key: str) -> float | None:
         mine, ref = fact.get(key), fact.get(f"ref_{key}")
@@ -60,6 +80,7 @@ def _candidates(fact: dict) -> list[tuple[float, str, str]]:
             abs(brake) / NOTABLE_BRAKE_POINT_M,
             f"Braked {abs(brake):.0f} m {word}",
             f"brake point {fact['brake_point_m']:.0f} m vs {fact['ref_brake_point_m']:.0f} m",
+            BRAKING,
         ))
 
     speed = gap("min_speed_kmh")
@@ -69,6 +90,7 @@ def _candidates(fact: dict) -> list[tuple[float, str, str]]:
             abs(speed) / NOTABLE_MIN_SPEED_KMH,
             f"{abs(speed):.0f} km/h {word} at the slowest point",
             f"minimum {fact['min_speed_kmh']:.0f} km/h vs {fact['ref_min_speed_kmh']:.0f} km/h",
+            CORNER_SPEED,
         ))
 
     throttle = gap("throttle_reapply_m")
@@ -79,6 +101,7 @@ def _candidates(fact: dict) -> list[tuple[float, str, str]]:
             f"Back on throttle {abs(throttle):.0f} m {word}",
             f"throttle at {fact['throttle_reapply_m']:.0f} m "
             f"vs {fact['ref_throttle_reapply_m']:.0f} m",
+            THROTTLE,
         ))
 
     coast = gap("coast_distance_m")
@@ -89,6 +112,7 @@ def _candidates(fact: dict) -> list[tuple[float, str, str]]:
             f"Coasted {abs(coast):.0f} m {word}",
             f"coasting {fact['coast_distance_m']:.0f} m "
             f"vs {fact['ref_coast_distance_m']:.0f} m",
+            COASTING,
         ))
     return out
 
@@ -124,6 +148,7 @@ def lap_debrief(
                 time_lost_s=round(float(lost), 3),
                 difference="" if best is None else best[1],
                 detail="" if best is None else best[2],
+                category="" if best is None else best[3],
             )
         )
     points.sort(key=lambda point: point.time_lost_s, reverse=True)

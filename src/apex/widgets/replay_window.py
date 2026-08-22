@@ -1,26 +1,30 @@
-"""The review window: one stretch of track, seen every way Apex can show it.
+"""The review window: what to do differently, one moment of the lap at a time.
 
-Its own window rather than another panel on the analysis screen. Reviewing a
-corner is a different activity from reading traces, and the screen behind is
-already dense; a participant doing one is not doing the other.
+Organised around moments rather than around the lap. A participant does not need
+to be told how their lap went -- they drove it -- they need to know that at Turn
+3 they braked too early and what to do about it. So the window is a short list of
+moments, each labelled with the kind of driving it is about, and picking one
+shows the same few seconds three ways: the footage, the line against their best
+lap, and one instruction to try next time.
 
-The layout leaves room for footage of the same stretch beside the line, which is
-the next thing to land here. Everything on this window is about the same few
-seconds of driving, so a viewer only has to understand one place at a time.
+The traces on the analysis screen answer a different question, for a different
+reader. A time-series segment is a fine way to show a researcher what happened
+and a poor way to tell a driver what to change.
 """
 
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QComboBox,
     QDialog,
     QHBoxLayout,
     QLabel,
+    QListWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from apex import theme
 from apex.widgets.footage_pane import FootagePane
 from apex.widgets.track_replay import TrackReplay
 from f1coach_core import DebriefPoint, Lap
@@ -41,33 +45,64 @@ class ReplayWindow(QDialog):
         self.setWindowFlag(Qt.WindowType.Window, True)
         self.resize(880, 560)
 
-        # Switching stretch without going back to the list behind: a participant
-        # reviewing one corner usually wants the next one too.
-        self._chooser = QComboBox()
-        self._chooser.setToolTip("The stretches that cost the most time, worst first")
-        self._chooser.currentIndexChanged.connect(self._chosen)
-        chooser_row = QHBoxLayout()
-        chooser_row.addWidget(QLabel("Stretch"))
-        chooser_row.addWidget(self._chooser, stretch=1)
+        # The moments, worst first, each labelled by what it is about. A list
+        # rather than a dropdown: how many things there are to work on is part of
+        # the answer, and hiding them behind a click makes the window look like
+        # it has one finding when it has three.
+        self._chooser = QListWidget()
+        self._chooser.setMaximumHeight(96)
+        self._chooser.setToolTip("The moments that cost the most time, worst first")
+        self._chooser.currentRowChanged.connect(self._chosen)
 
         self._replay = TrackReplay(self)
         self._replay.cursorMoved.connect(self.cursorMoved)
 
         self._footage = FootagePane(self)
 
+        # The advice, beside the footage it is about. Reading "brake later here"
+        # while watching the place it happened is a different thing from reading
+        # it in a list of findings.
+        self._headline = QLabel()
+        self._headline.setWordWrap(True)
+        self._headline.setStyleSheet("font-weight: 600; font-size: 15px;")
+        self._observation = QLabel()
+        self._observation.setWordWrap(True)
+        self._advice = QLabel()
+        self._advice.setWordWrap(True)
+        self._advice.setStyleSheet(
+            f"color: {theme.GREEN}; font-weight: 600; padding-top: 6px;"
+        )
+        self._measured = QLabel()
+        self._measured.setWordWrap(True)
+        self._measured.setStyleSheet(f"color: {theme.TEXT_DIM}; padding-top: 6px;")
+
+        advice_column = QVBoxLayout()
+        advice_column.setSpacing(4)
+        advice_column.addWidget(self._headline)
+        advice_column.addWidget(self._observation)
+        advice_column.addWidget(self._advice)
+        advice_column.addWidget(self._measured)
+        advice_column.addStretch(1)
+
+        right = QVBoxLayout()
+        right.addWidget(self._footage, stretch=3)
+        right.addLayout(advice_column, stretch=2)
+
         panes = QHBoxLayout()
         panes.addWidget(self._replay, stretch=3)
-        panes.addWidget(self._footage, stretch=2)
+        panes.addLayout(right, stretch=3)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
-        layout.addLayout(chooser_row)
+        layout.addWidget(QLabel("What to work on, worst first"))
+        layout.addWidget(self._chooser)
         layout.addLayout(panes, stretch=1)
 
         self._points: list[DebriefPoint] = []
         self._lap: Lap | None = None
         self._reference: Lap | None = None
         self._notes: dict[int, str] = {}
+        self._advice_by_index: dict = {}
         self._recording: Recording | None = None
         self._windows: dict[int, Window] = {}
         self._clips_dir: Path | None = None
@@ -81,6 +116,7 @@ class ReplayWindow(QDialog):
         note: str = "",
         points: list[DebriefPoint] | None = None,
         notes: dict[int, str] | None = None,
+        advice: dict | None = None,
         recording: Recording | None = None,
         clips_dir: Path | None = None,
     ) -> None:
@@ -93,6 +129,7 @@ class ReplayWindow(QDialog):
         self._lap = lap
         self._reference = reference
         self._notes = dict(notes or {})
+        self._advice_by_index = dict(advice or {})
         self._recording = recording
         self._clips_dir = clips_dir
         self._points = list(points) if points else [point]
@@ -102,13 +139,12 @@ class ReplayWindow(QDialog):
         index = self._points.index(point)
         self._chooser.blockSignals(True)
         self._chooser.clear()
-        for item in self._points:
-            label = item.headline
-            if item.difference:
-                label += f"  —  {item.difference}"
-            self._chooser.addItem(label)
-        self._chooser.setCurrentIndex(index)
-        self._chooser.setEnabled(len(self._points) > 1)
+        for position, item in enumerate(self._points, start=1):
+            kind = item.category or "unexplained"
+            self._chooser.addItem(
+                f"{position}.  {item.corner} · {kind}   —   {item.time_lost_s:.2f} s lost"
+            )
+        self._chooser.setCurrentRow(index)
         self._chooser.blockSignals(False)
 
         self._windows = windows_for(lap, self._points)
@@ -121,6 +157,37 @@ class ReplayWindow(QDialog):
             self._load(index)
             self.stretchChanged.emit(index)
 
+    def _describe(self, index: int, point, fallback_note: str) -> None:
+        """Fill the advice column, saying plainly when there is no advice to give."""
+        kind = point.category or "unexplained"
+        self._headline.setText(f"{point.corner} · {kind} — {point.time_lost_s:.2f} s lost")
+
+        spoken = self._advice_by_index.get(index)
+        observation = spoken.narration if spoken else ""
+        instruction = spoken.advice if spoken else ""
+
+        self._observation.setText(observation or point.difference or fallback_note)
+        if instruction:
+            self._advice.setText(f"Next lap: {instruction}")
+            self._advice.show()
+        elif point.category:
+            # Measured, but not yet put into words. The analysis starts by itself
+            # when a lap is opened, so this is a wait rather than an instruction.
+            self._advice.setText(
+                "Advice for this one is still being written — it appears here "
+                "when the coach has read the lap."
+            )
+            self._advice.show()
+        else:
+            # An honest gap: the loss is real, the reason was never measured, and
+            # an instruction here would be invented however plausible it sounded.
+            self._advice.setText(
+                "Nothing measured here says what to change, so there is no advice "
+                "for this one — only that the time went."
+            )
+            self._advice.show()
+        self._measured.setText(point.detail)
+
     def _load(self, index: int, *, fallback_note: str = "") -> None:
         if self._lap is None or not 0 <= index < len(self._points):
             return
@@ -129,6 +196,7 @@ class ReplayWindow(QDialog):
         if point.difference:
             title += f"  —  {point.difference}"
         note = self._notes.get(index) or fallback_note or point.detail
+        self._describe(index, point, note)
         self._replay.set_stretch(
             self._lap,
             point.span_m[0],

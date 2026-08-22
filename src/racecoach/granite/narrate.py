@@ -19,7 +19,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from f1coach_core.debrief import DebriefPoint
+from f1coach_core.debrief import CATEGORY_FOCUS, DebriefPoint
 from racecoach.granite.client import GraniteError, JsonTransport, _post_json
 
 PROMPT_VERSION = "granite-debrief-v1"
@@ -34,14 +34,19 @@ class NarrationError(RuntimeError):
 
 @dataclass(frozen=True)
 class NarratedPoint:
-    """One measured stretch, with prose if the model produced usable prose."""
+    """One measured stretch: what happened there, and what to try instead."""
 
     point: DebriefPoint
-    narration: str = ""
+    narration: str = ""  # what the measurements show
+    advice: str = ""  # what to do differently next lap
 
     @property
     def spoken(self) -> bool:
-        return bool(self.narration)
+        return bool(self.narration or self.advice)
+
+    @property
+    def full_text(self) -> str:
+        return " ".join(part for part in (self.narration, self.advice) if part)
 
 
 @dataclass(frozen=True)
@@ -66,6 +71,11 @@ def facts_for(point: DebriefPoint) -> dict:
         "time_lost_s": round(point.time_lost_s, 2),
         "from_m": round(start, 1),
         "to_m": round(end, 1),
+        # What kind of driving this is, so the advice is about braking or about
+        # throttle rather than about a stretch of graph.
+        "about": CATEGORY_FOCUS.get(point.category, "")
+        if point.category
+        else "not measured",
         "difference": point.difference,
         "detail": point.detail,
     }
@@ -104,20 +114,24 @@ def invented_numbers(narration: str, point: DebriefPoint) -> list[str]:
 def build_prompt(summary: str, points: list[DebriefPoint]) -> str:
     measured = [facts_for(point) for point in points]
     return (
-        "You are a driving coach talking to a participant in a driving study who "
-        "has just finished a lap. Below are measurements already taken from their "
-        "telemetry. Explain each one in plain language: what it means and what to "
-        "try next lap.\n\n"
+        "You are a driving coach talking to someone who has just finished a lap "
+        "in a driving simulator. Below are measurements taken from their "
+        "telemetry, each comparing this lap with their own quickest lap.\n\n"
+        "For each stretch, write two things:\n"
+        "  observation: what the measurement shows, in plain language.\n"
+        "  advice: one thing to try on the next lap, phrased as an instruction "
+        "about the 'about' field for that stretch.\n\n"
         "Rules you must follow:\n"
         "- Use only the numbers given. Do not introduce any other number.\n"
         "- Do not claim a cause the measurements do not show.\n"
-        "- Two sentences per stretch at most. No jargon, no lap-time predictions.\n"
-        "- If a stretch has an empty 'difference', say the time was lost there "
-        "without saying why, because the reason was not measured.\n\n"
+        "- One sentence each. No jargon, no lap-time predictions, no praise.\n"
+        "- Where 'about' is 'not measured', give an observation and leave the "
+        "advice empty: nothing was measured that says what to change.\n\n"
         f"Overall measurement: {summary}\n"
         f"Stretches: {json.dumps(measured, ensure_ascii=False)}\n\n"
         'Reply with JSON only: {"summary": "one sentence", "stretches": '
-        '["one entry per stretch, in the same order"]}'
+        '[{"observation": "...", "advice": "..."}]} with one entry per stretch, '
+        "in the same order."
     )
 
 
@@ -168,8 +182,8 @@ def narrate_debrief(
     return NarratedDebrief(
         summary=spoken_summary or summary,
         points=tuple(
-            NarratedPoint(point=point, narration=text)
-            for point, text in zip(points, spoken, strict=True)
+            NarratedPoint(point=point, narration=said[0], advice=said[1])
+            for point, said in zip(points, spoken, strict=True)
         ),
         model=str(response.get("model") or model),
         raw_text=raw_text,
@@ -185,9 +199,11 @@ def narrate_debrief(
     )
 
 
-def _parse(raw_text: str, points: list[DebriefPoint]) -> tuple[str, list[str]]:
+def _parse(
+    raw_text: str, points: list[DebriefPoint]
+) -> tuple[str, list[tuple[str, str]]]:
     """Pull usable prose out of the reply, discarding anything unsupported."""
-    empty = ["" for _ in points]
+    empty = [("", "") for _ in points]
     try:
         data = json.loads(_json_slice(raw_text))
     except (ValueError, TypeError):
@@ -215,12 +231,30 @@ def _parse(raw_text: str, points: list[DebriefPoint]) -> tuple[str, list[str]]:
     return summary.strip(), spoken
 
 
-def _accept(text: object, point: DebriefPoint) -> str:
-    if not isinstance(text, str) or not text.strip():
-        return ""
-    if invented_numbers(text, point):
-        return ""
-    return text.strip()
+def _accept(entry: object, point: DebriefPoint) -> tuple[str, str]:
+    """Take the observation and the advice, each only if it invents nothing.
+
+    Judged separately: a sound observation should not be thrown away because the
+    advice beside it strayed, and advice for a stretch nothing explains should
+    not survive just because the observation did.
+    """
+    if isinstance(entry, str):  # an older shape, or a model that ignored the schema
+        entry = {"observation": entry, "advice": ""}
+    if not isinstance(entry, dict):
+        return "", ""
+
+    def clean(key: str) -> str:
+        value = entry.get(key)
+        if not isinstance(value, str) or not value.strip():
+            return ""
+        return "" if invented_numbers(value, point) else value.strip()
+
+    advice = clean("advice")
+    if not point.category:
+        # Nothing measured says what to change here, so an instruction would be
+        # invented however plausible it sounds.
+        advice = ""
+    return clean("observation"), advice
 
 
 def _json_slice(raw_text: str) -> str:

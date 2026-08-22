@@ -149,6 +149,9 @@ class AnalysisView(QWidget):
         # Prose the coach produced, by row, so a replay can show what was said
         # about the stretch it is playing.
         self._narration: dict[int, str] = {}
+        # The narrated points themselves, so the review window can separate what
+        # was observed from what to do about it.
+        self._advice: dict = {}
         self._reference: Lap | None = None
         self._replay_window: ReplayWindow | None = None
 
@@ -257,6 +260,7 @@ class AnalysisView(QWidget):
         self._reference = reference
         self._debrief_points = []
         self._narration = {}
+        self._advice = {}
         self._debrief.clear()
         if self._lap is None or reference is None or reference is self._lap:
             self._debrief_heading.hide()
@@ -295,12 +299,14 @@ class AnalysisView(QWidget):
         if len(narrated) != len(self._debrief_points):
             return
         for row, item in enumerate(narrated):
-            if not item.narration:
+            self._advice[row] = item
+            text = getattr(item, "full_text", "") or item.narration
+            if not text:
                 continue
-            self._narration[row] = item.narration
+            self._narration[row] = text
             entry = self._debrief.item(row)
             if entry is not None:
-                entry.setToolTip(item.narration)
+                entry.setToolTip(text)
         summary = getattr(result, "summary", "")
         if summary:
             self._debrief_heading.setText(summary)
@@ -363,6 +369,7 @@ class AnalysisView(QWidget):
             # move between corners without sending the participant back here.
             points=self._debrief_points,
             notes=self._narration,
+            advice=self._advice,
             recording=self._session_recording(),
             clips_dir=self._clips_dir(),
         )

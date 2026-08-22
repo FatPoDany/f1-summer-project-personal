@@ -12,7 +12,7 @@ import sys
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
+from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (
     QDialog,
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -92,7 +93,10 @@ class _RestoreTask(QRunnable):
             )
         except (OSError, ValueError):
             saved = None
-        self.signals.finished.emit(saved)
+        try:
+            self.signals.finished.emit(saved)
+        except RuntimeError:
+            pass  # the panel went away while this was reading from disk
 
 
 def _endpoint_is_configured(managed: str | None = None) -> bool:
@@ -329,6 +333,14 @@ class CoachPanel(QWidget):
         self._debrief_summary = ""
         self._debrief_points: list = []
         self._narration_task: NarrationTask | None = None
+        self._running: dict[tuple[str, str], _CoachTask] = {}
+        self._auto = True
+        # Switching the comparison a few times in a second should start one run,
+        # for wherever the participant settled, not one per click.
+        self._settle = QTimer(self)
+        self._settle.setSingleShot(True)
+        self._settle.setInterval(400)
+        self._settle.timeout.connect(self._run)
         self._capability: gh.Capability | None = None
         self._restore_task: _RestoreTask | None = None
         self.report: CoachingReport | None = None
@@ -365,6 +377,15 @@ class CoachPanel(QWidget):
         buttons.addWidget(reset_button)
         buttons.addWidget(self._audit_button)
 
+        # Indeterminate on purpose: a 3B model on a CPU gives no honest estimate,
+        # and a bar that claims one is worse than a bar that only says "still
+        # going". Its presence is the signal.
+        self._progress = QProgressBar()
+        self._progress.setRange(0, 0)
+        self._progress.setTextVisible(False)
+        self._progress.setMaximumHeight(6)
+        self._progress.hide()
+
         self._cards_host = QWidget()
         self._cards = QVBoxLayout(self._cards_host)
         self._cards.setContentsMargins(0, 0, 0, 0)
@@ -385,6 +406,7 @@ class CoachPanel(QWidget):
         layout.setSpacing(6)
         layout.addLayout(header)
         layout.addLayout(buttons)
+        layout.addWidget(self._progress)
         layout.addWidget(self._scroll, stretch=1)
 
     # -- context -----------------------------------------------------------
@@ -426,7 +448,28 @@ class CoachPanel(QWidget):
             self._restore_task = restore
             QThreadPool.globalInstance().start(restore)
 
+    def _context_key(self) -> tuple[str, str] | None:
+        """What a run is *for*, so two of the same are never started."""
+        if self._lap is None:
+            return None
+        return (
+            str(self._lap.source),
+            "" if self._reference is None else str(self._reference.source),
+        )
+
     def _restore_finished(
+        self,
+        task: _RestoreTask,
+        saved: SavedCoachingReport | None,
+    ) -> None:
+        try:
+            self._restore_into_view(task, saved)
+        except RuntimeError:
+            # The panel was closed while this was reading from disk. Its Qt
+            # children are already gone; there is nobody left to show anything to.
+            return
+
+    def _restore_into_view(
         self,
         task: _RestoreTask,
         saved: SavedCoachingReport | None,
@@ -434,10 +477,19 @@ class CoachPanel(QWidget):
         if task is not self._restore_task:
             return
         self._restore_task = None
-        if saved is None:
+        if saved is not None:
+            self._on_audited(str(saved.path))
+            self.show_report(saved.report)
             return
-        self._on_audited(str(saved.path))
-        self.show_report(saved.report)
+        # Nothing on disk for this pair. Either one is being worked on already --
+        # switching the comparison used to abandon a run and make somebody ask
+        # for it again -- or nobody has asked for it yet, and waiting for a click
+        # only means waiting longer.
+        key = self._context_key()
+        if key in self._running:
+            self._show_working("Still reading this lap…")
+        elif self._auto:
+            self._settle.start()
 
     # -- running ---------------------------------------------------------------
 
@@ -585,6 +637,13 @@ class CoachPanel(QWidget):
         self._placeholder.setText(message)
 
     def _start_analysis(self) -> None:
+        key = self._context_key()
+        if key is not None and key in self._running:
+            # Already being read. Starting a second run for the same pair would
+            # compete for the same CPU and, because both would register under
+            # this key, leave one of them unable to find itself when it finished.
+            self._show_working("Still reading this lap…")
+            return
         self._restore_task = None  # a late disk read must not replace this new run
         try:
             provider = get_provider(self.provider_name)
@@ -611,23 +670,67 @@ class CoachPanel(QWidget):
             lambda path, current=task: self._task_audited(current, path)
         )
         self._task = task  # keep signals alive while the pool owns the runnable
+        key = self._context_key()
+        if key is not None:
+            self._running[key] = task
+        self._show_working("Reading this lap…")
         QThreadPool.globalInstance().start(task)
 
     def _task_finished(self, task: _CoachTask, report: CoachingReport) -> None:
-        if task is self._task:
-            self.show_report(report)
-            self._narrate_debrief()
+        # Judged by what the run was *for*, not by which task object happens to
+        # be current. Somebody who opened another lap while this one was being
+        # read, then came back, is looking at exactly this result -- and by then
+        # `self._task` is a different object, so identity would have left them
+        # watching a progress bar for a run that had already finished.
+        # A tracked run is judged by what it was for; an untracked one by
+        # whether it is still the current task. Both must hold: dropping the
+        # context check would leave somebody watching a finished run's progress
+        # bar, and dropping the identity check would let a stale result overwrite
+        # the lap they moved on to.
+        key = self._forget(task)
+        current = key == self._context_key() if key is not None else task is self._task
+        if not current:
+            return  # still written to disk, so returning later restores it
+        self.show_report(report)
+        self._narrate_debrief()
 
     def _task_failed(self, task: _CoachTask, message: str) -> None:
+        self._forget(task)
         if task is self._task:
             self._failed(message)
 
+    def _show_working(self, text: str) -> None:
+        self._progress.show()
+        self._coach_button.setEnabled(False)
+        self._coach_button.setText("Reading…")
+        self._placeholder.setText(text)
+
+    def _done_working(self) -> None:
+        self._progress.hide()
+        self._coach_button.setEnabled(self._lap is not None)
+        self._refresh_button()
+
+    def _forget(self, task: _CoachTask) -> tuple[str, str] | None:
+        """Stop tracking a finished run, and say what it was for."""
+        for key, running in list(self._running.items()):
+            if running is task:
+                del self._running[key]
+                return key
+        return None
+
+    def _is_current(self, task: _CoachTask) -> bool:
+        """Whether this run is for the lap and comparison now on screen."""
+        for key, running in self._running.items():
+            if running is task:
+                return key == self._context_key()
+        return task is self._task
+
     def _task_progress(self, task: _CoachTask, text: str) -> None:
-        if task is self._task:
+        if self._is_current(task):
             self._on_progress(text)
 
     def _task_audited(self, task: _CoachTask, path: str) -> None:
-        if task is self._task:
+        if self._is_current(task):
             self._on_audited(path)
 
     def _on_audited(self, path: str) -> None:
@@ -644,6 +747,7 @@ class CoachPanel(QWidget):
         self._placeholder.setText(f"…{tail}" if len(text) > 500 else tail)
 
     def show_report(self, report: CoachingReport) -> None:
+        self._done_working()
         self.report = report
         self._task = None
         self._coach_button.setEnabled(True)
@@ -674,8 +778,7 @@ class CoachPanel(QWidget):
 
     def _failed(self, message: str) -> None:
         self._task = None
-        self._coach_button.setEnabled(True)
-        self._coach_button.setText("Analyze lap")
+        self._done_working()
         self._chip.clear()
         self._chip.hide()
         self._scroll.verticalScrollBar().setValue(0)  # outcome reads from the top

@@ -10,7 +10,7 @@ from racecoach.granite.client import GraniteError
 
 
 def point(corner="Turn 3", lost=0.31, difference="braked 12 m earlier",
-          detail="you 118 m, best 130 m"):
+          detail="you 118 m, best 130 m", category="braking"):
     return DebriefPoint(
         corner=corner,
         apex_m=412.0,
@@ -18,6 +18,7 @@ def point(corner="Turn 3", lost=0.31, difference="braked 12 m earlier",
         time_lost_s=lost,
         difference=difference,
         detail=detail,
+        category=category,
     )
 
 
@@ -190,7 +191,9 @@ def test_the_prompt_carries_the_measurements_and_forbids_inventing_more():
     assert "Do not introduce any other number" in prompt
     assert "Do not claim a cause the measurements do not show" in prompt
     # An unmeasured reason must be reported as unexplained, not guessed at.
-    assert "without saying why" in prompt
+    assert "leave the advice empty" in prompt
+    # The advice is about a kind of driving, not about a stretch of graph.
+    assert "where to start braking" in prompt
 
 
 def test_an_api_key_is_sent_only_when_one_is_configured():
@@ -206,3 +209,61 @@ def test_an_api_key_is_sent_only_when_one_is_configured():
         "s", [point()], base_url="http://x/v1", model="m", transport=send
     )
     assert "Authorization" not in captured["headers"]
+
+
+def test_advice_is_kept_apart_from_the_observation_it_follows():
+    """A sound observation should not be lost because the advice beside it strayed."""
+    points = [point()]
+    body = json.dumps({
+        "summary": "ok",
+        "stretches": [{
+            "observation": "You braked 12 m earlier than on your best lap.",
+            "advice": "Carry 25 km/h more into the corner.",  # 25 was never measured
+        }],
+    })
+
+    result, _ = narrate_with(body, points)
+
+    assert "12 m earlier" in result.points[0].narration
+    assert result.points[0].advice == ""
+
+
+def test_a_stretch_nothing_explains_gets_no_instruction():
+    """Nothing measured says what to change, so an instruction would be invented."""
+    points = [point(difference="", detail="", category="")]
+    body = json.dumps({
+        "summary": "ok",
+        "stretches": [{
+            "observation": "You lost 0.31 s along this stretch.",
+            "advice": "Brake later into the corner.",
+        }],
+    })
+
+    result, _ = narrate_with(body, points)
+
+    assert result.points[0].narration  # the loss is measured, so it is reported
+    assert result.points[0].advice == ""  # the remedy is not
+
+
+def test_both_halves_reach_the_reader_when_both_are_supported():
+    points = [point()]
+    body = json.dumps({
+        "summary": "ok",
+        "stretches": [{
+            "observation": "You braked 12 m earlier than on your best lap.",
+            "advice": "Try holding on to 130 m before you brake.",
+        }],
+    })
+
+    result, _ = narrate_with(body, points)
+    spoken = result.points[0]
+
+    assert spoken.narration and spoken.advice
+    assert spoken.full_text.startswith("You braked")
+    assert "130 m" in spoken.full_text
+
+
+def test_the_category_is_handed_over_so_advice_is_about_driving():
+    """Without it the model can only talk about a stretch of graph."""
+    prompt = narrate.build_prompt("s", [point(category="throttle")])
+    assert "when to get back on the throttle" in prompt
