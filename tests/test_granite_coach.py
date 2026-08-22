@@ -144,6 +144,31 @@ def test_stream_error_is_readable_and_preserves_partial_progress(summary):
     assert progress == ['{"findings":']
 
 
+def test_an_answer_cut_off_by_the_context_limit_says_so(summary):
+    """A lap far off the reference used to fail here as unparseable JSON."""
+
+    def transport(url, payload, headers, timeout):
+        return iter(
+            [
+                {"choices": [{"delta": {"content": '{"findings": [{"focus"'}}]},
+                {"choices": [{"delta": {}, "finish_reason": "length"}]},
+            ]
+        )
+
+    with pytest.raises(GraniteCoachError, match="ctx-size") as caught:
+        GraniteCoach(transport=transport).generate(summary)
+    assert "ran out of room" in str(caught.value)
+
+
+def test_a_complete_answer_is_not_mistaken_for_a_truncated_one(summary):
+    def transport(url, payload, headers, timeout):
+        return {
+            "choices": [{"message": {"content": empty_report()}, "finish_reason": "stop"}],
+        }
+
+    assert GraniteCoach(transport=transport).generate(summary).findings == ()
+
+
 def test_non_utf8_stream_data_is_reported_as_a_domain_error(summary, monkeypatch):
     class Response:
         def __enter__(self):

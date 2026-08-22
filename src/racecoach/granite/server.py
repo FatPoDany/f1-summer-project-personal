@@ -24,7 +24,13 @@ from racecoach.granite import model as gm
 LLAMA_TAG = "b10549"
 SERVER_EXECUTABLE = "llama-server.exe" if sys.platform == "win32" else "llama-server"
 DEFAULT_PORT = 8080
-DEFAULT_CONTEXT = 4096
+# The context has to hold the evidence packet and the answer to it at once, and
+# the packet grows with how far off the reference the lap was: the worst one
+# measured came to 3.2k tokens and still needed 1.0k more to finish its JSON.
+# At 4096 that did not fit, so generation stopped mid-object and the coach
+# recorded a failed lap -- the slower the lap, the more certain the failure.
+# 8192 leaves the whole MAX_TOKENS budget free for the answer.
+DEFAULT_CONTEXT = 8192
 
 # Loading 2.1 GB of weights off a cold disk on a laptop is not quick, and the
 # alternative to waiting is telling a participant the coach is broken when it is

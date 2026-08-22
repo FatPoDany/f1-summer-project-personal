@@ -157,8 +157,8 @@ def test_the_command_matches_the_shell_script_the_researchers_use(installed):
     for flag in ("--jinja", "--no-mmproj", "--no-ui", "--cors-origins", "--parallel"):
         assert flag in command, flag
         assert flag in script, flag
-    assert command[command.index("--ctx-size") + 1] == "4096"
-    assert '--ctx-size 4096' in script
+    assert command[command.index("--ctx-size") + 1] == "8192"
+    assert '--ctx-size 8192' in script
     assert command[command.index("--host") + 1] == "127.0.0.1"
 
 
