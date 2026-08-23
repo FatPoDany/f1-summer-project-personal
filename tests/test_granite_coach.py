@@ -6,16 +6,16 @@ import urllib.error
 
 import pytest
 
-from f1coach_core import build_evidence_summary, load_sample_session
+from f1coach_core import build_evidence_summary
 from f1coach_core.coach import opportunity_catalog
 from f1coach_core.granite_coach import GraniteCoach, GraniteCoachError
 from f1coach_core.llm import build_coach_response_format
+from sample_laps import slow_and_best, slow_lap
 
 
 @pytest.fixture(scope="module")
 def summary():
-    session = load_sample_session()
-    return build_evidence_summary(session.laps[2], session.best_lap)
+    return build_evidence_summary(*slow_and_best())
 
 
 def empty_report() -> str:
@@ -190,8 +190,7 @@ def test_non_utf8_stream_data_is_reported_as_a_domain_error(summary, monkeypatch
 
 
 def test_granite_validates_single_lap_guidance_without_a_reference():
-    session = load_sample_session()
-    solo = build_evidence_summary(session.laps[2])
+    solo = build_evidence_summary(slow_lap())
     available = next(iter(opportunity_catalog(solo).values()))
     citation = {
         key: available[key]

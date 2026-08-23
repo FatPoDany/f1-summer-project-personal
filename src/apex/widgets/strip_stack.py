@@ -46,6 +46,14 @@ class StripStack(pg.GraphicsLayoutWidget):
         axis = self._ribbon.getAxis("left")
         axis.setStyle(showValues=False)
         axis.setTicks([])
+        # TORCS exports no sectors, so S1-S3 are thirds of the track length that
+        # Apex derives. Unlabelled they read as the circuit's official timing
+        # sectors, which they are not, and a reader would compare them with
+        # broadcast splits that mean something else.
+        self._ribbon.setToolTip(
+            "Sectors: equal thirds of the lap distance, derived by Apex — TORCS "
+            "records no timing sectors. Colour is this lap against the reference."
+        )
         self._ribbon_items: list[pg.GraphicsObject] = []
 
         self._strips: list[pg.PlotItem] = []

@@ -201,8 +201,19 @@ class MainWindow(QMainWindow):
     # -- opening files ---------------------------------------------------------
 
     def open_path(self, path: str | Path) -> None:
-        """Canonical lap -> Lap Analysis. TORCS run -> split into a Garage session."""
+        """Handover -> verified Garage session. Canonical lap -> Lap Analysis.
+
+        A TORCS run is split into a Garage session; a participant's handover is
+        checked against its own digests first, and brings the driver, phase,
+        preset and background questionnaire that a loose CSV cannot carry.
+        """
         path = Path(path)
+        if path.suffix.lower() == ".zip":
+            name = self._garage.import_handover(path)  # reports its own failures
+            if name is not None:
+                self._garage.refresh_sessions(select=name)
+                self.show_garage()
+            return
         if is_torcs_export(path):
             try:
                 summary = import_telemetry(path, session_name=path.stem)
@@ -235,7 +246,7 @@ class MainWindow(QMainWindow):
 
         file_menu = self.menuBar().addMenu("&File")
 
-        open_action = QAction("&Open Telemetry CSV…", self)
+        open_action = QAction("&Open Telemetry or Handover…", self)
         open_action.setShortcut(QKeySequence.StandardKey.Open)
         open_action.triggered.connect(self._pick_file)
         file_menu.addAction(open_action)
@@ -340,7 +351,11 @@ class MainWindow(QMainWindow):
 
     def _pick_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "Open telemetry", "", "Telemetry CSV (*.csv)"
+            self,
+            "Open telemetry or a participant handover",
+            "",
+            "Telemetry and handovers (*.csv *.zip);;Telemetry CSV (*.csv);;"
+            "Participant handover (*.zip)",
         )
         if path:
             self.open_path(path)

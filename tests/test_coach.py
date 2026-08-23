@@ -12,14 +12,14 @@ from f1coach_core import (
     load_sample_session,
 )
 from f1coach_core.coach import evidence_catalog
+from sample_laps import slow_and_best
 
 EVIDENCE_KEYS = ("metric", "corner", "value", "ref", "unit", "span_m")
 
 
 @pytest.fixture(scope="module")
 def summary():
-    session = load_sample_session()
-    return build_evidence_summary(session.laps[2], session.best_lap)
+    return build_evidence_summary(*slow_and_best())
 
 
 def valid_payload(summary: dict, focus: str = "braking") -> dict:

@@ -65,11 +65,11 @@ def test_ensure_sample_session_is_idempotent():
     target = ensure_sample_session()
     assert target.name == SAMPLE_SESSION_NAME
     files = sorted(p.name for p in target.glob("*.csv"))
-    assert files == ["lap_01.csv", "lap_02.csv", "lap_03.csv"]
+    assert files == [f"0822-coached-lap0{n}.csv" for n in range(1, 6)]
     assert ensure_sample_session() == target
     assert sorted(p.name for p in target.glob("*.csv")) == files
     session = load_session(target)
-    assert len(session.laps) == 3 and session.problems == ()
+    assert len(session.laps) == 5 and session.problems == ()
 
 
 def test_delete_session_removes_only_the_managed_copy(tmp_path):

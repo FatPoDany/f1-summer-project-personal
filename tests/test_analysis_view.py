@@ -18,6 +18,7 @@ from f1coach_core import (
     load_sample_session,
     single_lap_corner_table,
 )
+from sample_laps import lap_without_position, slow_lap
 
 
 @pytest.fixture(autouse=True)
@@ -30,7 +31,7 @@ def make_view(qtbot):
     view = AnalysisView()
     qtbot.addWidget(view)
     view.show()
-    view.set_context(session.laps[2], session)  # the ragged lap, ref -> session best
+    view.set_context(slow_lap(session), session)  # slowest lap, ref -> session best
     return view, session
 
 
@@ -40,7 +41,7 @@ def test_single_lap_corner_table_is_available_when_chosen(qtbot):
     view._ref_combo.setCurrentIndex(view._ref_combo.findData(None))
     assert view._ref_combo.currentData() is None
 
-    rows = single_lap_corner_table(session.laps[2])
+    rows = single_lap_corner_table(slow_lap(session))
     assert not view._corners.isHidden()
     assert view._corners.rowCount() == len(rows)
     assert view._corners.horizontalHeaderItem(5).text() == "Technique review"
@@ -53,7 +54,7 @@ def test_optional_reference_comparison_matches_core_and_flags_worst(qtbot):
     view._ref_combo.setCurrentIndex(best_index)
     reference = view._ref_combo.currentData()
 
-    rows = corner_table(session.laps[2], reference)
+    rows = corner_table(slow_lap(session), reference)
     assert not view._corners.isHidden()
     assert view._corners.rowCount() == len(rows)
     worst = max(range(len(rows)), key=lambda i: rows[i]["delta_s"])
@@ -82,7 +83,7 @@ def test_comparison_keeps_the_technique_review_column(qtbot):
     reference = view._ref_combo.currentData()
     assert reference is not None
 
-    rows = corner_table(session.laps[2], reference)
+    rows = corner_table(slow_lap(session), reference)
     review_col = len(COMPARISON_HEADERS) - 1
     assert view._corners.columnCount() == len(COMPARISON_HEADERS)
     assert view._corners.horizontalHeaderItem(review_col).text() == "Technique review"
@@ -136,7 +137,10 @@ def test_show_picks_the_cited_stretch_out_on_the_track(qtbot):
 
 def test_a_lap_without_world_position_leaves_the_track_empty(qtbot):
     """Those laps analyse fine; they simply cannot be drawn on a circuit."""
-    view, _session = make_view(qtbot)
+    view = AnalysisView()
+    qtbot.addWidget(view)
+    view._panel._auto = False
+    view.set_context(lap_without_position(), None)
 
     assert not view.lap.has_track_map
     assert view._track._x == []
@@ -144,6 +148,21 @@ def test_a_lap_without_world_position_leaves_the_track_empty(qtbot):
     view._show_evidence(500.0, 950.0)  # must not invent a position it never had
 
     assert view._track._x == []
+
+
+def test_the_sector_ribbon_says_the_sectors_are_derived(qtbot):
+    """S1-S3 must not be read as the circuit's official timing sectors.
+
+    TORCS records none, so these are equal thirds of the lap distance that Apex
+    derives. Unlabelled, a reader compares them with broadcast splits that mean
+    something else entirely.
+    """
+    view, _session = make_view(qtbot)
+
+    tip = view._stack._ribbon.toolTip()
+
+    assert "thirds" in tip and "derived" in tip
+    assert "TORCS records no timing sectors" in tip
 
 
 def test_corner_row_click_zooms_and_highlights_the_zone(qtbot):

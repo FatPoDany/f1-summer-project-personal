@@ -1,4 +1,12 @@
-"""Generate the bundled sample session: three synthetic laps of one ~4.3 km circuit.
+"""Historical: the synthetic sample session this project shipped until 2026-08-23.
+
+Kept for provenance. It no longer writes the bundled sample -- that is now five
+real laps recorded by study participant 0822 (see ``f1coach_core.sample``), and
+running this script would overwrite them with data nobody drove. The generator
+is preserved because published figures and notes predating the change were made
+against its output.
+
+Generate the bundled sample session: three synthetic laps of one ~4.3 km circuit.
 
     lap_01  banker  — tidy but conservative: earlier braking, careful corner speed
     lap_02  best    — the reference pace
@@ -10,8 +18,9 @@ run over two consecutive laps so the flying start matches the finish, then
 resampled to 50 Hz. Not physics — just honest-looking enough that the Garage
 has deltas and coaching has a story, without credentials, network, or a sim.
 
-Usage: python scripts/make_sample_session.py
-Deterministic; rewrites src/f1coach_core/data/sample_session/*.csv in place.
+Deterministic. It used to rewrite src/f1coach_core/data/sample_session/*.csv in
+place; OUT_DIR now points at a scratch directory so that cannot happen by
+accident.
 """
 
 from pathlib import Path
@@ -19,7 +28,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-OUT_DIR = Path(__file__).resolve().parents[1] / "src" / "f1coach_core" / "data" / "sample_session"
+# Not the bundled sample any more -- see the module docstring.
+OUT_DIR = Path(__file__).resolve().parents[1] / ".runtime" / "synthetic-sample-session"
 
 RATE_HZ = 50
 DS = 1.0  # distance grid step (m)

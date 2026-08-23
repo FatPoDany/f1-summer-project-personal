@@ -197,7 +197,12 @@ def _unique_dest(dest_dir: Path, name: str) -> Path:
 
 
 def ensure_sample_session() -> Path:
-    """First run: materialise the bundled sample session into the workspace."""
+    """First run: materialise the bundled sample session into the workspace.
+
+    The laps are a real recorded session (see ``f1coach_core.sample``), copied
+    rather than generated, so what a first-time reader explores is telemetry
+    somebody actually drove.
+    """
     target = sessions_root() / SAMPLE_SESSION_NAME
     if not target.is_dir():
         target.mkdir(parents=True)

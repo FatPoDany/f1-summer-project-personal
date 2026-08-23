@@ -9,7 +9,7 @@ import numpy as np
 
 from f1coach_core.analysis import sector_times
 from f1coach_core.coach import CoachingReport
-from f1coach_core.features import time_delta
+from f1coach_core.features import corner_table, single_lap_corner_table, time_delta
 from f1coach_core.lap import Lap
 
 BG, PANEL, TEXT, DIM = "#161616", "#1f1f1f", "#f4f4f4", "#c6c6c6"
@@ -104,6 +104,68 @@ def _sector_table(lap: Lap, reference: Lap | None) -> str:
     return "<h2>Sector times</h2><table>" + "".join(rows) + "</table>"
 
 
+def _corner_section(lap: Lap, reference: Lap | None) -> str:
+    """The corner table the Analysis screen shows, with the same two modes.
+
+    The report is what leaves the app -- into a write-up, a status form, a
+    supervisor's inbox -- and it used to stop at sector times, which say where
+    the lap was slow but never what happened there. These are the deterministic
+    per-corner facts, technique review included, so a reader who cannot open
+    Apex sees what a reader who can would.
+    """
+    try:
+        rows = (
+            corner_table(lap, reference)
+            if reference is not None
+            else single_lap_corner_table(lap)
+        )
+    except ValueError:  # laps too short to share a distance grid
+        return ""
+    if not rows:
+        return ""
+
+    def metres(value: float | None) -> str:
+        return "—" if value is None else f"{value:,.0f} m"
+
+    def speed(value: float | None) -> str:
+        return "—" if value is None else f"{value:.0f} km/h"
+
+    header = (
+        "<tr><th>corner</th><th>brake point</th><th>min speed</th>"
+        "<th>throttle 50%</th><th>exit +200 m</th>"
+        + ("<th>Δ vs ref</th>" if reference is not None else "")
+        + "<th>technique review</th></tr>"
+    )
+    body = []
+    for row in rows:
+        flags = row["technique_flags"]
+        review = "REVIEW · " + ", ".join(flags) if flags else "No flag"
+        cells = [f"<td>{html.escape(row['corner'])}</td>"]
+        if reference is not None:
+            cells += [
+                f"<td>{metres(row['brake_point_m'])} · ref "
+                f"{metres(row['ref_brake_point_m'])}</td>",
+                f"<td>{speed(row['min_speed_kmh'])} · ref "
+                f"{speed(row['ref_min_speed_kmh'])}</td>",
+                f"<td>{metres(row['throttle_point_m'])} · ref "
+                f"{metres(row['ref_throttle_point_m'])}</td>",
+                f"<td>{speed(row['exit_speed_kmh'])} · ref "
+                f"{speed(row['ref_exit_speed_kmh'])}</td>",
+                f"<td>{row['delta_s']:+.3f} s</td>",
+            ]
+        else:
+            cells += [
+                f"<td>{metres(row['brake_point_m'])}</td>",
+                f"<td>{speed(row['min_speed_kmh'])}</td>",
+                f"<td>{metres(row['throttle_point_m'])}</td>",
+                f"<td>{speed(row['exit_speed_kmh'])}</td>",
+            ]
+        colour = f' style="color:{YELLOW};"' if flags else ' class="dim"'
+        cells.append(f"<td{colour}>{html.escape(review)}</td>")
+        body.append("<tr>" + "".join(cells) + "</tr>")
+    return "<h2>Corners</h2><table>" + header + "".join(body) + "</table>"
+
+
 def _findings_section(coaching: CoachingReport | None, *, has_reference: bool) -> str:
     if coaching is None:
         return '<h2>Coaching</h2><p class="dim">No coaching was run for this analysis.</p>'
@@ -167,6 +229,7 @@ def render_html_report(
     if reference is not None:
         parts.append(_delta_chart(lap, reference))
     parts.append(_sector_table(lap, reference))
+    parts.append(_corner_section(lap, reference))
     parts.append(_findings_section(coaching, has_reference=reference is not None))
     parts.append("</body></html>")
     return "".join(parts)

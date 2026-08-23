@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 
 from apex import theme
 from f1coach_core.lap import Lap
+from f1coach_core.participant import background_summary, load_background
 from f1coach_core.study import PhaseSummary, summarise_all, summary_csv
 from f1coach_core.workspace import list_sessions
 
@@ -46,6 +47,11 @@ HEADERS = (
     "Off track",
     "Time off",
     "Incidents",
+    # A paired test compares each participant with themselves, but whether the
+    # groups were comparable in the first place is an argument about prior
+    # experience -- and it cannot be made from a column nobody can see. The
+    # export has carried these all along; the screen did not.
+    "Background",
 )
 
 
@@ -183,10 +189,11 @@ class StudyView(QWidget):
                 str(values["off_track_events"]),
                 str(values["off_track_seconds"]),
                 str(values["damage_events"]),
+                background_summary(load_background(summary.driver)),
             ]
             for column, text in enumerate(cells):
                 item = QTableWidgetItem(text)
-                if column >= 6 and text == "":
+                if 6 <= column < len(HEADERS) - 1 and text == "":
                     # Blank means the recording lacked the channel. Saying so
                     # stops it being read as a measured zero.
                     item.setText("—")

@@ -128,6 +128,33 @@ BACKGROUND_COLUMNS = (
 )
 
 
+BACKGROUND_LABELS = {
+    "racing_games": "racing games",
+    "sim_racing": "sim racing",
+    "driving": "driving",
+    "age_band": "age",
+}
+
+
+def background_summary(background: Background | None) -> str:
+    """The questionnaire as one line a person can read.
+
+    The answers exist to make a comparison defensible, and a stored file nobody
+    can see does not do that. Distinguishes never asked from asked and declined:
+    they are different facts about the study, and only one of them can be fixed.
+    """
+    if background is None:
+        return "background not recorded"
+    if not background.is_answered:
+        return "background questionnaire returned no answers"
+    given = [
+        f"{BACKGROUND_LABELS[name]} {getattr(background, name)}"
+        for name in BACKGROUND_COLUMNS
+        if getattr(background, name) != DECLINED
+    ]
+    return " · ".join(given)
+
+
 def background_columns(background: Background | None) -> dict:
     """Flat columns for the study export, labels and ranks side by side.
 

@@ -58,25 +58,45 @@ summary of fresh advice; press the number key **1** during the race if that
 board is hidden.
 
 For post-lap coaching, import a CSV into a session or open a captured session in
-**Garage**. A participant's handover `.zip` can be imported directly: its
-digests are verified, its laps land in a session of their own, and the driver,
-phase, preset and background questionnaire it carries are kept with them — a
-loose CSV records none of those, which is why the Driver column is blank for one.
+**Garage**. A participant's handover `.zip` can be imported from Garage or from
+**File > Open Telemetry or Handover**: its digests are verified, its laps land in
+a session of their own, and the driver, phase, preset and background
+questionnaire it carries are kept with them. A loose CSV records none of those,
+so its Driver column reads `—` and the Garage says plainly that the session
+carries no participant. Who drove a session, and what they answered about prior
+experience, is shown above the lap table and again as a column on the **Study**
+screen.
+
 Apex checks every lap automatically: the session best receives single-lap
 technique checks and each other lap is compared with that best lap. The Status
 column shows queued, generating, failed, or setup-required state while one local
-**Granite 4.1** request runs at a time, and `analysed · n findings` once a lap has
-an answer. That count is always for the comparison the row will open against —
-the session best, or nothing for the best lap itself — because the same lap read
-against two references gives two different answers. Opening a lap in
+**Granite 4.1** request runs at a time, and `ANALYSED` once a lap has an answer.
+It carries no count: a findings count belongs to a pair, and one lap read against
+four references and against nothing is five different answers. Hovering the
+status lists every comparison stored for that lap with its own count, the one the
+row opens into first. Opening a lap in
 **Analysis** (select it and choose **Analyze selected lap**, or double-click it)
 restores that exact result and exposes the one-time coach download when needed;
 **Review a corner** reuses its validated
 advice only when the cited corner and distance span exactly match the measured
 stretch. Each card can zoom the plotted telemetry to its evidence, and picks the
 same stretch out on the track map beside the strips when the lap was recorded
-with world position. A successful result is retained in the session's coaching
-audit directory and is revalidated before reuse. Sessions can be deleted from Garage after explicit confirmation;
+with world position. The sector ribbon's S1–S3 are equal thirds of the lap
+distance that Apex derives, not the circuit's timing sectors: TORCS records
+none. A successful result is retained in the session's coaching audit directory
+and is revalidated before reuse. **File > Export Analysis Report** writes a
+self-contained HTML document with the same sector and corner tables, technique
+review included, so a reader without Apex sees what a reader with it would.
+
+The model server is a child process holding 2.1 GB. It stops when the window
+closes, and on Windows it is also tied to Apex's own lifetime, so a force-quit
+or a crash cannot leave it running and holding the port.
+
+First launch materialises a sample session: five recorded laps of Aalborg driven
+by study participant `0822`, split from the handover they sent. Real laps
+deliberately — the sample is the first thing anybody opens, and a synthetic
+stand-in taught every reader a track, a spread of lap times and a set of mistakes
+that never happened. Sessions can be deleted from Garage after explicit confirmation;
 only Apex-managed copies and their audits are removed.
 
 The deterministic Granite Bridge capture defaults to three laps through

@@ -1,6 +1,7 @@
 """Shared LLM plumbing: compact prompt, strict schema, extraction and parsing."""
 
 import json
+from collections import Counter
 from copy import deepcopy
 
 import pytest
@@ -14,6 +15,7 @@ from f1coach_core.llm import (
     extract_json_object,
     report_from_llm_text,
 )
+from sample_laps import slow_and_best, slow_lap
 
 WRAPPED_JSON = json.dumps({"findings": []})
 EVIDENCE_KEYS = ("metric", "corner", "value", "ref", "unit", "span_m")
@@ -21,8 +23,7 @@ EVIDENCE_KEYS = ("metric", "corner", "value", "ref", "unit", "span_m")
 
 @pytest.fixture(scope="module")
 def summary():
-    session = load_sample_session()
-    return build_evidence_summary(session.laps[2], session.best_lap)
+    return build_evidence_summary(*slow_and_best())
 
 
 def available_citation(summary: dict, focus: str = "braking") -> dict:
@@ -63,7 +64,7 @@ def test_prompt_carries_only_compact_coachable_evidence_and_the_contract(summary
 
     prompt = build_coach_prompt(packet)
 
-    assert "lap_03" in prompt and "lap_02" in prompt
+    assert summary["lap"]["name"] in prompt and summary["reference"]["name"] in prompt
     assert '"findings"' in prompt and "span_m" in prompt and '"focus"' in prompt
     assert "Never invent" in prompt
     assert "at most once across the entire response" in prompt
@@ -106,8 +107,7 @@ def test_response_format_is_strict_and_allows_only_available_citations(summary):
 
 
 def test_single_lap_prompt_and_schema_use_review_guides_not_a_reference():
-    session = load_sample_session()
-    solo = build_evidence_summary(session.laps[2])
+    solo = build_evidence_summary(slow_lap())
 
     prompt = build_coach_prompt(solo)
     response_format = build_coach_response_format(solo)
@@ -189,24 +189,30 @@ def test_report_from_llm_text_replaces_model_prose_with_grounded_guidance(summar
 
 
 def test_single_lap_repeated_claims_merge_into_one_finding():
-    session = load_sample_session()
-    solo = build_evidence_summary(session.laps[1])
-    coast = [
+    solo = build_evidence_summary(slow_lap())
+    catalog = list(opportunity_catalog(solo).values())
+    # Whichever deterministic check fired most on this lap. The merge under test
+    # is about a model repeating itself, not about which metric it repeated, and
+    # pinning one metric is how this test started depending on a generator that
+    # obligingly produced four of everything.
+    metric = Counter(item["metric"] for item in catalog).most_common(1)[0][0]
+    repeated = [
         {key: item[key] for key in EVIDENCE_KEYS}
-        for item in opportunity_catalog(solo).values()
-        if item["metric"] == "coast_distance"
+        for item in catalog
+        if item["metric"] == metric
     ]
-    assert len(coast) >= 4
+    focus = next(item["focus"] for item in catalog if item["metric"] == metric)
+    assert len(repeated) >= 4
 
     findings = []
     for confidence, evidence in (
-        (0.95, coast[:2]),
-        (0.90, coast[:2]),
-        (0.85, coast[2:4]),
+        (0.95, repeated[:2]),
+        (0.90, repeated[:2]),
+        (0.85, repeated[2:4]),
     ):
         findings.append(
             {
-                "focus": "throttle",
+                "focus": focus,
                 "issue": "Review the throttle transition.",
                 "cause": "The cited coast distance crossed the review guide.",
                 "action": "Use a smoother pedal transition.",
@@ -231,13 +237,14 @@ def test_single_lap_repeated_claims_merge_into_one_finding():
 
 def test_duplicate_mislabelled_comparison_finding_is_grounded_and_merged():
     session = load_sample_session()
-    comparison = build_evidence_summary(session.laps[0], session.laps[1])
+    # The pair whose braking actually differs in three separate corners.
+    comparison = build_evidence_summary(session.laps[0], session.laps[4])
     brake_points = {
         corner: {key: item[key] for key in EVIDENCE_KEYS}
         for (corner, metric), item in opportunity_catalog(comparison).items()
         if metric == "brake_point"
     }
-    assert {"T1", "T3", "T5"} <= brake_points.keys()
+    assert {"T1", "T5", "T7"} <= brake_points.keys()
 
     def finding(focus, evidence, confidence):
         return {
@@ -253,7 +260,7 @@ def test_duplicate_mislabelled_comparison_finding_is_grounded_and_merged():
         "findings": [
             finding("braking", [brake_points["T5"]], 0.9),
             finding("throttle", [brake_points["T1"], brake_points["T1"]], 0.8),
-            finding("braking", [brake_points["T3"]], 0.7),
+            finding("braking", [brake_points["T7"]], 0.7),
         ]
     }
 
@@ -265,12 +272,12 @@ def test_duplicate_mislabelled_comparison_finding_is_grounded_and_merged():
 
     assert len(report.findings) == 1
     assert report.findings[0].focus == "braking"
-    assert [item.corner for item in report.findings[0].evidence] == ["T5", "T1", "T3"]
+    assert [item.corner for item in report.findings[0].evidence] == ["T5", "T1", "T7"]
 
 
 def test_fabricated_sibling_does_not_suppress_grounded_findings():
     session = load_sample_session()
-    comparison = build_evidence_summary(session.laps[0], session.laps[1])
+    comparison = build_evidence_summary(session.laps[0], session.laps[4])
     brake_points = [
         {key: item[key] for key in EVIDENCE_KEYS}
         for (_corner, metric), item in opportunity_catalog(comparison).items()

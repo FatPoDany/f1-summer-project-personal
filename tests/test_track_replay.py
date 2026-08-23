@@ -8,7 +8,8 @@ import pytest
 
 from apex.widgets.replay_window import ReplayWindow
 from apex.widgets.track_replay import TrackReplay
-from f1coach_core import DebriefPoint, Lap, load_sample_session
+from f1coach_core import DebriefPoint, Lap
+from sample_laps import lap_without_position
 
 
 def _positioned_lap() -> Lap:
@@ -100,8 +101,8 @@ def test_playback_stops_at_the_end_rather_than_looping(qtbot):
 
 
 def test_a_lap_without_position_says_so_instead_of_drawing_nothing(qtbot):
-    """Sample laps predate the position channel; the readout must still work."""
-    lap = load_sample_session().best_lap
+    """A lap from a source without the position channel: readout still works."""
+    lap = lap_without_position()
     assert not lap.has_track_map
     view = TrackReplay()
     qtbot.addWidget(view)

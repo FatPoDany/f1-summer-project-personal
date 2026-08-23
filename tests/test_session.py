@@ -59,10 +59,15 @@ def test_best_sector_times_take_the_min_per_sector(tmp_path):
     assert best[2] == pytest.approx(1.0)
 
 
-def test_sample_session_is_three_clean_laps():
+def test_sample_session_is_five_clean_recorded_laps():
     session = load_sample_session()
-    assert [lap.source.stem for lap in session.laps] == ["lap_01", "lap_02", "lap_03"]
+    assert [lap.source.stem for lap in session.laps] == [
+        f"0822-coached-lap0{n}" for n in range(1, 6)
+    ]
     assert session.problems == ()
     best = session.best_lap
-    assert best is not None and best.source.stem == "lap_02"
+    assert best is not None and best.source.stem == "0822-coached-lap03"
     assert set(session.best_sector_times) == {1, 2, 3}
+    # Recorded, not generated: every lap says who drove it and under what.
+    assert {lap.identity.driver for lap in session.laps} == {"0822"}
+    assert {lap.identity.phase for lap in session.laps} == {"coached"}

@@ -16,6 +16,7 @@ class FakeProcess:
         self.exits_with = exits_with
         self.terminated = False
         self.killed = False
+        self.pid = 4242  # every real Popen has one, and the server ties it to ours
 
     def poll(self):
         return self.exits_with
@@ -146,6 +147,32 @@ def test_stopping_terminates_the_process_we_started(installed):
     server.start()
     server.stop()
     assert process.terminated
+
+
+def test_a_server_we_start_is_tied_to_our_own_lifetime(installed):
+    """stop() covers the orderly exit. Nothing else does.
+
+    A force-quit or a crash never reaches it, and the orphan then keeps 2.1 GB
+    resident and holds the port. The next Apex finds something answering there,
+    adopts it, and by design will not kill a server it did not start -- so the
+    leak becomes permanent and nobody is told.
+    """
+    process = FakeProcess()
+    tied = []
+    # First probe says nothing is listening, so this one is ours to own; the
+    # second says it came up. Answering True to both would take the adopt path,
+    # where there is no process of ours to tie to anything.
+    probes = iter([False, True])
+    server = gs.GraniteServer(
+        popen=lambda *_a, **_k: process,
+        probe=lambda _p: next(probes),
+        tie_lifetime=lambda pid: tied.append(pid) or True,
+    )
+
+    server.start()
+
+    assert tied == [process.pid]
+    assert server.owns_process
 
 
 def test_the_command_matches_the_shell_script_the_researchers_use(installed):

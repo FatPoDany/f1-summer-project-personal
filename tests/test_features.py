@@ -1,8 +1,14 @@
 """Features stage: corner detection + evidence summary on the sample session.
 
-The sample track has 8 named corners but only 5 produce speed-trace local
-minima (T5 and T8 are shoulders straight into slower corners), so detection
-finding 5 is correct, not a miss.
+The sample is five recorded laps of Aalborg (~2.59 km) by participant 0822.
+Detection finds ten speed-trace minima on the reference lap; the track is tight
+enough that the corner zones between them cover almost the whole lap, which is
+why the per-zone losses here account for nearly all of the lap's deficit.
+
+The expectations below describe a drive rather than a generator. A real lap is
+not uniformly worse than a quicker one -- 0822 is faster than their own best in
+two zones and brakes later than it in most -- so nothing here asserts the tidy
+monotonic story the synthetic sample used to guarantee.
 """
 
 from pathlib import Path
@@ -14,8 +20,22 @@ import pytest
 from f1coach_core import Lap, build_evidence_summary, detect_corners, features, load_sample_session
 from f1coach_core.coach import opportunity_catalog
 
-# expected apex windows on the 4.29 km sample track (segment maths ± margin)
-APEX_WINDOWS = [(690, 880), (1060, 1440), (1840, 2070), (2740, 2930), (3630, 3860)]
+# measured apex windows on the recorded lap (± 40 m)
+APEX_WINDOWS = [
+    (170, 250),
+    (350, 430),
+    (510, 590),
+    (775, 855),
+    (960, 1040),
+    (1330, 1410),
+    (1575, 1655),
+    (1790, 1870),
+    (2185, 2265),
+    (2340, 2420),
+]
+
+# 0822-coached-lap01: 40.4 s off their best, and the lap with something to say.
+SLOW_LAP = 0
 
 
 @pytest.fixture(scope="module")
@@ -23,39 +43,39 @@ def session():
     return load_sample_session()
 
 
-def test_detects_the_five_true_minima(session):
+def test_detects_every_speed_trace_minimum_in_lap_order(session):
     corners = detect_corners(session.best_lap)
-    assert [c["corner"] for c in corners] == ["T1", "T2", "T3", "T4", "T5"]
+    assert [c["corner"] for c in corners] == [f"T{n}" for n in range(1, 11)]
     for corner, (lo, hi) in zip(corners, APEX_WINDOWS, strict=True):
         assert lo < corner["apex_m"] < hi, corner
         d0, d1 = corner["span_m"]
         assert d0 < corner["apex_m"] < d1
+    # zones are contiguous and ordered: one lap, walked once. Pairing a list
+    # with its own tail is deliberately one short, so strict would reject it.
+    spans = [c["span_m"] for c in corners]
+    assert all(a[1] <= b[0] for a, b in zip(spans, spans[1:], strict=False))
 
 
-def test_summary_of_the_ragged_lap(session):
+def test_summary_of_the_slowest_lap_against_the_drivers_best(session):
     best = session.best_lap
-    ragged = session.laps[2]  # lap_03
-    summary = build_evidence_summary(ragged, best)
+    slow = session.laps[SLOW_LAP]
+    summary = build_evidence_summary(slow, best)
 
-    assert summary["lap"]["name"] == "lap_03"
-    assert summary["reference"]["name"] == "lap_02"
-    assert summary["total_delta_s"] == pytest.approx(5.32, abs=0.02)
+    assert summary["lap"]["name"] == "0822-coached-lap01"
+    assert summary["reference"]["name"] == "0822-coached-lap03"
+    assert summary["total_delta_s"] == pytest.approx(slow.lap_time - best.lap_time, abs=0.02)
 
     corners = summary["corners"]
-    assert len(corners) == 5
-    brake_pairs = []
-    for corner in corners:
-        # lap_03 is slower everywhere: loses time and apex speed in every zone
-        assert corner["time_lost_s"] > 0
-        assert corner["min_speed_kmh"] < corner["ref_min_speed_kmh"]
-        if corner["brake_point_m"] is not None and corner["ref_brake_point_m"] is not None:
-            brake_pairs.append((corner["brake_point_m"], corner["ref_brake_point_m"]))
-    # softer braking limit + slower targets: never later than the reference on
-    # the 5 m grid, and clearly earlier somewhere (T1 carries a big override)
-    assert brake_pairs and all(mine <= ref for mine, ref in brake_pairs)
-    assert any(mine < ref for mine, ref in brake_pairs)
+    assert len(corners) == 10
+    # Where the lap went is one clear place, not a uniform deficit: the worst
+    # zone alone is worth more than a quarter of the whole lap's loss.
+    losses = [c["time_lost_s"] for c in corners]
+    assert max(losses) > summary["total_delta_s"] / 4
+    # A real driver is quicker than their own best somewhere. Asserting they
+    # never are is how a generator behaves, not how driving does.
+    assert any(loss < 0 for loss in losses)
     # zone losses can't exceed the whole lap's loss
-    assert sum(c["time_lost_s"] for c in corners) < summary["total_delta_s"] + 0.1
+    assert sum(losses) < summary["total_delta_s"] + 0.1
 
 
 def test_summary_against_itself_is_flat(session):
@@ -68,7 +88,7 @@ def test_summary_against_itself_is_flat(session):
 
 
 def test_single_lap_summary_contains_deterministic_technique_evidence(session):
-    summary = build_evidence_summary(session.laps[2])
+    summary = build_evidence_summary(session.laps[SLOW_LAP])
 
     assert summary["analysis_mode"] == "single_lap"
     assert summary["reference"] is None
@@ -97,7 +117,7 @@ def test_comparison_rows_flag_technique_without_overwriting_the_reference():
     from f1coach_core.features import SINGLE_LAP_GUIDES
 
     session = load_sample_session()
-    lap, best = session.laps[2], session.best_lap
+    lap, best = session.laps[SLOW_LAP], session.best_lap
 
     compared = corner_table(lap, best)
     assert compared
@@ -120,7 +140,7 @@ def test_corner_table_extends_the_summary_zones_with_exits():
     session = load_sample_session()
     from f1coach_core import corner_table
 
-    lap, best = session.laps[2], session.best_lap
+    lap, best = session.laps[SLOW_LAP], session.best_lap
     rows = corner_table(lap, best)
     summary = build_evidence_summary(lap, best)
 
@@ -130,7 +150,7 @@ def test_corner_table_extends_the_summary_zones_with_exits():
     for row in rows:
         assert row["exit_speed_kmh"] > 0 and row["ref_exit_speed_kmh"] > 0
         assert {"brake_point_m", "ref_brake_point_m", "min_speed_kmh"} <= set(row)
-    # the ragged lap loses time in corners overall
+    # the slower lap loses time in corners overall
     assert sum(r["delta_s"] for r in rows) > 0
 
 

@@ -26,6 +26,7 @@ from f1coach_core import (
 )
 from f1coach_core.coach import opportunity_catalog
 from f1coach_core.llm import report_from_llm_text
+from sample_laps import slow_and_best, slow_lap
 
 
 def test_slow_ai_work_cannot_consume_the_capture_thread_pool(qtbot):
@@ -44,8 +45,7 @@ def test_managed_cpu_coaching_allows_longer_than_the_observed_420_seconds():
 
 def test_automatic_task_rechecks_a_report_written_while_it_waited_in_the_pool(qtbot):
     """Garage and Analysis can queue the same context during the settle timer."""
-    session = load_sample_session()
-    lap, reference = session.laps[2], session.best_lap
+    lap, reference = slow_and_best()
     report, audit = _saved_granite_report(lap, reference)
 
     class MustNotRun:
@@ -87,7 +87,7 @@ def analysis(qtbot, monkeypatch):
     )
     window = MainWindow()
     qtbot.addWidget(window)
-    window.show_analysis(session.laps[2], session)
+    window.show_analysis(slow_lap(session), session)
     return window._analysis
 
 
@@ -156,6 +156,7 @@ def test_finding_card_displays_coloured_focus_chip(qtbot, focus, label, colour):
 
 def test_evidence_zoom_targets_the_span(qtbot, analysis):
     panel = analysis._panel
+    panel._settle.stop()  # this test asks for the run; don't race the automatic one
     with qtbot.waitSignal(panel.reportReady, timeout=5000):
         panel._run()
     d0, d1 = panel.report.findings[0].evidence[0].span
@@ -176,17 +177,19 @@ def test_export_report_roundtrip(qtbot, analysis, tmp_path):
     # Single-lap: this test is about the report, not about what it compares to.
     analysis._ref_combo.setCurrentIndex(analysis._ref_combo.findData(None))
     panel = analysis._panel
+    panel._settle.stop()  # this test asks for the run; don't race the automatic one
     with qtbot.waitSignal(panel.reportReady, timeout=5000):
         panel._run()
 
     out = analysis.export_report(tmp_path / "report.html")
     html = out.read_text(encoding="utf-8")
     assert panel.report.findings[0].issue in html
-    assert "lap_03" in html and "review guide" in html
+    assert analysis.lap.source.stem in html and "review guide" in html
 
 
 def test_every_run_writes_an_audit_record(qtbot, analysis):
     panel = analysis._panel
+    panel._settle.stop()  # this test asks for the run; don't race the automatic one
     with qtbot.waitSignal(panel.reportReady, timeout=5000):
         panel._run()
 
@@ -201,7 +204,7 @@ def test_every_run_writes_an_audit_record(qtbot, analysis):
     # The reference is whatever the analysis was actually run against, and it is
     # recorded: a coaching record that did not say what the lap was compared
     # with could not be reproduced from the file.
-    assert record["lap"] == "lap_03"
+    assert record["lap"] == analysis.lap.source.stem
     assert record["reference"] == analysis._ref_combo.currentData().source.stem
     assert record["prompt"] == build_coach_prompt(record["evidence_summary"])
     assert record["raw_response"].lstrip().startswith("{")  # the raw stream, verbatim
@@ -501,6 +504,7 @@ def test_a_run_that_finishes_for_a_lap_nobody_is_looking_at_is_still_kept(
 ):
     """The task writes its audit either way, so coming back restores it."""
     panel = analysis._panel
+    panel._settle.stop()  # this test asks for the run; don't race the automatic one
     with qtbot.waitSignal(panel.reportReady, timeout=5000):
         panel._run()
     saved = panel.audit_path
@@ -563,7 +567,10 @@ def test_a_result_is_shown_by_what_it_was_for_not_by_which_object_finished(
     panel._settle.stop()
 
     first = analysis._lap
-    other = next(lap for lap in session.laps if lap is not first)
+    # By file, not by identity: this session was loaded separately from the one
+    # the view holds, so every lap in it fails an `is` check -- including the one
+    # that is the same lap, whose context key would then collide with it.
+    other = next(lap for lap in session.laps if lap.source != first.source)
 
     panel.set_context(first, None)
     key = panel._context_key()
@@ -591,7 +598,10 @@ def test_a_result_for_a_lap_the_participant_left_is_kept_but_not_shown(qtbot, an
     panel._settle.stop()
 
     first = analysis._lap
-    other = next(lap for lap in session.laps if lap is not first)
+    # By file, not by identity: this session was loaded separately from the one
+    # the view holds, so every lap in it fails an `is` check -- including the one
+    # that is the same lap, whose context key would then collide with it.
+    other = next(lap for lap in session.laps if lap.source != first.source)
     panel.set_context(first, None)
     pending = _CoachTask(get_provider("mock"), first, None)
     panel._running[panel._context_key()] = pending

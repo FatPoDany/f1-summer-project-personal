@@ -37,7 +37,12 @@ from f1coach_core import (
     load_session,
 )
 from f1coach_core.lap import NO_IDENTITY
-from f1coach_core.participant import Background, save_background
+from f1coach_core.participant import (
+    Background,
+    background_summary,
+    load_background,
+    save_background,
+)
 from f1coach_core.workspace import RECORDING_POINTER, session_recording
 from racecoach.telemetry.handover import HandoverError, handovers_root, unpack
 
@@ -48,6 +53,37 @@ TABLE_HEADERS = ("Lap", "Driver", "Time", "Δ best", "Status")
 
 def _findings(count: int) -> str:
     return "1 finding" if count == 1 else f"{count} findings"
+
+
+def _analysed_against(analysed: list[tuple[str | None, int]], best, *, is_best: bool) -> str:
+    """Every comparison stored for one lap, newest answer per pair.
+
+    A findings count belongs to a pair, not to a lap, so the column cannot carry
+    one honestly: this lap read against four references and against nothing is
+    five different answers. The column says only that answers exist; this says
+    what they are.
+    """
+    if not analysed:
+        return ""
+    best_stem = best.source.stem if best is not None else None
+    # The pair this row opens into comes first, because it is the answer the
+    # reader is about to see; then the other references in name order, with the
+    # lap on its own last.
+    opens_against = None if is_best else best_stem
+    ordered = sorted(
+        analysed,
+        key=lambda item: (item[0] != opens_against, item[0] is None, item[0] or ""),
+    )
+    lines = ["Analysed against"]
+    for reference, count in ordered:
+        if reference is None:
+            label = "single lap"
+        elif reference == best_stem:
+            label = f"{reference} (session best)"
+        else:
+            label = reference
+        lines.append(f"  {label} — {_findings(count)}")
+    return "\n".join(lines)
 
 
 def _handover_identity(folder: Path) -> tuple[StudyIdentity, dict | None]:
@@ -154,6 +190,13 @@ class GarageView(QWidget):
             "Select a lap and choose Analyze selected lap; double-click also opens it"
         )
 
+        # Who these laps belong to. A handover carries the driver, the phase, the
+        # preset and the questionnaire; before this the app stored all four and
+        # showed none of them, so importing one looked like it had lost them.
+        self._participant = QLabel()
+        self._participant.setWordWrap(True)
+        self._participant.setAccessibleName("Participant and study background")
+
         self._footage_status = QLabel()
         self._footage_status.setWordWrap(True)
         self._footage_status.setAccessibleName("Race-window footage status")
@@ -167,6 +210,7 @@ class GarageView(QWidget):
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.addLayout(buttons)
+        right_layout.addWidget(self._participant)
         right_layout.addWidget(self._footage_status)
         right_layout.addWidget(self._table, stretch=1)
 
@@ -201,6 +245,7 @@ class GarageView(QWidget):
         else:
             self._session = None
             self._table.setRowCount(0)
+            self._participant.clear()
             self._footage_status.clear()
             self._update_open_state()
 
@@ -222,6 +267,7 @@ class GarageView(QWidget):
         if session is None:
             self._footage_status.clear()
             return
+        self._update_participant(session)
         self._update_footage_status(session)
         best = session.best_lap
         coached = latest_coaching_outcomes(session.path)
@@ -257,6 +303,29 @@ class GarageView(QWidget):
                 self._table.setItem(row, col, item)
         self._update_open_state()
 
+    def _update_participant(self, session: Session) -> None:
+        """Say whose laps these are, or say plainly that the file does not.
+
+        Read from the laps themselves rather than from the folder name, which
+        anybody can rename.
+        """
+        identities = {lap.identity for lap in session.laps if lap.identity}
+        if not identities:
+            self._participant.setText(
+                "No participant recorded — these laps were imported as loose CSVs, "
+                "which carry no driver, phase or background."
+            )
+            self._participant.setStyleSheet(f"color: {theme.TEXT_DIM};")
+            return
+        parts = []
+        for identity in sorted(identities, key=lambda one: (one.driver or "", one.phase or "")):
+            who = " · ".join(
+                value for value in (identity.driver, identity.phase, identity.setup) if value
+            )
+            parts.append(f"{who} — {background_summary(load_background(identity.driver or ''))}")
+        self._participant.setText("Driver " + "   |   ".join(parts))
+        self._participant.setStyleSheet(f"color: {theme.TEXT_DIM};")
+
     def _update_footage_status(self, session: Session) -> None:
         recording = session_recording(session.path)
         if recording is not None:
@@ -285,13 +354,14 @@ class GarageView(QWidget):
     ) -> tuple[str, str, str]:
         """Combine lap significance with explicit automatic-coaching progress."""
         progress = self._coaching_progress.get(lap.source.resolve(strict=False))
-        # Name the comparison the count came from. Lap Analysis opens every lap
-        # against the session best, and the best lap against nothing, so that is
-        # the pair whose answer this row is promising.
-        reference = None if is_best or best is None else best.source.stem
-        ai_status, ai_colour, detail = self._ai_status(
-            progress, coached.get((lap.source.stem, reference))
-        )
+        analysed = [
+            (reference, count)
+            for (name, reference), count in coached.items()
+            if name == lap.source.stem
+        ]
+        ai_status, ai_colour, detail = self._ai_status(progress, analysed)
+        if not detail:
+            detail = _analysed_against(analysed, best, is_best=is_best)
         if is_best:
             label = "SESSION BEST" + (f" · {ai_status}" if ai_status else "")
             return label, theme.PURPLE, detail
@@ -304,12 +374,13 @@ class GarageView(QWidget):
 
     @staticmethod
     def _ai_status(
-        progress: CoachingProgress | None, saved_findings: int | None
+        progress: CoachingProgress | None,
+        analysed: list[tuple[str | None, int]],
     ) -> tuple[str, str, str]:
         if progress is None:
-            if saved_findings is None:
+            if not analysed:
                 return "", "", ""
-            return f"ANALYSED · {_findings(saved_findings)}", theme.GREEN, ""
+            return "ANALYSED", theme.GREEN, ""
         labels = {
             CoachingStage.QUEUED: ("AI QUEUED", theme.YELLOW),
             CoachingStage.GENERATING: ("AI GENERATING…", theme.YELLOW),
@@ -318,8 +389,7 @@ class GarageView(QWidget):
             CoachingStage.UNAVAILABLE: ("AI UNAVAILABLE", theme.RED),
         }
         if progress.stage is CoachingStage.READY:
-            count = progress.findings or 0
-            return f"ANALYSED · {_findings(count)}", theme.GREEN, progress.message
+            return "ANALYSED", theme.GREEN, progress.message
         label, colour = labels[progress.stage]
         return label, colour, progress.message
 
@@ -450,12 +520,12 @@ class GarageView(QWidget):
         selected = None
         for path in paths:
             if path.suffix.lower() == ".zip":
-                selected = self._import_handover(path) or selected
+                selected = self.import_handover(path) or selected
             else:
                 self._import_one(path)
         self.refresh_sessions(select=selected)
 
-    def _import_handover(self, archive: Path) -> str | None:
+    def import_handover(self, archive: Path) -> str | None:
         """Import a participant's whole handover: their laps, and who they are.
 
         A loose CSV carries the driving and nothing else -- not who drove, not

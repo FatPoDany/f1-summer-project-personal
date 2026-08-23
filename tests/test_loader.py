@@ -16,15 +16,22 @@ def write(tmp_path, text, name="lap.csv"):
 
 def test_sample_lap_loads_and_is_plausible():
     lap = load_sample_lap()  # the sample session's best lap
-    assert lap.source.stem == "lap_02"
+    assert lap.source.stem == "0822-coached-lap03"
     assert lap.schema_version == 1
     assert not lap.dist_derived
-    assert list(lap.df.columns) == CANONICAL
+    # A real capture carries position and health channels too; the canonical
+    # ones must all be present and the extras must survive the loader.
+    assert CANONICAL == list(lap.df.columns)[: len(CANONICAL)]
+    assert {"x", "y"} <= set(lap.df.columns)
     assert lap.n_samples > 1000
     assert 60 < lap.lap_time < 120  # a lap, not a stint
-    assert 3000 < lap.track_length < 6000  # metres
-    assert 250 < lap.top_speed_kmh < 380
-    assert lap.df["dist"].is_monotonic_increasing
+    assert 2000 < lap.track_length < 3000  # metres — Aalborg is ~2.6 km
+    assert 150 < lap.top_speed_kmh < 250
+    # Not monotonic, and correctly so: the recorded distance channel jitters by
+    # centimetres at low speed. Asserting the shape of the lap rather than a
+    # cleanliness the simulator never promised.
+    assert lap.df["dist"].iloc[-1] > lap.df["dist"].iloc[0]
+    assert lap.df["dist"].diff().min() > -1.0
     assert set(lap.df["sector"].unique()) == {1, 2, 3}
 
 

@@ -138,6 +138,7 @@ class GraniteServer:
         probe: Callable[[int], bool] = is_responding,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
+        tie_lifetime: Callable[[int], bool] | None = None,
     ) -> None:
         self.port = port
         self.threads = threads if threads is not None else default_threads()
@@ -145,6 +146,9 @@ class GraniteServer:
         self._probe = probe
         self._sleep = sleep
         self._clock = clock
+        # Resolved here rather than as a default argument: _die_with_us is
+        # defined below the class, where the platform plumbing belongs.
+        self._tie_lifetime = tie_lifetime or _die_with_us
         self._process: subprocess.Popen | None = None
         self._adopted = False
 
@@ -201,6 +205,9 @@ class GraniteServer:
             )
         except OSError as exc:
             raise ServerError(f"Could not start the model server: {exc}") from exc
+        # Before the wait, not after: a startup that never answers still leaves
+        # a 2.1 GB process behind, and that one has to die with us too.
+        self._tie_lifetime(self._process.pid)
 
         deadline = self._clock() + timeout_s
         while self._clock() < deadline:
@@ -246,3 +253,101 @@ def _no_console_window() -> dict:
     if sys.platform != "win32":
         return {}
     return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+
+
+# Windows job-object plumbing, so a server we started cannot outlive us.
+_JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+_JOBOBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
+_PROCESS_SET_QUOTA = 0x0100
+_PROCESS_TERMINATE = 0x0001
+_job_handle: int | None = None
+
+
+def _kill_on_close_job() -> int | None:
+    """A job object whose closing kills everything still inside it.
+
+    One per process, kept open for as long as we run: the kill happens when the
+    last handle to the job closes, which for us is when our process ends --
+    however it ends.
+    """
+    global _job_handle
+    if _job_handle is not None:
+        return _job_handle
+    import ctypes
+    from ctypes import wintypes
+
+    class _IoCounters(ctypes.Structure):
+        _fields_ = [(name, ctypes.c_ulonglong) for name in (
+            "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+            "ReadTransferCount", "WriteTransferCount", "OtherTransferCount",
+        )]
+
+    class _BasicLimits(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_int64),
+            ("PerJobUserTimeLimit", ctypes.c_int64),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class _ExtendedLimits(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", _BasicLimits),
+            ("IoInfo", _IoCounters),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    job = kernel32.CreateJobObjectW(None, None)
+    if not job:
+        return None
+    limits = _ExtendedLimits()
+    limits.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    if not kernel32.SetInformationJobObject(
+        job,
+        _JOBOBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
+        ctypes.byref(limits),
+        ctypes.sizeof(limits),
+    ):
+        kernel32.CloseHandle(job)
+        return None
+    _job_handle = job
+    return job
+
+
+def _die_with_us(pid: int) -> bool:
+    """Tie a spawned server's lifetime to ours, however ours ends.
+
+    ``stop()`` covers the orderly path, but a force-quit, a crash, or a killed
+    process never reaches it. The orphan then keeps 2.1 GB resident and holds
+    the port -- and the next Apex finds something answering, adopts it, and by
+    design refuses to kill a server it did not start. The leak becomes
+    permanent, and the participant is told nothing.
+
+    Best effort by design: a machine that refuses the assignment is left exactly
+    as it was, because failing to start the coach over this would be worse than
+    the leak it prevents.
+    """
+    if sys.platform != "win32":
+        return False
+    import ctypes
+
+    job = _kill_on_close_job()
+    if job is None:
+        return False
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    handle = kernel32.OpenProcess(_PROCESS_SET_QUOTA | _PROCESS_TERMINATE, False, pid)
+    if not handle:
+        return False
+    try:
+        return bool(kernel32.AssignProcessToJobObject(job, handle))
+    finally:
+        kernel32.CloseHandle(handle)

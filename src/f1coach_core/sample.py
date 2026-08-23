@@ -1,8 +1,15 @@
 """The bundled sample session — demos must never depend on the network or credentials.
 
-Three synthetic laps of the same circuit (banker, best, ragged) so the Garage
-has deltas to show and coaching has a story to tell. Regenerate with
-scripts/make_sample_session.py.
+Five recorded laps of Aalborg driven by study participant 0822 in the coached
+phase, split from the handover they sent
+(``win_collect_data/0822-coached-20260822-102500.zip``) and carrying that
+identity in their own headers.
+
+Real laps, deliberately. The sample is the first thing anybody opens, and a
+synthetic stand-in taught every reader a track, a spread of lap times and a set
+of mistakes that never happened. These carry world position too, so the track
+map is populated on first launch rather than reporting that the lap cannot be
+drawn.
 """
 
 from importlib.resources import as_file, files

@@ -24,10 +24,32 @@ def isolated(tmp_path, monkeypatch):
 
 
 def statuses(view: GarageView) -> dict[str, str]:
+    """Lap file stem -> status text.
+
+    Keyed by the file rather than by the Lap column, which shows the race lap
+    number a real capture recorded for itself: several files in a session can
+    legitimately read "1", and the column was never a unique key.
+    """
     table = view._table
+    laps = view.session.laps if view.session is not None else ()
     return {
-        table.item(row, 0).text(): table.item(row, 4).text() for row in range(table.rowCount())
+        (laps[row].source.stem if row < len(laps) else table.item(row, 0).text()): (
+            table.item(row, 4).text()
+        )
+        for row in range(table.rowCount())
     }
+
+
+def row_of(view: GarageView, lap) -> int:
+    """The table row showing this lap, found by file rather than by cell text.
+
+    Matched on the source path: a refresh rebuilds the Lap objects, so identity
+    does not survive one, and the Lap column shows the race lap number rather
+    than anything unique.
+    """
+    return next(
+        row for row, one in enumerate(view.session.laps) if one.source == lap.source
+    )
 
 
 def test_status_column_speaks_the_mockup_vocabulary(qtbot):
@@ -58,27 +80,27 @@ def test_status_column_speaks_the_mockup_vocabulary(qtbot):
 
     got = statuses(view)
     assert got[best.source.stem] == "SESSION BEST"
-    assert got[coach_me.source.stem] == f"ANALYSED · {_findings(len(report.findings))}"
+    assert got[coach_me.source.stem] == "ANALYSED"
+    # The count lives in the tooltip, where it can name the comparison it is for.
+    tip = view._table.item(row_of(view, coach_me), 4).toolTip()
+    assert f"{best.source.stem} (session best) — {_findings(len(report.findings))}" in tip
     assert got[fresh.source.stem] == "NEW — just captured"
 
     # opening the fresh lap consumes its NEW tag
-    row = next(
-        r for r in range(view._table.rowCount())
-        if view._table.item(r, 0).text() == fresh.source.stem
-    )
+    row = row_of(view, fresh)
     opened = []
     view.lapOpened.connect(lambda lap, session: opened.append(lap))
     view._open_row(row)
     assert opened and statuses(view)[fresh.source.stem] == ""
 
 
-def test_status_counts_the_comparison_the_lap_will_open_against(qtbot):
-    """The count has to be the one Lap Analysis is about to show.
+def test_status_lists_every_comparison_rather_than_counting_one(qtbot):
+    """A findings count belongs to a pair, so the column cannot carry one.
 
-    Every non-best lap opens against the session best, so that is the pair the
-    row is promising. Keying the count on the lap alone published whichever
-    comparison happened to run last, which the participant could not reconcile
-    with what they then saw.
+    This lap has been read against the session best and against another lap, and
+    the two gave different answers. Publishing either number beside the lap made
+    the Garage promise something Lap Analysis did not then show; the column now
+    says only that answers exist, and names them on hover.
     """
     ensure_sample_session()
     view = GarageView()
@@ -98,7 +120,6 @@ def test_status_counts_the_comparison_the_lap_will_open_against(qtbot):
         ),
         encoding="utf-8",
     )
-    # Newer, but about a comparison nobody is looking at from this table.
     (coaching / "20260102-000000-mock.json").write_text(
         json.dumps(
             {"ok": True, "lap": lap.source.stem, "reference": other.source.stem,
@@ -106,10 +127,22 @@ def test_status_counts_the_comparison_the_lap_will_open_against(qtbot):
         ),
         encoding="utf-8",
     )
+    # …and the lap on its own, which is a third answer again.
+    (coaching / "20260103-000000-mock.json").write_text(
+        json.dumps({"ok": True, "lap": lap.source.stem, "report": {"findings": [1]}}),
+        encoding="utf-8",
+    )
 
     view.refresh_sessions()
 
-    assert statuses(view)[lap.source.stem] == "ANALYSED · 2 findings"
+    assert statuses(view)[lap.source.stem] == "ANALYSED"
+    tip = view._table.item(row_of(view, lap), 4).toolTip()
+    assert tip.splitlines() == [
+        "Analysed against",
+        f"  {best.source.stem} (session best) — 2 findings",  # what it opens into
+        f"  {other.source.stem} — 4 findings",
+        "  single lap — 1 finding",
+    ]
 
 
 def test_loading_a_session_requests_automatic_coaching(qtbot):
@@ -190,17 +223,13 @@ def test_status_column_tracks_live_ai_work_and_keeps_session_best(qtbot):
     view.apply_coaching_progress(
         CoachingProgress(best.source, CoachingStage.READY, findings=2)
     )
-    assert statuses(view)[best.source.stem] == "SESSION BEST · ANALYSED · 2 findings"
+    assert statuses(view)[best.source.stem] == "SESSION BEST · ANALYSED"
 
     view.apply_coaching_progress(
         CoachingProgress(other.source, CoachingStage.FAILED, message="model timed out")
     )
     assert statuses(view)[other.source.stem] == "AI FAILED"
-    row = next(
-        row
-        for row in range(view._table.rowCount())
-        if view._table.item(row, 0).text() == other.source.stem
-    )
+    row = row_of(view, other)
     assert "model timed out" in view._table.item(row, 4).toolTip()
 
 
@@ -315,6 +344,47 @@ def test_importing_a_handover_keeps_who_drove_it(qtbot, tmp_path, monkeypatch):
 
     restored = load_background("P007")
     assert restored is not None and restored.racing_games == "weekly"
+
+    # …and all of it is on screen, not merely on disk: storing the questionnaire
+    # where nobody can see it is the same as losing it.
+    shown = view._participant.text()
+    assert "P007" in shown and "baseline" in shown and "apex-study-v1" in shown
+    assert "racing games weekly" in shown
+
+
+def test_the_participant_line_names_who_drove_these_laps(qtbot):
+    """The bundled sample is a real recorded session, so it names its driver."""
+    ensure_sample_session()
+    view = GarageView()
+    qtbot.addWidget(view)
+    view.refresh_sessions()
+
+    shown = view._participant.text()
+    assert "0822" in shown and "coached" in shown and "apex-study-v1" in shown
+    # Nobody has answered a questionnaire for them on this machine.
+    assert "background not recorded" in shown
+
+
+def test_a_session_of_loose_csvs_says_it_carries_no_participant(qtbot, tmp_path):
+    """The dash in the Driver column is a fact about the file, not a fault.
+
+    Saying so where the reader is looking is the difference between "this import
+    lost something" and "a bare CSV never had it".
+    """
+    from f1coach_core import import_telemetry
+    from test_torcs import make_human_run
+
+    run = make_human_run(tmp_path / "human-1.csv", laps=2)
+    import_telemetry(run, "anonymous-run")  # no identity: a loose file has none
+    view = GarageView()
+    qtbot.addWidget(view)
+    view.refresh_sessions(select="anonymous-run")
+
+    assert "No participant recorded" in view._participant.text()
+    drivers = {
+        view._table.item(row, 1).text() for row in range(view._table.rowCount())
+    }
+    assert drivers == {"—"}
 
 
 def test_a_damaged_handover_is_refused_rather_than_half_imported(qtbot, tmp_path, monkeypatch):

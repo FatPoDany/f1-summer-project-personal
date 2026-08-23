@@ -4,8 +4,11 @@ import pytest
 
 from f1coach_core.participant import (
     DECLINED,
+    DRIVING_BANDS,
+    RACING_GAME_BANDS,
     Background,
     background_columns,
+    background_summary,
     load_background,
     save_background,
 )
@@ -70,3 +73,24 @@ def test_an_unreadable_file_reads_as_never_asked(tmp_path):
     path.write_text("this is not json", encoding="utf-8")
 
     assert load_background("A001") is None
+
+
+def test_background_summary_separates_never_asked_from_asked_and_declined():
+    """Two different facts about the study, and only one of them is fixable."""
+    assert background_summary(None) == "background not recorded"
+    blank = Background(participant_id="P001")
+    assert background_summary(blank) == "background questionnaire returned no answers"
+
+
+def test_background_summary_reads_as_a_sentence():
+    background = Background(
+        participant_id="P001",
+        racing_games=RACING_GAME_BANDS[2],
+        driving=DRIVING_BANDS[1],
+    )
+
+    summary = background_summary(background)
+
+    assert f"racing games {RACING_GAME_BANDS[2]}" in summary
+    assert f"driving {DRIVING_BANDS[1]}" in summary
+    assert "sim racing" not in summary  # unanswered, so not asserted either way
