@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
-    QPushButton,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -29,6 +28,7 @@ from f1coach_core import (
     DebriefPoint,
     Lap,
     Session,
+    corner_review_points,
     corner_table,
     debrief_summary,
     lap_debrief,
@@ -136,8 +136,12 @@ class AnalysisView(QWidget):
         self._corners.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._corners.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._corners.setMaximumHeight(190)
-        self._corners.setToolTip("Click a corner to zoom the strips onto its zone")
+        self._corners.setToolTip(
+            "Click a corner to zoom the strips and track onto it; "
+            "double-click to review it with the race footage"
+        )
         self._corners.cellClicked.connect(self._zoom_corner_row)
+        self._corners.cellDoubleClicked.connect(self._review_corner)
         self._corners.hide()
 
         # A participant reads this, not the corner table: the few stretches that
@@ -154,21 +158,15 @@ class AnalysisView(QWidget):
         self._debrief.itemClicked.connect(self._zoom_debrief_item)
         self._debrief.itemDoubleClicked.connect(self._replay_debrief_item)
         self._debrief.hide()
-        # Beside the summary it acts on rather than as a strip under the charts:
-        # a control belongs next to the thing it opens, and a double-click on a
-        # list row is not a discoverable way to reach the main thing a
-        # participant is here for.
-        self._replay_button = QPushButton("Review a corner…")
-        self._replay_button.setToolTip(
-            "Open the review window: your line against your best lap, with the "
-            "coach's note for that stretch"
-        )
-        self._replay_button.clicked.connect(self._replay_selected)
-        self._replay_button.hide()
         debrief_header = QHBoxLayout()
         debrief_header.addWidget(self._debrief_heading, stretch=1)
-        debrief_header.addWidget(self._replay_button)
         self._debrief_points: list[DebriefPoint] = []
+        # Every corner, in lap order: the review window's own index space. The
+        # debrief lists only the stretches that cost time, which is the wrong
+        # set for a table where a participant picks a corner by name -- a corner
+        # they were quick through still has footage of them being quick through
+        # it, and they still want to see it.
+        self._review_points: list[DebriefPoint] = []
         # Prose the coach produced, by row, so a replay can show what was said
         # about the stretch it is playing.
         self._narration: dict[int, str] = {}
@@ -315,9 +313,6 @@ class AnalysisView(QWidget):
         if self._lap is None or reference is None or reference is self._lap:
             self._debrief_heading.hide()
             self._debrief.hide()
-            # Without this it keeps the previous lap's state and sits there
-            # doing nothing when pressed.
-            self._replay_button.hide()
             return
         try:
             points = lap_debrief(self._lap, reference)
@@ -335,7 +330,6 @@ class AnalysisView(QWidget):
                 item.setToolTip(point.detail)
             self._debrief.addItem(item)
         self._debrief.setVisible(bool(points))
-        self._replay_button.setVisible(bool(points))
         self._panel.set_debrief(self._debrief_heading.text(), points)
 
     def _apply_narration(self, result: object) -> None:
@@ -349,11 +343,17 @@ class AnalysisView(QWidget):
         if len(narrated) != len(self._debrief_points):
             return
         for row, item in enumerate(narrated):
-            self._advice[row] = item
+            # The coach narrates the debrief stretches; the review window is
+            # indexed by corner. Same corners, different order and length, so
+            # the note is carried across by name rather than by position.
+            index = self._review_index(self._debrief_points[row].corner)
+            if index is not None:
+                self._advice[index] = item
             text = getattr(item, "full_text", "") or item.narration
             if not text:
                 continue
-            self._narration[row] = text
+            if index is not None:
+                self._narration[index] = text
             entry = self._debrief.item(row)
             if entry is not None:
                 entry.setToolTip(text)
@@ -376,7 +376,7 @@ class AnalysisView(QWidget):
             if entry is not None:
                 entry.setToolTip(point.detail)
         findings = getattr(report, "findings", ())
-        for row, point in enumerate(self._debrief_points):
+        for index, point in enumerate(self._review_points):
             finding = next(
                 (
                     item
@@ -399,9 +399,17 @@ class AnalysisView(QWidget):
                 narration=observation,
                 advice=finding.action,
             )
-            self._advice[row] = narrated
-            self._narration[row] = narrated.full_text
-            entry = self._debrief.item(row)
+            self._advice[index] = narrated
+            self._narration[index] = narrated.full_text
+            debrief_row = next(
+                (
+                    row
+                    for row, stretch in enumerate(self._debrief_points)
+                    if stretch.corner == point.corner
+                ),
+                None,
+            )
+            entry = None if debrief_row is None else self._debrief.item(debrief_row)
             if entry is not None:
                 entry.setToolTip(narrated.full_text)
         self._advice_complete = True
@@ -430,30 +438,37 @@ class AnalysisView(QWidget):
         directory = self._session_dir()
         return (directory or Path.cwd()) / "clips"
 
-    def _replay_selected(self) -> None:
-        """Open the replay for whichever stretch is highlighted, or the worst one."""
-        if not self._debrief_points:
-            return
-        row = self._debrief.currentRow()
-        if row < 0:
-            row = 0  # ranked worst-first, so this is the one that cost most
-            self._debrief.setCurrentRow(0)
-        item = self._debrief.item(row)
-        if item is not None:
-            self._replay_debrief_item(item)
+    def _review_index(self, corner: str) -> int | None:
+        """Where a named corner sits in the review window's list."""
+        return next(
+            (i for i, point in enumerate(self._review_points) if point.corner == corner),
+            None,
+        )
+
+    def _review_corner(self, row: int, _col: int = 0) -> None:
+        """Double-clicking a corner row reviews that corner."""
+        self._open_review(row)
 
     def _replay_debrief_item(self, item: QListWidgetItem) -> None:
-        """Play the stretch back on the track, in its own window.
+        """A debrief stretch names a corner, so it opens that corner's review."""
+        row = self._debrief.row(item)
+        if not 0 <= row < len(self._debrief_points):
+            return
+        index = self._review_index(self._debrief_points[row].corner)
+        if index is not None:
+            self._open_review(index)
+
+    def _open_review(self, index: int) -> None:
+        """Play one corner back on the track and in the footage, in its own window.
 
         A separate window rather than another panel: the analysis screen is
         already dense, and a participant watching a replay is not reading traces
         at the same time.
         """
-        row = self._debrief.row(item)
-        if self._lap is None or not 0 <= row < len(self._debrief_points):
+        if self._lap is None or not 0 <= index < len(self._review_points):
             return
-        point = self._debrief_points[row]
-        # Keep the traces showing the same stretch that is being replayed.
+        point = self._review_points[index]
+        # Keep the traces and the track showing the corner being reviewed.
         self._show_evidence(*point.span_m)
         if self._replay_window is None:
             self._replay_window = ReplayWindow(self)
@@ -461,10 +476,10 @@ class AnalysisView(QWidget):
             self._lap,
             point,
             reference=self._reference,
-            note=self._narration.get(row, ""),
-            # The whole lap's stretches travel with it, so the review window can
-            # move between corners without sending the participant back here.
-            points=self._debrief_points,
+            note=self._narration.get(index, ""),
+            # Every corner travels with it, so the review window can move
+            # between them without sending the participant back here.
+            points=self._review_points,
             notes=self._narration,
             advice=self._advice,
             advice_complete=self._advice_complete,
@@ -485,8 +500,12 @@ class AnalysisView(QWidget):
                 if reference is not None
                 else single_lap_corner_table(self._lap)
             )
+            # Built here, from the same call, so a row and its reviewable
+            # stretch cannot drift apart: both walk the corners in lap order.
+            self._review_points = corner_review_points(self._lap, reference)
         except ValueError:  # laps too short to share a distance grid
             rows = []
+            self._review_points = []
         if not rows:
             self._corners.hide()
             return

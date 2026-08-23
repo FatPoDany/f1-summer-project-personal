@@ -5,6 +5,7 @@ Set APEX_WORKSPACE to relocate it (tests do; so can users).
 
 import os
 import shutil
+import sys
 from importlib.resources import as_file, files
 from pathlib import Path
 
@@ -95,10 +96,15 @@ def import_telemetry(
         import_lap(src, session_name)
         return f"Imported {src.name}"
 
-    _carry_recording_pointer(src, session_name, recording)
     laps = split_torcs_run(src)
     complete = [lap for lap in laps if lap.complete]
     dest_dir = create_session(session_name)
+    # After the session exists, not before. The pointer is written inside that
+    # directory, so on the import that creates it the write raised
+    # FileNotFoundError -- swallowed by the OSError guard below, which meant
+    # every session lost its footage on the one import that mattered and said
+    # nothing about it.
+    _carry_recording_pointer(src, session_name, recording)
     # ``Path.write_text`` translates newlines on Windows, while the in-memory
     # canonical form always uses LF.  Comparing those raw byte strings made the
     # same TORCS run look new on every Windows import.  Normalize older CRLF
@@ -162,11 +168,23 @@ def _carry_recording_pointer(
             return
     if not isinstance(recording, dict) or not recording.get("path"):
         return
+    destination = sessions_root() / session_name
+    if not destination.is_dir():
+        # The caller has to create the session first. Silence here is what hid
+        # a missing pointer for every first import, so say it once, loudly
+        # enough to find, rather than losing the footage again.
+        print(
+            f"apex: no session directory at {destination}; "
+            "footage for it cannot be linked",
+            file=sys.stderr,
+        )
+        return
     try:
-        (sessions_root() / session_name / RECORDING_POINTER).write_text(
+        (destination / RECORDING_POINTER).write_text(
             json.dumps(recording, indent=2), encoding="utf-8"
         )
-    except OSError:
+    except OSError as exc:
+        print(f"apex: couldn't record where the footage lives: {exc}", file=sys.stderr)
         return
 
 

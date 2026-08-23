@@ -47,6 +47,43 @@ def test_a_stretch_is_located_by_wall_clock_not_by_assuming_real_time():
     assert window.seconds == pytest.approx(8.0, abs=0.5)
 
 
+def test_every_corner_of_a_recorded_lap_can_be_located_in_the_footage():
+    """Each corner in the table has to open its own clip, not most of them.
+
+    The review used to be driven by the debrief, which keeps only the stretches
+    that cost time. A participant reading the corner table picks a corner by
+    name and expects footage of it, whether or not it was one of their worst.
+    """
+    from f1coach_core import corner_review_points, load_sample_session
+
+    session = load_sample_session()
+    best = session.best_lap
+    lap = min(session.laps, key=lambda one: -one.lap_time)
+    assert footage.has_wall_clock(lap)
+
+    points = corner_review_points(lap, best)
+    assert len(points) >= 5  # the recorded sample detects ten
+
+    located = footage.windows_for(lap, points)
+
+    assert set(located) == set(range(len(points)))
+    for index, window in located.items():
+        assert window.seconds > 0
+        start, end = points[index].span_m
+        assert end > start
+
+
+def test_a_single_lap_review_still_locates_its_corners():
+    """No reference means no time lost, and no bearing at all on the footage."""
+    from f1coach_core import corner_review_points, load_sample_session
+
+    lap = load_sample_session().best_lap
+    points = corner_review_points(lap)
+
+    assert points and all(point.time_lost_s is None for point in points)
+    assert set(footage.windows_for(lap, points)) == set(range(len(points)))
+
+
 def test_a_lap_without_the_clock_yields_no_footage_rather_than_a_guess():
     """A clip that looks right and shows the wrong corner teaches the wrong thing."""
     lap = make_lap(wall_clock=False)

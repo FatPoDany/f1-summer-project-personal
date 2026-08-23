@@ -32,6 +32,30 @@ from f1coach_core.footage import Window, windows_for
 from racecoach.telemetry.screen_capture import Recording
 
 
+def _kind_suffix(point) -> str:
+    """What kind of driving this corner is about.
+
+    "unexplained" is kept for a corner that measurably cost time without any one
+    measurement moving far enough to say why: the loss is real and the remedy was
+    never measured, and saying so beats implying nobody looked. A corner reviewed
+    without a reference has no loss to explain, so it says nothing.
+    """
+    if point.category:
+        return f" · {point.category}"
+    return " · unexplained" if point.time_lost_s is not None else ""
+
+
+def _loss_suffix(point) -> str:
+    """What the corner cost, or nothing at all.
+
+    A single-lap review has no reference and therefore no loss. Printing "0.00 s
+    lost" there would assert a measurement nobody made.
+    """
+    if point.time_lost_s is None:
+        return ""
+    return f"   —   {point.time_lost_s:.2f} s lost"
+
+
 class ReplayWindow(QDialog):
     """Non-modal so the driver can watch the review and the traces together."""
 
@@ -104,7 +128,7 @@ class ReplayWindow(QDialog):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
-        layout.addWidget(QLabel("What to work on, worst first"))
+        layout.addWidget(QLabel("Corners, in the order they are driven"))
         layout.addWidget(self._chooser)
         layout.addLayout(panes, stretch=1)
 
@@ -153,9 +177,8 @@ class ReplayWindow(QDialog):
         self._chooser.blockSignals(True)
         self._chooser.clear()
         for position, item in enumerate(self._points, start=1):
-            kind = item.category or "unexplained"
             self._chooser.addItem(
-                f"{position}.  {item.corner} · {kind}   —   {item.time_lost_s:.2f} s lost"
+                f"{position}.  {item.corner}{_kind_suffix(item)}{_loss_suffix(item)}"
             )
         self._chooser.setCurrentRow(index)
         self._chooser.blockSignals(False)
@@ -180,8 +203,7 @@ class ReplayWindow(QDialog):
 
     def _describe(self, index: int, point, fallback_note: str) -> None:
         """Fill the advice column, saying plainly when there is no advice to give."""
-        kind = point.category or "unexplained"
-        self._headline.setText(f"{point.corner} · {kind} — {point.time_lost_s:.2f} s lost")
+        self._headline.setText(f"{point.corner}{_kind_suffix(point)}{_loss_suffix(point)}")
 
         spoken = self._advice_by_index.get(index)
         observation = spoken.narration if spoken else ""

@@ -76,12 +76,15 @@ four references and against nothing is five different answers. Hovering the
 status lists every comparison stored for that lap with its own count, the one the
 row opens into first. Opening a lap in
 **Analysis** (select it and choose **Analyze selected lap**, or double-click it)
-restores that exact result and exposes the one-time coach download when needed;
-**Review a corner** reuses its validated
-advice only when the cited corner and distance span exactly match the measured
-stretch. Each card can zoom the plotted telemetry to its evidence, and picks the
-same stretch out on the track map beside the strips when the lap was recorded
-with world position. The sector ribbon's S1–S3 are equal thirds of the lap
+restores that exact result and exposes the one-time coach download when needed.
+Double-clicking a corner in the table opens the review window on that corner:
+the driven line against the reference, and the race footage of that stretch cut
+from the session recording. Every corner opens, not only the ones that cost
+time — a corner somebody was quick through still has footage of them being quick
+through it. The review reuses the report's validated advice only when the cited
+corner and distance span exactly match the measured stretch. Each card can zoom
+the plotted telemetry to its evidence, and picks the same stretch out on the
+track map beside the strips when the lap was recorded with world position. The sector ribbon's S1–S3 are equal thirds of the lap
 distance that Apex derives, not the circuit's timing sectors: TORCS records
 none. A successful result is retained in the session's coaching audit directory
 and is revalidated before reuse. **File > Export Analysis Report** writes a

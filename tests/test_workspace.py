@@ -132,6 +132,36 @@ def test_a_session_remembers_where_its_footage_is_without_copying_it(tmp_path, m
     assert recording.path.read_bytes() == b"video"
 
 
+def test_the_import_that_creates_a_session_still_links_its_footage(tmp_path, monkeypatch):
+    """The first import is the one that matters, and it was the one that failed.
+
+    The pointer is written inside the session directory, and it used to be
+    written before that directory existed: FileNotFoundError, swallowed by the
+    OSError guard. Every session therefore lost its recording on the import that
+    created it, and only a second import of the same run ever linked one — which
+    nobody does. The existing tests all pre-created the directory by hand, so
+    none of them could see it.
+    """
+    from f1coach_core import import_telemetry
+    from f1coach_core.workspace import session_recording, sessions_root
+    from test_torcs import make_human_run
+
+    monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "ws"))
+    run = make_human_run(tmp_path / "human-1.csv", laps=2)
+    video = tmp_path / "session.mp4"
+    video.write_bytes(b"video")
+
+    import_telemetry(
+        run,
+        "first-import",
+        recording={"path": str(video), "started_at": 1000.0, "duration_s": 60.0},
+    )
+
+    recording = session_recording(sessions_root() / "first-import")
+    assert recording is not None
+    assert recording.path == video and recording.duration_s == 60.0
+
+
 def test_a_pointer_to_footage_that_has_been_deleted_reads_as_none(tmp_path, monkeypatch):
     """A pointer outlives the file it names; failing here beats failing in ffmpeg."""
     import json

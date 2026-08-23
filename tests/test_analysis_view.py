@@ -216,33 +216,38 @@ def test_debrief_is_absent_without_a_reference_lap(qtbot):
     assert not view._debrief_heading.isVisible()
 
 
-def test_the_replay_has_a_button_not_just_a_hidden_double_click(qtbot):
-    """The main thing a participant is here for cannot be a double-click on a row."""
-    from f1coach_core import load_sample_session
+def test_every_corner_in_the_table_is_reviewable(qtbot):
+    """A participant picks a corner by name, so every corner has to open.
 
-    session = load_sample_session()
-    view = AnalysisView()
-    qtbot.addWidget(view)
-    view.set_context(max(session.laps, key=lambda lap: lap.lap_time), session)
+    The debrief lists only the stretches that cost time. Driving the review from
+    that list meant a corner somebody wanted to look at — one they were quick
+    through, or one just under the reporting threshold — could not be opened at
+    all, and the way in was a button beside a summary rather than the row itself.
+    """
+    view, session = make_view(qtbot)
 
-    assert view._replay_button.isVisibleTo(view)
-    assert "corner" in view._replay_button.text().lower()
+    assert view._corner_rows
+    assert len(view._review_points) == len(view._corner_rows)
+    # Same corners, same order: a row and its review cannot drift apart.
+    assert [point.corner for point in view._review_points] == [
+        row["corner"] for row in view._corner_rows
+    ]
 
 
-def test_the_replay_button_opens_the_worst_stretch_when_none_is_selected(qtbot):
-    from f1coach_core import load_sample_session
+def test_double_clicking_a_corner_row_reviews_that_corner(qtbot):
+    """The table is the way in; the review opens on the row that was clicked."""
+    view, _session = make_view(qtbot)
+    row = len(view._corner_rows) - 1  # not the first, so position cannot pass by luck
 
-    session = load_sample_session()
-    view = AnalysisView()
-    qtbot.addWidget(view)
-    view.set_context(max(session.laps, key=lambda lap: lap.lap_time), session)
-    assert view._debrief_points  # the sample session has findings to replay
+    view._review_corner(row)
 
-    view._replay_button.click()
-
-    # Ranked worst-first, so an unselected list replays the costliest stretch.
-    assert view._debrief.currentRow() == 0
     assert view._replay_window is not None
+    # Every corner travels with it, so the window can move between them.
+    assert [p.corner for p in view._replay_window._points] == [
+        p.corner for p in view._review_points
+    ]
+    shown = view._replay_window._points[view._replay_window._chooser.currentRow()]
+    assert shown.corner == view._corner_rows[row]["corner"]
 
 
 def test_validated_report_advice_is_reused_by_the_matching_corner_review(qtbot):
@@ -254,8 +259,9 @@ def test_validated_report_advice_is_reused_by_the_matching_corner_review(qtbot):
 
     view._panel.reportReady.emit(report)
 
-    assert len(view._advice) == len(view._debrief_points)
-    for row, point in enumerate(view._debrief_points):
+    assert view._advice
+    for index, narrated in view._advice.items():
+        point = view._review_points[index]
         finding = next(
             finding
             for finding in report.findings
@@ -264,12 +270,12 @@ def test_validated_report_advice_is_reused_by_the_matching_corner_review(qtbot):
                 for citation in finding.evidence
             )
         )
-        assert view._advice[row].point is point
-        assert view._advice[row].advice == finding.action
+        assert narrated.point is point
+        assert narrated.advice == finding.action
 
-    first_action = view._advice[0].advice
-    view._replay_button.click()
-    assert first_action in view._replay_window._advice.text()
+    cited = min(view._advice)
+    view._review_corner(cited)
+    assert view._advice[cited].advice in view._replay_window._advice.text()
 
 
 def test_a_new_report_clears_advice_that_it_does_not_cite(qtbot):
@@ -292,7 +298,7 @@ def test_a_new_report_clears_advice_that_it_does_not_cite(qtbot):
 def test_changing_analysis_context_closes_the_old_corner_review(qtbot):
     """Late advice for a new lap must never be painted into an old lap's window."""
     view, _session = make_view(qtbot)
-    view._replay_button.click()
+    view._review_corner(0)
     old_review = view._replay_window
     assert old_review is not None
 
@@ -334,20 +340,27 @@ def test_a_lap_with_nothing_to_compare_against_still_opens(qtbot, tmp_path):
     view.set_context(load_telemetry_csv(csv), None)
 
     assert view._ref_combo.currentData() is None
-    assert not view._replay_button.isVisibleTo(view)
+    # Two samples cannot make a corner, so there is nothing to review — and
+    # saying that by having no rows beats an error.
+    assert view._review_points == []
 
 
-def test_the_review_button_retracts_when_there_is_nothing_to_review(qtbot):
-    """It used to linger from the previous lap and do nothing when pressed."""
-    from f1coach_core import load_sample_session
+def test_single_lap_review_keeps_every_corner_and_claims_no_time_lost(qtbot):
+    """Without a reference there is no loss — but there is still footage.
 
-    session = load_sample_session()
-    view = AnalysisView()
-    qtbot.addWidget(view)
-    view.set_context(max(session.laps, key=lambda lap: lap.lap_time), session)
-    assert view._replay_button.isVisibleTo(view)
+    Review used to disappear entirely in single-lap mode, because it was driven
+    by the debrief and a debrief needs something to compare against. The corners
+    were always there, and so was the recording of driving them.
+    """
+    view, _session = make_view(qtbot)
+    assert view._review_points
 
-    # Single-lap: no reference, so there is no stretch to review.
     view._ref_combo.setCurrentIndex(view._ref_combo.findData(None))
 
-    assert not view._replay_button.isVisibleTo(view)
+    assert view._review_points, "single-lap review still has every corner"
+    assert all(point.time_lost_s is None for point in view._review_points)
+
+    view._review_corner(0)
+    assert view._replay_window is not None
+    # No reference, so nothing claims a loss that was never measured.
+    assert "s lost" not in view._replay_window._headline.text()

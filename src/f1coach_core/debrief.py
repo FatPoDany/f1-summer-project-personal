@@ -34,7 +34,10 @@ class DebriefPoint:
     corner: str
     apex_m: float
     span_m: tuple[float, float]
-    time_lost_s: float
+    # None when there is no reference to have lost time against. Not 0.0: a lap
+    # reviewed on its own has no measured delta, and writing one down would put
+    # a number in front of a participant that nothing measured.
+    time_lost_s: float | None
     difference: str  # empty when nothing exceeded a reporting threshold
     detail: str  # the two measurements behind `difference`
     # What kind of driving this is about, so advice can be about that rather than
@@ -44,6 +47,8 @@ class DebriefPoint:
 
     @property
     def headline(self) -> str:
+        if self.time_lost_s is None:
+            return self.corner
         return f"{self.corner} · {self.time_lost_s:.2f} s"
 
 
@@ -153,6 +158,40 @@ def lap_debrief(
         )
     points.sort(key=lambda point: point.time_lost_s, reverse=True)
     return points[:limit]
+
+
+def corner_review_points(lap: Lap, reference: Lap | None = None) -> list[DebriefPoint]:
+    """Every corner as a reviewable stretch, in the order it is driven.
+
+    ``lap_debrief`` answers "what cost the most time", worst first, and drops the
+    rest. That is right for a summary somebody reads and wrong for a table where
+    they pick a corner by name and expect it to open: a corner they were quick
+    through still has footage of them being quick through it.
+
+    ``time_lost_s`` stays None without a reference, and the difference, detail
+    and category are left empty rather than compared against the lap itself.
+    """
+    against = lap if reference is None else reference
+    points = []
+    for fact in _corner_facts(lap, against):
+        best = None
+        lost = None
+        if reference is not None:
+            lost = fact.get("time_lost_s")
+            best = max(_candidates(fact), key=lambda item: item[0], default=None)
+        span = fact["span_m"]
+        points.append(
+            DebriefPoint(
+                corner=str(fact["corner"]),
+                apex_m=float(fact["apex_m"]),
+                span_m=(float(span[0]), float(span[1])),
+                time_lost_s=None if lost is None else round(float(lost), 3),
+                difference="" if best is None else best[1],
+                detail="" if best is None else best[2],
+                category="" if best is None else best[3],
+            )
+        )
+    return points
 
 
 def debrief_summary(lap: Lap, reference: Lap, points: list[DebriefPoint]) -> str:
