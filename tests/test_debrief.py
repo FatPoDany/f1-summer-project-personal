@@ -120,3 +120,34 @@ def test_summary_names_the_corners_it_accounted_for():
     assert "off your best lap" in summary
     for point in points:
         assert point.corner in summary
+
+
+def test_a_summary_never_claims_more_loss_than_the_lap_had():
+    """"16.68 s of it" against a 13.22 s deficit is visibly impossible.
+
+    Corner losses can exceed the lap's own deficit, because the driver gave time
+    back elsewhere. The synthetic sample never showed it -- its slow lap was slow
+    everywhere -- and the first recorded session did, on both laps.
+    """
+    from f1coach_core import debrief_summary
+    from f1coach_core.debrief import DebriefPoint
+
+    def point(corner, lost):
+        return DebriefPoint(
+            corner=corner, apex_m=100.0, span_m=(0.0, 200.0),
+            time_lost_s=lost, difference="", detail="",
+        )
+
+    class FakeLap:
+        def __init__(self, lap_time):
+            self.lap_time = lap_time
+
+    lap, best = FakeLap(113.22), FakeLap(100.0)  # 13.22 s off
+    over = debrief_summary(lap, best, [point("T2", 8.0), point("T10", 8.68)])
+
+    assert "of it went at" not in over
+    assert "16.68 s between them" in over
+    assert "gave some of that back" in over
+
+    under = debrief_summary(lap, best, [point("T2", 5.0), point("T10", 4.0)])
+    assert "9.00 s of it went at T2, T10" in under

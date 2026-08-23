@@ -122,3 +122,41 @@ def test_the_window_stops_inside_the_stretch_it_describes():
 
     assert window.from_wall_clock >= float(inside["wall_clock_s"].iloc[0]) - 1e-6
     assert window.to_wall_clock <= float(inside["wall_clock_s"].iloc[-1]) + 1e-6
+
+
+def test_a_cut_clip_reaches_the_player_as_a_path(qtbot, tmp_path, monkeypatch):
+    """The pane kept the clip it was handed, and it has to be the clip.
+
+    The ready signal carried a staleness token as well as the path, while the
+    slot took one argument: every cut arrived as that token, so the player was
+    handed an `object`, the pane sat on "Preparing the footage of this stretch…"
+    for ever, and coming back to the same corner crashed on Path(object).
+
+    It guards the other half too: without a reference held to the runnable, the
+    task is collected before ffmpeg runs and this simply times out.
+    """
+    from apex.widgets import footage_pane
+    from racecoach.telemetry.screen_capture import Recording
+
+    if footage_pane.video_support() is None:
+        pytest.skip("this build has no Qt multimedia, so there is no player to reach")
+
+    clip = tmp_path / "cut.mp4"
+    clip.write_bytes(b"clip")
+    monkeypatch.setattr(footage_pane, "cut_clip", lambda *a, **k: clip)
+
+    pane = footage_pane.FootagePane()
+    qtbot.addWidget(pane)
+    played = []
+    pane._play = played.append
+
+    pane.show_stretch(
+        3,
+        Recording(path=tmp_path / "session.mp4", started_at=1000.0, duration_s=60.0),
+        footage.Window(from_wall_clock=1010.0, to_wall_clock=1015.0),
+        tmp_path,
+    )
+
+    qtbot.waitUntil(lambda: 3 in pane._clips, timeout=5000)
+    assert pane._clips[3] == str(clip)
+    assert played == [str(clip)]

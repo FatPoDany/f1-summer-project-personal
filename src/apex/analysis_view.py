@@ -10,8 +10,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -150,14 +148,11 @@ class AnalysisView(QWidget):
         self._debrief_heading.setWordWrap(True)
         self._debrief_heading.setStyleSheet("font-weight: 600;")
         self._debrief_heading.hide()
-        self._debrief = QListWidget()
-        self._debrief.setMaximumHeight(96)
-        self._debrief.setToolTip(
-            "Click a stretch to zoom the strips onto it, double-click to replay it"
-        )
-        self._debrief.itemClicked.connect(self._zoom_debrief_item)
-        self._debrief.itemDoubleClicked.connect(self._replay_debrief_item)
-        self._debrief.hide()
+        # The list of costly stretches that used to sit here said the same thing
+        # as the corner table three rows further down -- same corners, same
+        # deltas, one ranked and one in lap order -- and was a second place to
+        # click for the same review. The sentence above it is not in the table,
+        # so that stays.
         debrief_header = QHBoxLayout()
         debrief_header.addWidget(self._debrief_heading, stretch=1)
         self._debrief_points: list[DebriefPoint] = []
@@ -202,7 +197,6 @@ class AnalysisView(QWidget):
         charts_layout.setSpacing(4)
         charts_layout.addLayout(traces, stretch=1)
         charts_layout.addLayout(debrief_header)
-        charts_layout.addWidget(self._debrief)
         charts_layout.addWidget(self._corners)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -309,10 +303,8 @@ class AnalysisView(QWidget):
         self._narration = {}
         self._advice = {}
         self._advice_complete = False
-        self._debrief.clear()
         if self._lap is None or reference is None or reference is self._lap:
             self._debrief_heading.hide()
-            self._debrief.hide()
             return
         try:
             points = lap_debrief(self._lap, reference)
@@ -321,15 +313,6 @@ class AnalysisView(QWidget):
         self._debrief_heading.setText(debrief_summary(self._lap, reference, points))
         self._debrief_heading.show()
         self._debrief_points = points
-        for point in points:
-            text = point.headline
-            if point.difference:
-                text += f"  —  {point.difference}"
-            item = QListWidgetItem(text)
-            if point.detail:
-                item.setToolTip(point.detail)
-            self._debrief.addItem(item)
-        self._debrief.setVisible(bool(points))
         self._panel.set_debrief(self._debrief_heading.text(), points)
 
     def _apply_narration(self, result: object) -> None:
@@ -354,9 +337,6 @@ class AnalysisView(QWidget):
                 continue
             if index is not None:
                 self._narration[index] = text
-            entry = self._debrief.item(row)
-            if entry is not None:
-                entry.setToolTip(text)
         summary = getattr(result, "summary", "")
         if summary:
             self._debrief_heading.setText(summary)
@@ -371,10 +351,6 @@ class AnalysisView(QWidget):
         """
         self._narration = {}
         self._advice = {}
-        for row, point in enumerate(self._debrief_points):
-            entry = self._debrief.item(row)
-            if entry is not None:
-                entry.setToolTip(point.detail)
         findings = getattr(report, "findings", ())
         for index, point in enumerate(self._review_points):
             finding = next(
@@ -401,29 +377,12 @@ class AnalysisView(QWidget):
             )
             self._advice[index] = narrated
             self._narration[index] = narrated.full_text
-            debrief_row = next(
-                (
-                    row
-                    for row, stretch in enumerate(self._debrief_points)
-                    if stretch.corner == point.corner
-                ),
-                None,
-            )
-            entry = None if debrief_row is None else self._debrief.item(debrief_row)
-            if entry is not None:
-                entry.setToolTip(narrated.full_text)
         self._advice_complete = True
         if self._replay_window is not None:
             self._replay_window.update_advice(self._advice, complete=True)
 
     def coach_shutdown(self) -> None:
         self._panel.shutdown()
-
-    def _zoom_debrief_item(self, item: QListWidgetItem) -> None:
-        row = self._debrief.row(item)
-        if 0 <= row < len(self._debrief_points):
-            d0, d1 = self._debrief_points[row].span_m
-            self._show_evidence(d0, d1)
 
     def _session_dir(self) -> Path | None:
         """The folder this lap's canonical CSV lives in, which is its session."""
@@ -448,15 +407,6 @@ class AnalysisView(QWidget):
     def _review_corner(self, row: int, _col: int = 0) -> None:
         """Double-clicking a corner row reviews that corner."""
         self._open_review(row)
-
-    def _replay_debrief_item(self, item: QListWidgetItem) -> None:
-        """A debrief stretch names a corner, so it opens that corner's review."""
-        row = self._debrief.row(item)
-        if not 0 <= row < len(self._debrief_points):
-            return
-        index = self._review_index(self._debrief_points[row].corner)
-        if index is not None:
-            self._open_review(index)
 
     def _open_review(self, index: int) -> None:
         """Play one corner back on the track and in the footage, in its own window.

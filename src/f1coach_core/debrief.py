@@ -203,6 +203,15 @@ def debrief_summary(lap: Lap, reference: Lap, points: list[DebriefPoint]) -> str
         return f"{total:.2f} s off your best lap, spread evenly rather than at any one corner."
     accounted = sum(point.time_lost_s for point in points)
     corners = ", ".join(point.corner for point in points)
+    if accounted > total:
+        # Real driving is not uniformly worse than a quicker lap: these corners
+        # can cost more than the lap did, because the rest of it gave time back.
+        # "16.68 s of it" against a 13.22 s deficit is arithmetic the reader can
+        # see is impossible, and it discredits every other number on the screen.
+        return (
+            f"{total:.2f} s off your best lap. {corners} cost {accounted:.2f} s "
+            "between them, and the rest of the lap gave some of that back."
+        )
     return (
         f"{total:.2f} s off your best lap. {accounted:.2f} s of it went at {corners}."
     )

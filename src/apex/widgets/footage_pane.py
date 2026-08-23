@@ -35,8 +35,13 @@ def video_support() -> tuple[type, type] | None:
 
 
 class _ClipSignals(QObject):
-    ready = Signal(object, str)
-    failed = Signal(object, str)
+    # The payload only. A token travelled here too, and because the pane
+    # connects with a token of its own the slots took the emitted one as the
+    # path: every clip was cut and then handed to the player as an `object`,
+    # which raised inside the slot and left the pane saying "Preparing…" for
+    # ever. Returning to the same corner then crashed on Path(object).
+    ready = Signal(str)
+    failed = Signal(str)
 
 
 class _ClipTask(QRunnable):
@@ -45,7 +50,6 @@ class _ClipTask(QRunnable):
     def __init__(self, recording: Recording, window: Window, destination: Path) -> None:
         super().__init__()
         self.signals = _ClipSignals()
-        self.token = object()
         self._recording = recording
         self._window = window
         self._destination = destination
@@ -60,12 +64,12 @@ class _ClipTask(QRunnable):
             )
         except (RecordingError, OSError) as exc:
             try:
-                self.signals.failed.emit(self.token, str(exc))
+                self.signals.failed.emit(str(exc))
             except RuntimeError:
                 pass  # the window closed while ffmpeg was working
             return
         try:
-            self.signals.ready.emit(self.token, str(path))
+            self.signals.ready.emit(str(path))
         except RuntimeError:
             pass
 
@@ -77,6 +81,10 @@ class FootagePane(QWidget):
         super().__init__(parent)
         self._pool = pool or QThreadPool.globalInstance()
         self._token: object | None = None
+        # The pool owns the runnable, but its signals are a Python object: let
+        # this go and the task can be collected before ffmpeg is even started,
+        # leaving the pane saying "Preparing…" about a clip nobody is cutting.
+        self._task: _ClipTask | None = None
         self._clips: dict[int, str] = {}  # cut once per stretch, then reused
 
         self._message = QLabel()
@@ -150,6 +158,7 @@ class FootagePane(QWidget):
             lambda path, t=token, i=index: self._clip_ready(t, i, path)
         )
         task.signals.failed.connect(lambda message, t=token: self._clip_failed(t, message))
+        self._task = task
         self._pool.start(task)
 
     # -- outcomes ----------------------------------------------------------

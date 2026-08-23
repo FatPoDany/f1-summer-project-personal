@@ -194,16 +194,15 @@ def test_debrief_names_where_time_went_and_zooms_to_it(qtbot):
     view.set_context(slowest, session)
     view._ref_combo.setCurrentIndex(view._ref_combo.findData(best))
 
-    assert view._debrief.isVisible() or view._debrief.count()
     assert "off your best lap" in view._debrief_heading.text()
-    assert view._debrief.count() == len(view._debrief_points)
-    assert view._debrief.count() >= 1
+    assert view._debrief_points  # still computed: it is what the coach narrates
 
-    # Clicking a stretch zooms the strips onto exactly that span.
+    # The stretches are no longer listed under the sentence — the corner table
+    # says the same thing for every corner — so zooming is a row click there.
     zoomed = []
     view._show_evidence = lambda d0, d1: zoomed.append((d0, d1))
-    view._zoom_debrief_item(view._debrief.item(0))
-    assert zoomed == [view._debrief_points[0].span_m]
+    view._zoom_corner_row(0)
+    assert zoomed == [tuple(view._corner_rows[0]["span_m"])]
 
 
 def test_debrief_is_absent_without_a_reference_lap(qtbot):
@@ -212,7 +211,7 @@ def test_debrief_is_absent_without_a_reference_lap(qtbot):
     qtbot.addWidget(view)
     view.set_context(load_sample_session().best_lap, None)
 
-    assert view._debrief.count() == 0
+    assert view._debrief_points == []
     assert not view._debrief_heading.isVisible()
 
 
