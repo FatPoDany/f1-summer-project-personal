@@ -327,6 +327,14 @@ class CoachPanel(QWidget):
         self._pool = pool or QThreadPool(self)
         if pool is None:
             self._pool.setMaxThreadCount(1)
+        # Reading a saved report back is a disk read and a revalidation, never a
+        # model call, so it gets a worker of its own. Sharing the serial model
+        # pool made every context switch queue behind whatever multi-minute run
+        # was in flight: returning to a lap that had already been analysed sat
+        # on the "Ready" placeholder until that unrelated run finished, which
+        # reads as the earlier answer having been lost.
+        self._restore_pool = QThreadPool(self)
+        self._restore_pool.setMaxThreadCount(1)
         self._lap: Lap | None = None
         self._reference: Lap | None = None
         self._task: _CoachTask | None = None
@@ -349,6 +357,11 @@ class CoachPanel(QWidget):
         self._restore_task: _RestoreTask | None = None
         self.report: CoachingReport | None = None
         self.audit_path: Path | None = None
+        # What this session has already validated and shown, so returning to a
+        # pair repaints it at once instead of deriving the evidence summary from
+        # the lap CSVs a second time. An imported lap never changes, so an entry
+        # stays true for as long as the window is open.
+        self._shown: dict[tuple[str, str], tuple[CoachingReport, Path | None]] = {}
 
         title = QLabel("AI Race Engineer")
         title.setStyleSheet("font-weight: 600;")
@@ -444,13 +457,23 @@ class CoachPanel(QWidget):
             )
         else:
             self._placeholder.setText("Open a lap to run Granite analysis.")
+        remembered = self._shown.get(self._context_key())
+        if remembered is not None:
+            report, audit_path = remembered
+            self._on_audited("" if audit_path is None else str(audit_path))
+            self.show_report(report)
+            if self._context_key() in self._running:
+                # Asked for again from the button. Keep the answer already on
+                # screen rather than blanking it while the new one is read.
+                self._show_working("Reading this lap again…")
+            return
         if lap is not None:
             restore = _RestoreTask(lap, reference, self.provider_name)
             restore.signals.finished.connect(
                 lambda saved, current=restore: self._restore_finished(current, saved)
             )
             self._restore_task = restore
-            self._pool.start(restore)
+            self._restore_pool.start(restore)
 
     def _context_key(self) -> tuple[str, str] | None:
         """What a run is *for*, so two of the same are never started."""
@@ -798,6 +821,9 @@ class CoachPanel(QWidget):
     def show_report(self, report: CoachingReport) -> None:
         self._done_working()
         self.report = report
+        key = self._context_key()
+        if key is not None:
+            self._shown[key] = (report, self.audit_path)
         self._task = None
         self._coach_button.setEnabled(True)
         self._coach_button.setText("Analyze lap")

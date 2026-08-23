@@ -2,10 +2,11 @@
 per-run audit trail."""
 
 import json
+import threading
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QThreadPool
+from PySide6.QtCore import QRunnable, QThreadPool
 
 from apex import theme
 from apex.coach_panel import CoachPanel, FindingCard, _CoachTask
@@ -255,6 +256,69 @@ def test_panel_restores_saved_granite_report_for_the_same_context(qtbot):
     assert panel.audit_path == audit_path
     assert panel._audit_button.isEnabled()
     assert len(panel.findChildren(FindingCard)) == len(report.findings)
+
+
+def test_a_saved_report_is_read_back_while_the_model_pool_is_busy(qtbot):
+    """Putting a lap's answer back on screen is a disk read, not a model call.
+
+    Both used to share the one serial model pool, so returning to a lap that had
+    already been analysed sat on the "Ready" placeholder until whatever run was
+    in flight finished -- minutes on a CPU, and indistinguishable from the
+    earlier answer having been lost.
+    """
+    lap = load_sample_session().laps[1]
+    report, _audit_path = _saved_granite_report(lap)
+    panel = CoachPanel()
+    qtbot.addWidget(panel)
+    panel._auto = False
+
+    occupied, release = threading.Event(), threading.Event()
+
+    class HoldTheModelPool(QRunnable):
+        def run(self):
+            occupied.set()
+            release.wait(30)
+
+    panel._pool.start(HoldTheModelPool())
+    assert occupied.wait(5), "the model pool never picked the work up"
+
+    try:
+        with qtbot.waitSignal(panel.reportReady, timeout=5000):
+            panel.set_context(lap, None)
+    finally:
+        release.set()
+        panel._pool.waitForDone(30000)
+
+    assert panel.report == report
+
+
+def test_returning_to_a_pair_shows_its_answer_at_once(qtbot):
+    """A pair read once stays read for as long as the window is open.
+
+    Every context switch used to re-derive the evidence summary from the lap
+    CSVs and re-scan the audit directory, so a pair the participant had just
+    been looking at came back blank before it came back at all.
+    """
+    session = load_sample_session()
+    lap, other = session.laps[1], session.laps[0]
+    report, audit_path = _saved_granite_report(lap)
+    panel = CoachPanel()
+    qtbot.addWidget(panel)
+    panel._auto = False
+
+    with qtbot.waitSignal(panel.reportReady, timeout=5000):
+        panel.set_context(lap, None)
+
+    panel.set_context(other, None)
+    assert panel.report is None  # a different pair is never served the first's
+
+    panel.set_context(lap, None)
+
+    assert panel.report == report  # painted by the call itself, not by a worker
+    assert panel.audit_path == audit_path
+    assert panel._restore_task is None  # answered from memory; nothing queued
+    # The pair it left is cleared with deleteLater, which needs the loop to turn.
+    qtbot.waitUntil(lambda: len(panel.findChildren(FindingCard)) == len(report.findings))
 
 
 def test_saved_comparison_report_is_not_reused_for_single_lap_context(qtbot):
