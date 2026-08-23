@@ -27,6 +27,21 @@ FRAME_MS = 33  # ~30 fps; the marker advances by real elapsed lap time
 MARGIN = 14
 
 
+def span_indices(lap: Lap, d0: float, d1: float) -> tuple[int, int]:
+    """The samples of `lap` lying between two distances along the track.
+
+    searchsorted keeps this exact for any sampling rate. ``side="right"`` lands
+    one past the stretch, so step back to the last sample actually inside it:
+    nothing may be shown running beyond the stretch it claims to be about.
+    """
+    dist = lap.df["dist"]
+    first = int(dist.searchsorted(d0, side="left"))
+    last = int(min(dist.searchsorted(d1, side="right") - 1, len(dist) - 1))
+    if last <= first:
+        last = min(first + 1, len(dist) - 1)
+    return first, last
+
+
 def _pedal_pct(value: float) -> float:
     """A pedal position to show a driver, as a percentage of its actual travel.
 
@@ -245,15 +260,7 @@ class TrackReplay(QWidget):
         self._note.setText(note)
         self._note.setVisible(bool(note))
         self._title.setText(title)
-        dist = lap.df["dist"]
-        # searchsorted keeps this exact for any sampling rate.
-        self._first = int(dist.searchsorted(d0, side="left"))
-        # side="right" lands one past the stretch, so step back to the last
-        # sample actually inside it: the replay must not run beyond what the
-        # debrief point is talking about.
-        self._last = int(min(dist.searchsorted(d1, side="right") - 1, len(dist) - 1))
-        if self._last <= self._first:
-            self._last = min(self._first + 1, len(dist) - 1)
+        self._first, self._last = span_indices(lap, d0, d1)
         self._slider.setRange(self._first, self._last)
         self._slider.setValue(self._first)
         if lap.has_track_map:

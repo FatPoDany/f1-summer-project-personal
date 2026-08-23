@@ -6,7 +6,11 @@ click zooms the strips onto that corner's zone — same path as "◈ show".
 
 import pytest
 
-from apex.analysis_view import AnalysisView
+from apex.analysis_view import (
+    COMPARISON_HEADERS,
+    SINGLE_LAP_HEADERS,
+    AnalysisView,
+)
 from f1coach_core import (
     build_evidence_summary,
     corner_table,
@@ -63,6 +67,83 @@ def test_optional_reference_comparison_matches_core_and_flags_worst(qtbot):
 
     total = sum(session.best_sector_times.values())
     assert f"Theoretical {total:.3f} s" == view._theoretical.text()
+
+
+def test_comparison_keeps_the_technique_review_column(qtbot):
+    """Choosing a reference used to drop the column that says what to do.
+
+    A comparison answers "where did the time go"; the technique flags answer
+    "what about the corner produced it". They are properties of the driver's own
+    lap, so a comparison has no reason to withhold them -- and dropping them left
+    the stretched last section holding a five-character delta and a lot of nothing.
+    """
+    view, session = make_view(qtbot)
+    view._ref_combo.setCurrentIndex(view._ref_combo.findData(session.best_lap))
+    reference = view._ref_combo.currentData()
+    assert reference is not None
+
+    rows = corner_table(session.laps[2], reference)
+    review_col = len(COMPARISON_HEADERS) - 1
+    assert view._corners.columnCount() == len(COMPARISON_HEADERS)
+    assert view._corners.horizontalHeaderItem(review_col).text() == "Technique review"
+    assert view._corners.horizontalHeaderItem(review_col - 1).text() == "Δ vs ref"
+
+    shown = [view._corners.item(i, review_col).text() for i in range(len(rows))]
+    expected = [
+        "REVIEW · " + ", ".join(flags) if (flags := row["technique_flags"]) else "No flag"
+        for row in rows
+    ]
+    assert shown == expected
+
+
+def test_switching_back_to_single_lap_drops_only_the_delta_column(qtbot):
+    """The two modes are one table with one column's difference between them."""
+    view, session = make_view(qtbot)
+    view._ref_combo.setCurrentIndex(view._ref_combo.findData(session.best_lap))
+    assert view._corners.columnCount() == len(COMPARISON_HEADERS)
+
+    view._ref_combo.setCurrentIndex(view._ref_combo.findData(None))
+
+    assert view._corners.columnCount() == len(SINGLE_LAP_HEADERS)
+    last = len(SINGLE_LAP_HEADERS) - 1
+    assert view._corners.horizontalHeaderItem(last).text() == "Technique review"
+
+
+def test_show_picks_the_cited_stretch_out_on_the_track(qtbot):
+    """A cited stretch is a place on the circuit before it is a chart region.
+
+    Highlighting only the strips asked a participant to find the corner from a
+    distance axis. The map answers "where" directly, which is the question
+    somebody who has driven the track actually has.
+    """
+    from apex.widgets.track_replay import span_indices
+    from test_track_replay import _positioned_lap
+
+    lap = _positioned_lap()
+    view = AnalysisView()
+    qtbot.addWidget(view)
+    view._panel._auto = False  # no model run: this is about the drawing
+    view.set_context(lap, None)
+    assert view._track._span == (0, 0)  # nothing cited yet, so nothing picked out
+
+    view._show_evidence(500.0, 950.0)
+
+    assert view._track._span == span_indices(lap, 500.0, 950.0)
+    first, last = view._track._span
+    assert lap.df["dist"].iloc[first] >= 500.0
+    assert lap.df["dist"].iloc[last] <= 950.0 + 1e-6
+
+
+def test_a_lap_without_world_position_leaves_the_track_empty(qtbot):
+    """Those laps analyse fine; they simply cannot be drawn on a circuit."""
+    view, _session = make_view(qtbot)
+
+    assert not view.lap.has_track_map
+    assert view._track._x == []
+
+    view._show_evidence(500.0, 950.0)  # must not invent a position it never had
+
+    assert view._track._x == []
 
 
 def test_corner_row_click_zooms_and_highlights_the_zone(qtbot):

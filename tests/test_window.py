@@ -1,10 +1,12 @@
 """Shell smoke tests — run offscreen on Mac/Linux CI (QT_QPA_PLATFORM=offscreen)."""
 
 import json
+from pathlib import Path
 
 import pytest
 
-from apex.main_window import MainWindow
+from apex import main_window
+from apex.main_window import RESEARCH_SETTING, MainWindow, _research_mode_enabled
 from f1coach_core import ensure_sample_session, load_sample_session
 from racecoach.granite.host import Capability
 
@@ -17,6 +19,28 @@ CANONICAL = (
 @pytest.fixture(autouse=True)
 def workspace(tmp_path, monkeypatch):
     monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "ws"))
+
+
+def test_stored_settings_never_reach_the_developers_own_apex(tmp_path, monkeypatch):
+    """The suite must not read, or write, the real app's settings.
+
+    Research tools are stored rather than passed in an environment variable, so
+    that a researcher can turn them on in a desktop app they double clicked. On
+    Windows that store is the registry, and a developer who had turned them on
+    once made the "off by default" assertions fail for reasons that had nothing
+    to do with the code under test.
+    """
+    monkeypatch.delenv("APEX_RESEARCH_MODE", raising=False)  # the stored value decides
+    settings = main_window.QSettings("Apex", "Apex")
+    settings.setValue(RESEARCH_SETTING, True)
+    settings.sync()
+
+    assert Path(settings.fileName()).is_relative_to(tmp_path)
+    assert _research_mode_enabled() is True  # redirected, but still a real store
+
+    settings.setValue(RESEARCH_SETTING, False)
+    settings.sync()
+    assert _research_mode_enabled() is False
 
 
 def test_window_starts_in_the_garage(qtbot):

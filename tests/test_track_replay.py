@@ -40,6 +40,21 @@ def _positioned_lap() -> Lap:
     )
 
 
+def test_a_stretch_with_no_width_still_spans_two_samples():
+    """Shared by the replay and the Analysis track, so the guard belongs here.
+
+    A zero-width citation would otherwise produce last <= first, which draws
+    nothing and leaves the reader looking for a highlight that is not there.
+    """
+    from apex.widgets.track_replay import span_indices
+
+    lap = _positioned_lap()
+    first, last = span_indices(lap, 600.0, 600.0)
+
+    assert last > first
+    assert last < len(lap.df)
+
+
 def test_the_replayed_span_is_exactly_the_requested_stretch(qtbot):
     lap = _positioned_lap()
     view = TrackReplay()

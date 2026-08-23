@@ -86,6 +86,36 @@ def test_single_lap_summary_contains_deterministic_technique_evidence(session):
         } <= set(corner)
 
 
+def test_comparison_rows_flag_technique_without_overwriting_the_reference():
+    """The guides must not be published as if the reference lap had recorded them.
+
+    Single-lap mode has no reference, so it puts the fixed guide in the row's
+    ``ref_*`` slot. A comparison already has real reference numbers there, and
+    replacing them would put a figure in the table that no lap ever drove.
+    """
+    from f1coach_core import corner_table, single_lap_corner_table
+    from f1coach_core.features import SINGLE_LAP_GUIDES
+
+    session = load_sample_session()
+    lap, best = session.laps[2], session.best_lap
+
+    compared = corner_table(lap, best)
+    assert compared
+    for row in compared:
+        assert isinstance(row["technique_flags"], list)
+        assert isinstance(row["technique_score"], float)
+    # A real reference lap coasts some real distance; the guide is a fixed 20.0.
+    assert any(
+        row["ref_coast_distance_m"] != SINGLE_LAP_GUIDES["coast_distance_m"]
+        for row in compared
+    )
+
+    alone = single_lap_corner_table(lap)
+    assert all(
+        row["ref_coast_distance_m"] == SINGLE_LAP_GUIDES["coast_distance_m"] for row in alone
+    )
+
+
 def test_corner_table_extends_the_summary_zones_with_exits():
     session = load_sample_session()
     from f1coach_core import corner_table

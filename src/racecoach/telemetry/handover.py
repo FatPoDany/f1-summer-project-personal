@@ -19,9 +19,20 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from f1coach_core.participant import background_path, load_background
+from f1coach_core.workspace import workspace_root
 
 MANIFEST_NAME = "handover.json"
 SCHEMA_VERSION = "apex-handover-v1"
+
+
+def handovers_root() -> Path:
+    """Where handovers from other people's machines are unpacked.
+
+    Beside locally captured runs but never among them: a lap that arrived in a
+    package was driven on a computer nobody here controls, and keeping that
+    visible is part of what the package is for.
+    """
+    return workspace_root() / "captures" / "handovers"
 
 
 class HandoverError(RuntimeError):

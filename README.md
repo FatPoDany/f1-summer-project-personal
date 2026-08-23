@@ -58,17 +58,25 @@ summary of fresh advice; press the number key **1** during the race if that
 board is hidden.
 
 For post-lap coaching, import a CSV into a session or open a captured session in
-**Garage**. Apex checks every lap automatically: the session best receives
-single-lap technique checks and each other lap is compared with that best lap.
-The Status column shows queued, generating, ready, failed, or setup-required
-state while one local **Granite 4.1** request runs at a time. Opening a lap in
+**Garage**. A participant's handover `.zip` can be imported directly: its
+digests are verified, its laps land in a session of their own, and the driver,
+phase, preset and background questionnaire it carries are kept with them — a
+loose CSV records none of those, which is why the Driver column is blank for one.
+Apex checks every lap automatically: the session best receives single-lap
+technique checks and each other lap is compared with that best lap. The Status
+column shows queued, generating, failed, or setup-required state while one local
+**Granite 4.1** request runs at a time, and `analysed · n findings` once a lap has
+an answer. That count is always for the comparison the row will open against —
+the session best, or nothing for the best lap itself — because the same lap read
+against two references gives two different answers. Opening a lap in
 **Analysis** (select it and choose **Analyze selected lap**, or double-click it)
 restores that exact result and exposes the one-time coach download when needed;
 **Review a corner** reuses its validated
 advice only when the cited corner and distance span exactly match the measured
-stretch. Each card can zoom the plotted telemetry to its evidence. A successful
-result is retained in the session's coaching audit directory and is revalidated
-before reuse. Sessions can be deleted from Garage after explicit confirmation;
+stretch. Each card can zoom the plotted telemetry to its evidence, and picks the
+same stretch out on the track map beside the strips when the lap was recorded
+with world position. A successful result is retained in the session's coaching
+audit directory and is revalidated before reuse. Sessions can be deleted from Garage after explicit confirmation;
 only Apex-managed copies and their audits are removed.
 
 The deterministic Granite Bridge capture defaults to three laps through

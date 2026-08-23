@@ -214,17 +214,23 @@ def _report_has_unique_claims_and_citations(report: CoachingReport) -> bool:
     return True
 
 
-def latest_coaching_outcomes(session_path: str | Path) -> dict[str, int]:
-    """Lap name -> findings count, from each lap's newest successful audit.
+def latest_coaching_outcomes(session_path: str | Path) -> dict[tuple[str, str | None], int]:
+    """(lap, reference) -> findings count, from that pair's newest successful audit.
 
-    Drives the Garage's "ANALYSED · n findings" status. Timestamped filenames
-    make lexical order chronological, so later records win; unreadable or
-    failed records are skipped rather than surfaced — this is a status hint,
+    Drives the Garage's "ANALYSED · n findings" status. The count belongs to the
+    pair rather than to the lap: the same lap read against two references is two
+    different questions with two different answers, and keying on the lap alone
+    published whichever comparison happened to run last — a number the
+    participant could not reconcile with the one Lap Analysis showed them.
+
+    A single-lap analysis is stored under a ``None`` reference. Timestamped
+    filenames make lexical order chronological, so later records win; unreadable
+    or failed records are skipped rather than surfaced — this is a status hint,
     not the audit trail itself."""
     directory = Path(session_path) / AUDIT_DIR_NAME
     if not directory.is_dir():
         return {}
-    outcomes: dict[str, int] = {}
+    outcomes: dict[tuple[str, str | None], int] = {}
     for path in sorted(directory.glob("*.json")):
         try:
             record = json.loads(path.read_text(encoding="utf-8"))
@@ -232,5 +238,7 @@ def latest_coaching_outcomes(session_path: str | Path) -> dict[str, int]:
             continue
         report = record.get("report")
         if record.get("ok") and isinstance(report, dict) and record.get("lap"):
-            outcomes[str(record["lap"])] = len(report.get("findings") or [])
+            reference = record.get("reference")
+            key = (str(record["lap"]), str(reference) if reference else None)
+            outcomes[key] = len(report.get("findings") or [])
     return outcomes

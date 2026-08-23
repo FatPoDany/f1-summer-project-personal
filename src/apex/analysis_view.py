@@ -24,6 +24,7 @@ from apex import theme
 from apex.coach_panel import CoachPanel
 from apex.widgets.replay_window import ReplayWindow
 from apex.widgets.strip_stack import StripStack
+from apex.widgets.track_replay import TrackMap, span_indices
 from f1coach_core import (
     DebriefPoint,
     Lap,
@@ -46,6 +47,7 @@ COMPARISON_HEADERS = (
     "Throttle 50%",
     "Exit +200 m",
     "Δ vs ref",
+    "Technique review",
 )
 SINGLE_LAP_HEADERS = (
     "Corner",
@@ -114,6 +116,19 @@ class AnalysisView(QWidget):
         self._stack = StripStack(self)
         self._stack.cursorMoved.connect(self._update_readout)
 
+        # The strips answer "what did the inputs do"; this answers "where".  A
+        # cited stretch is a place on the circuit before it is a region of a
+        # chart, and a participant who has driven the track reads the corner
+        # long before they read the trace.
+        self._track = TrackMap()
+        self._track.setMinimumWidth(190)
+        self._track.setMaximumWidth(320)
+        self._track.setToolTip(
+            "Where on the circuit the cited stretch is. The marker sits at its start."
+        )
+        self._track_caption = QLabel("Track")
+        self._track_caption.setStyleSheet(f"color: {theme.TEXT_DIM}; font-size: 11px;")
+
         self._corners = QTableWidget(0, len(COMPARISON_HEADERS))
         self._corners.setHorizontalHeaderLabels(COMPARISON_HEADERS)
         self._corners.horizontalHeader().setStretchLastSection(True)
@@ -171,11 +186,23 @@ class AnalysisView(QWidget):
         self._panel.reportReady.connect(self._apply_report_advice)
         self._panel.debriefNarrated.connect(self._apply_narration)
 
+        track_column = QVBoxLayout()
+        track_column.setContentsMargins(0, 0, 0, 0)
+        track_column.setSpacing(2)
+        track_column.addWidget(self._track_caption)
+        track_column.addWidget(self._track, stretch=1)
+
+        traces = QHBoxLayout()
+        traces.setContentsMargins(0, 0, 0, 0)
+        traces.setSpacing(8)
+        traces.addWidget(self._stack, stretch=4)
+        traces.addLayout(track_column, stretch=1)
+
         charts = QWidget()
         charts_layout = QVBoxLayout(charts)
         charts_layout.setContentsMargins(0, 0, 0, 0)
         charts_layout.setSpacing(4)
-        charts_layout.addWidget(self._stack, stretch=1)
+        charts_layout.addLayout(traces, stretch=1)
         charts_layout.addLayout(debrief_header)
         charts_layout.addWidget(self._debrief)
         charts_layout.addWidget(self._corners)
@@ -224,6 +251,7 @@ class AnalysisView(QWidget):
         self._corners.setRowCount(0)
         self._corners.hide()
         self._stack.clear_lap()
+        self._track.clear()
         self._panel.set_context(None, None)
 
     # -- reference handling ------------------------------------------------
@@ -252,13 +280,24 @@ class AnalysisView(QWidget):
         reference = self._ref_combo.currentData()
         self._stack.set_lap(self._lap, self._sector_colors(reference))
         self._stack.set_reference(reference)
+        self._draw_track(reference)
         self._panel.set_context(self._lap, reference)
         self._populate_debrief(reference)
         self._populate_corners(reference)
 
+    def _draw_track(self, reference: Lap | None) -> None:
+        """The whole lap, with nothing picked out until something is cited."""
+        if self._lap is None or not self._lap.has_track_map:
+            self._track.clear()
+            return
+        self._track.set_reference(reference if reference is not self._lap else None)
+        self._track.set_lap(self._lap, 0, 0)
+
     def _show_evidence(self, d0: float, d1: float) -> None:
         self._stack.highlight_span(d0, d1)
         self._stack.zoom_to_span(d0, d1)
+        if self._lap is not None and self._lap.has_track_map:
+            self._track.set_lap(self._lap, *span_indices(self._lap, d0, d1))
 
     # -- driver debrief ----------------------------------------------------
 
@@ -453,9 +492,13 @@ class AnalysisView(QWidget):
             return
         self._corner_rows = rows
         comparison = reference is not None
-        self._corners.setHorizontalHeaderLabels(
-            COMPARISON_HEADERS if comparison else SINGLE_LAP_HEADERS
-        )
+        headers = COMPARISON_HEADERS if comparison else SINGLE_LAP_HEADERS
+        # The two modes differ by one column: a delta only exists against a
+        # reference. Both now end on Technique review, which is the column worth
+        # the stretched last section -- a delta is five characters wide and left
+        # the rest of the row empty.
+        self._corners.setColumnCount(len(headers))
+        self._corners.setHorizontalHeaderLabels(headers)
         worst = (
             max(range(len(rows)), key=lambda i: rows[i]["delta_s"])
             if comparison
@@ -463,8 +506,12 @@ class AnalysisView(QWidget):
         )
         self._corners.setRowCount(len(rows))
         for i, row in enumerate(rows):
+            flags = row["technique_flags"]
+            review = "REVIEW · " + ", ".join(flags) if flags else "No flag"
             if comparison:
                 delta = row["delta_s"]
+                # In a comparison the warning marks where the time actually went.
+                # Without one there is no time to attribute, so it marks technique.
                 flagged = i == worst and delta > FLAG_THRESHOLD_S
                 cells = (
                     f"{row['corner']} ⚠" if flagged else row["corner"],
@@ -473,11 +520,10 @@ class AnalysisView(QWidget):
                     _vs_m(row["throttle_point_m"], row["ref_throttle_point_m"]),
                     f"{row['exit_speed_kmh']:.0f} / {row['ref_exit_speed_kmh']:.0f}",
                     f"{delta:+.3f}",
+                    review,
                 )
             else:
-                flags = row["technique_flags"]
                 flagged = bool(flags)
-                review = "REVIEW · " + ", ".join(flags) if flags else "No flag"
                 cells = (
                     f"{row['corner']} ⚠" if flagged else row["corner"],
                     _single_m(row["brake_point_m"]),
@@ -486,14 +532,15 @@ class AnalysisView(QWidget):
                     _single_speed(row["exit_speed_kmh"]),
                     review,
                 )
+            review_col = len(cells) - 1
             for col, text in enumerate(cells):
                 item = QTableWidgetItem(text)
                 if col == 0 and flagged:
                     item.setForeground(QColor(theme.RED))
-                if col == len(cells) - 1:
-                    if not comparison:
-                        item.setForeground(QColor(theme.YELLOW if flagged else theme.TEXT_DIM))
-                    elif delta > FLAG_THRESHOLD_S:
+                elif col == review_col:
+                    item.setForeground(QColor(theme.YELLOW if flags else theme.TEXT_DIM))
+                elif comparison and col == review_col - 1:
+                    if delta > FLAG_THRESHOLD_S:
                         item.setForeground(QColor(theme.RED))
                     elif delta < -FLAG_THRESHOLD_S:
                         item.setForeground(QColor(theme.GREEN))

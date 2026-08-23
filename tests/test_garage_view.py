@@ -4,10 +4,10 @@ import json
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QMessageBox
+from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from apex.coaching_queue import CoachingProgress, CoachingStage
-from apex.garage_view import GarageView
+from apex.garage_view import GarageView, _findings
 from f1coach_core import (
     build_coach_prompt,
     build_evidence_summary,
@@ -58,7 +58,7 @@ def test_status_column_speaks_the_mockup_vocabulary(qtbot):
 
     got = statuses(view)
     assert got[best.source.stem] == "SESSION BEST"
-    assert got[coach_me.source.stem] == f"AI READY · {len(report.findings)} tips"
+    assert got[coach_me.source.stem] == f"ANALYSED · {_findings(len(report.findings))}"
     assert got[fresh.source.stem] == "NEW — just captured"
 
     # opening the fresh lap consumes its NEW tag
@@ -70,6 +70,46 @@ def test_status_column_speaks_the_mockup_vocabulary(qtbot):
     view.lapOpened.connect(lambda lap, session: opened.append(lap))
     view._open_row(row)
     assert opened and statuses(view)[fresh.source.stem] == ""
+
+
+def test_status_counts_the_comparison_the_lap_will_open_against(qtbot):
+    """The count has to be the one Lap Analysis is about to show.
+
+    Every non-best lap opens against the session best, so that is the pair the
+    row is promising. Keying the count on the lap alone published whichever
+    comparison happened to run last, which the participant could not reconcile
+    with what they then saw.
+    """
+    ensure_sample_session()
+    view = GarageView()
+    qtbot.addWidget(view)
+    view.refresh_sessions()
+    session = view.session
+    best = session.best_lap
+    lap = next(row for row in session.laps if row is not best)
+    other = next(row for row in session.laps if row is not best and row is not lap)
+
+    coaching = session.path / "coaching"
+    coaching.mkdir(exist_ok=True)
+    (coaching / "20260101-000000-mock.json").write_text(
+        json.dumps(
+            {"ok": True, "lap": lap.source.stem, "reference": best.source.stem,
+             "report": {"findings": [1, 2]}}
+        ),
+        encoding="utf-8",
+    )
+    # Newer, but about a comparison nobody is looking at from this table.
+    (coaching / "20260102-000000-mock.json").write_text(
+        json.dumps(
+            {"ok": True, "lap": lap.source.stem, "reference": other.source.stem,
+             "report": {"findings": [1, 2, 3, 4]}}
+        ),
+        encoding="utf-8",
+    )
+
+    view.refresh_sessions()
+
+    assert statuses(view)[lap.source.stem] == "ANALYSED · 2 findings"
 
 
 def test_loading_a_session_requests_automatic_coaching(qtbot):
@@ -150,7 +190,7 @@ def test_status_column_tracks_live_ai_work_and_keeps_session_best(qtbot):
     view.apply_coaching_progress(
         CoachingProgress(best.source, CoachingStage.READY, findings=2)
     )
-    assert statuses(view)[best.source.stem] == "SESSION BEST · AI READY · 2 tips"
+    assert statuses(view)[best.source.stem] == "SESSION BEST · ANALYSED · 2 findings"
 
     view.apply_coaching_progress(
         CoachingProgress(other.source, CoachingStage.FAILED, message="model timed out")
@@ -197,8 +237,110 @@ def test_latest_outcomes_newest_wins_and_failures_are_skipped(tmp_path):
         (coaching / name).write_text(json.dumps(record))
     (coaching / "20260104-000000-mock.json").write_text("{not json")
 
-    assert latest_coaching_outcomes(tmp_path) == {"lap_01": 0}
+    assert latest_coaching_outcomes(tmp_path) == {("lap_01", None): 0}
     assert latest_coaching_outcomes(tmp_path / "nowhere") == {}
+
+
+def test_two_references_for_one_lap_are_two_separate_outcomes(tmp_path):
+    """A newer answer about a different comparison must not replace this one."""
+    coaching = tmp_path / "coaching"
+    coaching.mkdir()
+    (coaching / "20260101-000000-mock.json").write_text(
+        json.dumps(
+            {"ok": True, "lap": "lap_01", "reference": "lap_03",
+             "report": {"findings": [1, 2]}}
+        )
+    )
+    (coaching / "20260102-000000-mock.json").write_text(
+        json.dumps(
+            {"ok": True, "lap": "lap_01", "reference": "lap_04",
+             "report": {"findings": [1, 2, 3]}}
+        )
+    )
+
+    assert latest_coaching_outcomes(tmp_path) == {
+        ("lap_01", "lap_03"): 2,
+        ("lap_01", "lap_04"): 3,
+    }
+
+
+def test_importing_a_handover_keeps_who_drove_it(qtbot, tmp_path, monkeypatch):
+    """A loose CSV carries the driving and nothing else.
+
+    The package exists so the driver, the phase, the preset and the background
+    travel with the laps. Importing only the CSV out of it would put a dash in
+    the Driver column for every participant who ever sent one in, and lose the
+    questionnaire that no later check can go back and ask for.
+    """
+    from f1coach_core.participant import (
+        Background,
+        background_path,
+        load_background,
+        save_background,
+    )
+    from racecoach.telemetry.handover import package
+    from test_torcs import make_human_run
+
+    capture = tmp_path / "P007-baseline-20260819-104237"
+    capture.mkdir()
+    make_human_run(capture / "human-1.csv", laps=2)
+    (capture / "manifest.json").write_text(
+        json.dumps(
+            {
+                "participant_id": "P007",
+                "phase": "baseline",
+                "study_preset": {"preset_id": "apex-study-v1"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    save_background(Background(participant_id="P007", racing_games="weekly"))
+    archive = package(capture, tmp_path / "P007.zip").path
+    background_path("P007").unlink()  # the analyst has never heard of them
+
+    view = GarageView()
+    qtbot.addWidget(view)
+    monkeypatch.setattr(QFileDialog, "getOpenFileNames", lambda *a, **k: ([str(archive)], ""))
+
+    view._import_files()
+
+    assert view.session is not None
+    assert view.session.name == capture.name  # not the doubled unpack folder name
+    drivers = {
+        view._table.item(row, 0).text(): view._table.item(row, 1).text()
+        for row in range(view._table.rowCount())
+    }
+    assert drivers
+    assert set(drivers.values()) == {"P007"}
+
+    restored = load_background("P007")
+    assert restored is not None and restored.racing_games == "weekly"
+
+
+def test_a_damaged_handover_is_refused_rather_than_half_imported(qtbot, tmp_path, monkeypatch):
+    """Half a participant's session is worse than none: it looks complete."""
+    from racecoach.telemetry.handover import package
+    from test_torcs import make_human_run
+
+    capture = tmp_path / "P008-baseline-20260819-104237"
+    capture.mkdir()
+    make_human_run(capture / "human-1.csv", laps=2)
+    (capture / "manifest.json").write_text(
+        json.dumps({"participant_id": "P008"}), encoding="utf-8"
+    )
+    archive = package(capture, tmp_path / "P008.zip").path
+    archive.write_bytes(archive.read_bytes()[:-200])  # truncated in transit
+
+    view = GarageView()
+    qtbot.addWidget(view)
+    monkeypatch.setattr(QFileDialog, "getOpenFileNames", lambda *a, **k: ([str(archive)], ""))
+    shown = []
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kwargs: shown.append(args))
+
+    view._import_files()
+
+    assert shown, "a damaged handover must say so"
+    assert view.session is None
 
 
 def test_delete_session_requires_confirmation(qtbot, monkeypatch):

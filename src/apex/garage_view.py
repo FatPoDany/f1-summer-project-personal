@@ -1,6 +1,7 @@
 """Garage screen: session library, lap table with deltas/status, import and
 watched folder. Double-click a lap to open it in Lap Analysis."""
 
+import json
 import shutil
 from pathlib import Path
 
@@ -26,6 +27,7 @@ from apex import theme
 from apex.coaching_queue import CoachingProgress, CoachingStage
 from f1coach_core import (
     Session,
+    StudyIdentity,
     TelemetrySchemaError,
     create_session,
     delete_session,
@@ -34,11 +36,67 @@ from f1coach_core import (
     list_sessions,
     load_session,
 )
+from f1coach_core.lap import NO_IDENTITY
+from f1coach_core.participant import Background, save_background
 from f1coach_core.workspace import RECORDING_POINTER, session_recording
+from racecoach.telemetry.handover import HandoverError, handovers_root, unpack
 
 # Driver sits beside Lap so a researcher collecting several participants can
 # tell whose laps these are without opening the files.
 TABLE_HEADERS = ("Lap", "Driver", "Time", "Δ best", "Status")
+
+
+def _findings(count: int) -> str:
+    return "1 finding" if count == 1 else f"{count} findings"
+
+
+def _handover_identity(folder: Path) -> tuple[StudyIdentity, dict | None]:
+    """Who drove this handover, and where its screen recording now lives.
+
+    Read from the capture's own manifest rather than asked for at import time:
+    a package opened months later, by somebody who was not there, still says
+    what it came with.
+    """
+    try:
+        manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return NO_IDENTITY, None
+    if not isinstance(manifest, dict):
+        return NO_IDENTITY, None
+    preset = manifest.get("study_preset")
+    identity = StudyIdentity(
+        driver=manifest.get("participant_id") or None,
+        phase=manifest.get("phase") or None,
+        setup=preset.get("preset_id") if isinstance(preset, dict) else None,
+    )
+    recording = manifest.get("recording")
+    if not isinstance(recording, dict):
+        return identity, None
+    # The path recorded on the participant's machine means nothing here, but
+    # the file itself travelled inside the package.
+    local = folder / Path(str(recording.get("path", ""))).name
+    return identity, {**recording, "path": str(local)} if local.is_file() else None
+
+
+def _adopt_background(folder: Path) -> None:
+    """Keep the questionnaire that travelled with the laps.
+
+    Nothing in a telemetry file records prior experience, and a comparability
+    check months from now cannot go back and ask. Dropping it on import is the
+    one loss a handover cannot recover from.
+    """
+    try:
+        data = json.loads((folder / "participant.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(data, dict):
+        return
+    try:
+        background = Background.from_dict(data)
+    except TypeError:
+        return
+    if background.participant_id:
+        save_background(background)
 
 
 class GarageView(QWidget):
@@ -172,7 +230,7 @@ class GarageView(QWidget):
         for row, lap in enumerate(session.laps):
             delta = session.delta_to_best(lap)
             is_best = lap is best
-            status, status_color, status_tip = self._lap_status(lap, is_best, coached)
+            status, status_color, status_tip = self._lap_status(lap, is_best, coached, best)
             cells = (
                 lap.label,
                 lap.identity.driver or "—",
@@ -223,11 +281,17 @@ class GarageView(QWidget):
         self._footage_status.setStyleSheet(f"color: {colour};")
 
     def _lap_status(
-        self, lap, is_best: bool, coached: dict[str, int]
+        self, lap, is_best: bool, coached: dict[tuple[str, str | None], int], best
     ) -> tuple[str, str, str]:
         """Combine lap significance with explicit automatic-coaching progress."""
         progress = self._coaching_progress.get(lap.source.resolve(strict=False))
-        ai_status, ai_colour, detail = self._ai_status(progress, coached.get(lap.source.stem))
+        # Name the comparison the count came from. Lap Analysis opens every lap
+        # against the session best, and the best lap against nothing, so that is
+        # the pair whose answer this row is promising.
+        reference = None if is_best or best is None else best.source.stem
+        ai_status, ai_colour, detail = self._ai_status(
+            progress, coached.get((lap.source.stem, reference))
+        )
         if is_best:
             label = "SESSION BEST" + (f" · {ai_status}" if ai_status else "")
             return label, theme.PURPLE, detail
@@ -245,7 +309,7 @@ class GarageView(QWidget):
         if progress is None:
             if saved_findings is None:
                 return "", "", ""
-            return f"AI READY · {saved_findings} tips", theme.GREEN, ""
+            return f"ANALYSED · {_findings(saved_findings)}", theme.GREEN, ""
         labels = {
             CoachingStage.QUEUED: ("AI QUEUED", theme.YELLOW),
             CoachingStage.GENERATING: ("AI GENERATING…", theme.YELLOW),
@@ -255,7 +319,7 @@ class GarageView(QWidget):
         }
         if progress.stage is CoachingStage.READY:
             count = progress.findings or 0
-            return f"AI READY · {count} tips", theme.GREEN, progress.message
+            return f"ANALYSED · {_findings(count)}", theme.GREEN, progress.message
         label, colour = labels[progress.stage]
         return label, colour, progress.message
 
@@ -366,17 +430,79 @@ class GarageView(QWidget):
         self.status.emit(f"Exported {lap.label} -> {target}")
 
     def _import_files(self) -> None:
-        if self._session is None:
+        chosen, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Import telemetry or a participant handover",
+            "",
+            "Telemetry and handovers (*.csv *.zip);;Telemetry CSV (*.csv);;"
+            "Participant handover (*.zip)",
+        )
+        if not chosen:
+            return
+        paths = [Path(path) for path in chosen]
+        # A handover names its own session after the participant, so only loose
+        # CSVs need somewhere to be put. Asking for a session name first, then
+        # not using it, is worse than not asking.
+        if any(path.suffix.lower() != ".zip" for path in paths) and self._session is None:
             self._new_session()
             if self._session is None:
                 return
-        paths, _ = QFileDialog.getOpenFileNames(
-            self, "Import telemetry", "", "Telemetry CSV (*.csv)"
-        )
+        selected = None
         for path in paths:
-            self._import_one(Path(path))
-        if paths:
-            self.refresh_sessions()
+            if path.suffix.lower() == ".zip":
+                selected = self._import_handover(path) or selected
+            else:
+                self._import_one(path)
+        self.refresh_sessions(select=selected)
+
+    def _import_handover(self, archive: Path) -> str | None:
+        """Import a participant's whole handover: their laps, and who they are.
+
+        A loose CSV carries the driving and nothing else -- not who drove, not
+        which phase they were in, not the background they answered. The package
+        exists precisely to keep those together, so importing it keeps them
+        together too, and the digests recorded when it was packaged are checked
+        on the way in.
+
+        The laps land in a session of their own named after the participant.
+        Folding somebody else's run into whichever session happened to be
+        selected would destroy the provenance the package was built to carry.
+        """
+        try:
+            handover = unpack(archive, handovers_root())
+        except HandoverError as exc:
+            QMessageBox.critical(self, "Can't import handover", str(exc))
+            return None
+        identity, recording = _handover_identity(handover.path)
+        _adopt_background(handover.path)
+        runs = sorted(handover.path.glob("*.csv"))
+        if not runs:
+            QMessageBox.critical(
+                self,
+                "Can't import handover",
+                f"{archive.name} unpacked, but holds no telemetry CSV.",
+            )
+            return None
+        # unpack() prefixes the folder with the participant id, and a capture
+        # folder is already named after them, so the folder name on its own
+        # reads "P007-P007-baseline-...". Use the capture's own name.
+        name = handover.path.name
+        doubled = f"{handover.participant_id}-" * 2
+        if handover.participant_id and name.startswith(doubled):
+            name = name[len(handover.participant_id) + 1 :]
+        summaries = []
+        for run in runs:
+            try:
+                summaries.append(
+                    import_telemetry(run, name, identity=identity, recording=recording)
+                )
+            except (TelemetrySchemaError, OSError) as exc:
+                QMessageBox.critical(self, "Can't import handover", str(exc))
+                return None
+            self._fresh.add(run.stem)
+        who = identity.driver or "an unnamed driver"
+        self.status.emit(f"Imported {archive.name} from {who} — " + " · ".join(summaries))
+        return name
 
     def _import_one(self, path: Path) -> None:
         assert self._session is not None

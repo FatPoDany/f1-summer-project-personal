@@ -339,22 +339,6 @@ def _corner_facts(lap: Lap, reference: Lap) -> list[dict]:
     return facts
 
 
-def corner_table(lap: Lap, reference: Lap) -> list[dict]:
-    """Per-corner comparison rows for the Analysis screen's corner table.
-
-    The evidence summary's corner zones plus exit speeds, one row per corner:
-    brake point, minimum speed, exit speed at apex+200 m (mine vs reference)
-    and the time gained/lost across the zone. Purely presentational — the
-    coach prompt contract (build_evidence_summary) is untouched.
-    """
-    rows = []
-    for fact in _corner_facts(lap, reference):
-        row = dict(fact)
-        row["delta_s"] = row.pop("time_lost_s")
-        rows.append(row)
-    return rows
-
-
 SINGLE_LAP_GUIDES = {
     "coast_distance_m": 20.0,
     "brake_applications": 1.0,
@@ -362,41 +346,66 @@ SINGLE_LAP_GUIDES = {
     "pedal_overlap_pct": 5.0,
 }
 
+TECHNIQUE_CHECKS = (
+    ("coast_distance_m", "long coast", lambda value, guide: value > guide),
+    ("brake_applications", "repeated braking", lambda value, guide: value > guide),
+    ("throttle_applications", "interrupted throttle", lambda value, guide: value > guide),
+    ("pedal_overlap_pct", "pedal overlap", lambda value, guide: value >= guide),
+)
+
+
+def _flag_technique(row: dict, *, publish_guides: bool) -> None:
+    """Score one corner against the fixed technique guides, in place.
+
+    The guides describe the driver's own corner — how far they coasted, how many
+    separate times they went back to a pedal — so they hold whether or not a
+    reference lap is present, and both Analysis modes can show the same column.
+
+    Only single-lap mode publishes the guides as the row's ``ref_*`` values. In a
+    comparison those slots already hold the reference lap's own numbers, and
+    overwriting them with a fixed guide would put a figure in the table that no
+    lap ever recorded.
+    """
+    flags: list[str] = []
+    score = 0.0
+    for key, label, is_flagged in TECHNIQUE_CHECKS:
+        value = row.get(key)
+        guide = SINGLE_LAP_GUIDES[key]
+        if publish_guides:
+            row[f"ref_{key}"] = guide
+        if isinstance(value, (int, float)) and is_flagged(float(value), guide):
+            flags.append(label)
+            score += max(1.0, float(value) / max(guide, 1.0))
+    row["technique_flags"] = flags
+    row["technique_score"] = round(score, 3)
+
+
+def corner_table(lap: Lap, reference: Lap) -> list[dict]:
+    """Per-corner comparison rows for the Analysis screen's corner table.
+
+    The evidence summary's corner zones plus exit speeds, one row per corner:
+    brake point, minimum speed, exit speed at apex+200 m (mine vs reference)
+    and the time gained/lost across the zone. Each row also carries the same
+    deterministic technique flags single-lap mode shows: a comparison says where
+    the time went, and choosing one dropped the column that says what to do
+    about the corner. Purely presentational — the coach prompt contract
+    (build_evidence_summary) is untouched.
+    """
+    rows = []
+    for fact in _corner_facts(lap, reference):
+        row = dict(fact)
+        row["delta_s"] = row.pop("time_lost_s")
+        _flag_technique(row, publish_guides=False)
+        rows.append(row)
+    return rows
+
 
 def _single_lap_corner_facts(lap: Lap) -> list[dict]:
     """Absolute corner facts plus conservative deterministic review flags."""
     rows = _corner_facts(lap, lap)
     for row in rows:
         row["time_lost_s"] = None
-        flags: list[str] = []
-        score = 0.0
-        checks = (
-            ("coast_distance_m", "long coast", lambda value, guide: value > guide),
-            (
-                "brake_applications",
-                "repeated braking",
-                lambda value, guide: value > guide,
-            ),
-            (
-                "throttle_applications",
-                "interrupted throttle",
-                lambda value, guide: value > guide,
-            ),
-            (
-                "pedal_overlap_pct",
-                "pedal overlap",
-                lambda value, guide: value >= guide,
-            ),
-        )
-        for key, label, is_flagged in checks:
-            value = row.get(key)
-            guide = SINGLE_LAP_GUIDES[key]
-            row[f"ref_{key}"] = guide
-            if isinstance(value, (int, float)) and is_flagged(float(value), guide):
-                flags.append(label)
-                score += max(1.0, float(value) / max(guide, 1.0))
-        row["technique_flags"] = flags
-        row["technique_score"] = round(score, 3)
+        _flag_technique(row, publish_guides=True)
     return rows
 
 
