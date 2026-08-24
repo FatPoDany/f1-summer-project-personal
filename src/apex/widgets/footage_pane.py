@@ -275,6 +275,25 @@ class FootagePane(QWidget):
         start = clip_start_offset(self._recording, self._window.from_wall_clock)
         return max(0, int((self._recording.offset_of(wall_clock) - start) * 1000))
 
+    def drift_ms(self, wall_clock: float) -> int | None:
+        """How far the picture has wandered from the moment it should be showing.
+
+        Positive means the picture is ahead of the moment asked for. None when
+        nothing is loaded or the stretch cannot be placed, which is the same
+        answer as "there is no drift anyone could correct".
+
+        Both sides are the clip's own media time, and a player's position
+        advances at its playback rate, so a pane running at a matched rate is
+        measured against where that rate should have carried it by now rather
+        than against real time.
+        """
+        if self._player is None or not self._player.source().isValid():
+            return None
+        position = self.position_ms_for(wall_clock)
+        if position is None:
+            return None
+        return int(self._player.position() - position)
+
     def seek_to(self, wall_clock: float) -> None:
         position = self.position_ms_for(wall_clock)
         if self._player is None or position is None:

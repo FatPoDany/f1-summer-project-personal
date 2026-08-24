@@ -190,6 +190,60 @@ def test_a_moment_on_track_maps_to_a_position_in_the_clip(qtbot, tmp_path):
     assert pane.position_ms_for(1004.0) == 4000
 
 
+class _ValidSource:
+    """Stands in for a loaded QUrl; only its validity is ever asked about."""
+
+    def isValid(self) -> bool:
+        return True
+
+
+def test_drift_is_measured_against_where_the_marker_says_the_picture_should_be(
+    qtbot, tmp_path, monkeypatch
+):
+    """A picture anchored once and left to run has to be checked on, not trusted.
+
+    Measured in the clip's own media time on both sides, so a pane running at a
+    matched rate is judged against where that rate should have carried it rather
+    than against real time.
+    """
+    from apex.widgets import footage_pane
+    from racecoach.telemetry.screen_capture import CLIP_LEAD_S, Recording
+
+    if footage_pane.video_support() is None:
+        pytest.skip("this build has no Qt multimedia, so there is no player to measure")
+
+    pane = footage_pane.FootagePane()
+    qtbot.addWidget(pane)
+    pane._recording = Recording(path=tmp_path / "s.mp4", started_at=1000.0, duration_s=600.0)
+    pane._window = footage.Window(from_wall_clock=1100.0, to_wall_clock=1106.0)
+    monkeypatch.setattr(pane._player, "source", lambda: _ValidSource())
+
+    on_the_marker = int(CLIP_LEAD_S * 1000)
+    monkeypatch.setattr(pane._player, "position", lambda: on_the_marker + 400)
+    assert pane.drift_ms(1100.0) == 400  # the picture has run on ahead of the marker
+
+    monkeypatch.setattr(pane._player, "position", lambda: on_the_marker - 250)
+    assert pane.drift_ms(1100.0) == -250  # and here it is lagging behind it
+
+    monkeypatch.setattr(pane._player, "position", lambda: on_the_marker)
+    assert pane.drift_ms(1100.0) == 0
+
+    # A stretch that cannot be placed has no drift, rather than a drift of zero:
+    # nothing may report itself in step when it does not know where it is.
+    pane._window = None
+    assert pane.drift_ms(1100.0) is None
+
+
+def test_a_pane_with_nothing_loaded_reports_no_drift(qtbot):
+    """Zero would claim the picture is on the marker; there is no picture."""
+    from apex.widgets import footage_pane
+
+    pane = footage_pane.FootagePane()
+    qtbot.addWidget(pane)
+
+    assert pane.drift_ms(1_700_000_000.0) is None
+
+
 def test_footage_is_loaded_paused_rather_than_playing_itself(qtbot, tmp_path, monkeypatch):
     """Two players each starting on their own is what put them out of step."""
     from apex.widgets import footage_pane

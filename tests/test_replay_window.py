@@ -82,6 +82,91 @@ def test_the_reference_marker_tracks_distance_not_time(qtbot):
     assert abs(here - there) < 10.0  # matched by track position, not elapsed time
 
 
+def test_the_readout_says_how_much_time_has_gone_by_this_point(qtbot):
+    """Matching by distance is what takes the gap in seconds off the screen.
+
+    Two dots held at the same place on track show the line taken rather than the
+    time taken, and the seconds are what a driver came to find out. They are read
+    off the same cumulative curve the Compare screen draws, so the two screens
+    cannot quote different gaps for the same metre.
+    """
+    import numpy as np
+
+    from apex.widgets.replay_window import ReplayWindow
+    from f1coach_core import time_delta
+
+    lap = _positioned_lap(20.0, source="lap07.csv")  # the slower drive
+    reference = _positioned_lap(18.0, offset=8.0, source="lap02.csv")
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+    window.show_stretch(lap, _point(), reference=reference)
+
+    replay = window._replay
+    distance = float(lap.df["dist"].iloc[replay._slider.value()])
+    grid, delta = time_delta(lap, reference)
+    expected = float(np.interp(distance, grid, delta))
+
+    assert expected > 0  # the marker's lap is the slower one
+    assert replay._delta_readout.isVisibleTo(window)
+    assert f"{expected:.2f} s behind lap02" in replay._delta_readout.text()
+
+    # Read from the quicker lap's side, the same gap has the other sign.
+    window.show_stretch(reference, _point(), reference=lap)
+    assert "ahead of lap07" in window._replay._delta_readout.text()
+
+
+def test_two_laps_that_took_the_same_time_are_called_level_not_zero(qtbot):
+    """"0.00 s behind" claims a side the measurement does not support."""
+    from apex.widgets.replay_window import ReplayWindow
+
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+
+    window.show_stretch(
+        _positioned_lap(20.0, source="lap07.csv"),
+        _point(),
+        reference=_positioned_lap(20.0, offset=8.0, source="lap02.csv"),
+    )
+
+    assert window._replay._delta_readout.text() == "level with lap02 by this point"
+
+
+def test_a_lap_with_no_reference_quotes_no_gap(qtbot):
+    """There is no second lap, so there is no gap that could be named."""
+    from apex.widgets.replay_window import ReplayWindow
+
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+
+    window.show_stretch(_positioned_lap(20.0), _point())
+
+    assert window._replay._delta_readout.text() == ""
+    assert not window._replay._delta_readout.isVisibleTo(window)
+
+
+def test_a_reference_too_short_to_share_a_grid_quotes_no_gap(qtbot):
+    """`time_delta` refuses laps that cannot go on one grid; so does the readout.
+
+    Saying nothing is the honest outcome: the alternative is a number that looks
+    like a measurement and is an extrapolation off the end of the shorter lap.
+    """
+    import dataclasses
+
+    from apex.widgets.replay_window import ReplayWindow
+
+    lap = _positioned_lap(20.0)
+    reference = _positioned_lap(18.0, offset=8.0)
+    stub = dataclasses.replace(reference, df=reference.df.iloc[:5].copy())  # ~18 m of it
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+
+    window.show_stretch(lap, _point(), reference=stub)
+
+    assert window._replay._map._ref_x  # the line is still drawn as far as it goes
+    assert window._replay._ref_readout.text()  # and its speed here is still quoted
+    assert window._replay._delta_readout.text() == ""  # but no gap is invented
+
+
 def test_a_lap_with_no_reference_still_replays(qtbot):
     from apex.widgets.replay_window import ReplayWindow
 
@@ -553,11 +638,19 @@ def test_the_compared_lap_runs_at_the_speed_that_keeps_it_alongside(qtbot, tmp_p
     from apex.widgets.replay_window import ReplayWindow, _matched_rate
     from f1coach_core.footage import Window
 
-    assert _matched_rate(Window(0.0, 6.6), Window(0.0, 14.7)) == pytest.approx(2.227, abs=1e-3)
-    assert _matched_rate(Window(0.0, 14.7), Window(0.0, 6.6)) == pytest.approx(0.449, abs=1e-3)
-    assert _matched_rate(Window(0.0, 6.6), None) == 1.0  # nothing to match
-    assert _matched_rate(Window(0.0, 0.0), Window(0.0, 6.6)) == 1.0  # and no dividing by it
-    assert _matched_rate(Window(0.0, 1.0), Window(0.0, 90.0)) == 4.0  # clamped, not stuttering
+    assert _matched_rate(Window(0.0, 6.6), Window(0.0, 14.7)).rate == pytest.approx(
+        2.227, abs=1e-3
+    )
+    assert _matched_rate(Window(0.0, 14.7), Window(0.0, 6.6)).rate == pytest.approx(
+        0.449, abs=1e-3
+    )
+    assert not _matched_rate(Window(0.0, 6.6), Window(0.0, 14.7)).clamped
+    assert _matched_rate(Window(0.0, 6.6), None).rate == 1.0  # nothing to match
+    assert not _matched_rate(Window(0.0, 6.6), None).clamped  # and nothing was given up
+    assert _matched_rate(Window(0.0, 0.0), Window(0.0, 6.6)).rate == 1.0  # no dividing by it
+    clamped = _matched_rate(Window(0.0, 1.0), Window(0.0, 90.0))
+    assert clamped.rate == 4.0  # clamped, not stuttering
+    assert clamped.clamped  # and the caller is told, rather than left to guess
 
     _cut_into(monkeypatch, tmp_path)
     window = ReplayWindow()
@@ -577,6 +670,90 @@ def test_the_compared_lap_runs_at_the_speed_that_keeps_it_alongside(qtbot, tmp_p
     )
 
     assert rates and rates[-1] == pytest.approx(0.5, abs=0.02)
+    # Half speed is well inside what a player holds, so nothing was given up.
+    assert "keep step" not in window._ref_caption.text()
+
+
+def test_a_rate_too_far_apart_to_hold_says_the_picture_cannot_keep_step(
+    qtbot, tmp_path, monkeypatch
+):
+    """The clamp used to be silent, and a silent clamp teaches the wrong lesson.
+
+    Past it the picture is running as fast as a player usefully can and still
+    finishes the corner at the wrong moment. A driver reading the two side by
+    side would take that lag for something the other car did.
+    """
+    from apex.widgets.replay_window import ReplayWindow
+
+    _cut_into(monkeypatch, tmp_path)
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+    window._footage._play = lambda _path: None
+    window._ref_footage._play = lambda _path: None
+
+    window.show_stretch(
+        _positioned_lap(20.0, wall_clock=True, source="lap07.csv"),
+        _point(),
+        # Twenty times through the same metres: far outside the clamp.
+        reference=_positioned_lap(1.0, offset=8.0, wall_clock=True, source="lap02.csv"),
+        recording=_recording(tmp_path),
+        reference_recording=_recording(tmp_path),
+        clips_dir=tmp_path,
+    )
+
+    caption = window._ref_caption.text()
+    assert "keep step" in caption
+    assert "lap02" in caption  # the warning is added to the name, not instead of it
+
+
+def test_a_picture_that_has_drifted_is_pulled_back_onto_the_marker(qtbot):
+    """A matched rate is a straight line through a relationship that is not one.
+
+    Anchored once and left to run, the compared picture is right at both ends of
+    the corner and can be some way out in the middle. Only the pictures drift --
+    the dots are matched to the marker every frame -- so the drift is measured
+    where it happens and corrected only when it is big enough to see.
+    """
+    from apex.widgets.replay_window import RESYNC_TOLERANCE_MS, ReplayWindow
+
+    lap = _positioned_lap(20.0, wall_clock=True)
+    reference = _positioned_lap(10.0, offset=8.0, wall_clock=True)
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+    window.show_stretch(lap, _point(), reference=reference)
+    window._ref_showing = True  # as a comparison with footage on both sides
+    seeks = []
+    for pane in (window._footage, window._ref_footage):
+        pane.resume = lambda: None
+    window._footage.drift_ms = lambda _w: RESYNC_TOLERANCE_MS - 1  # near enough
+    window._ref_footage.drift_ms = lambda _w: RESYNC_TOLERANCE_MS + 200
+    window._footage.seek_to = lambda w: seeks.append(("mine", w))
+    window._ref_footage.seek_to = lambda w: seeks.append(("theirs", w))
+
+    window._replay._play.setChecked(True)
+    seeks.clear()  # the anchor taken as playback started
+    window._replay.driftCheckDue.emit()
+
+    # Only the one that wandered: seeking a picture that is already there is the
+    # stutter the shared transport exists to avoid.
+    assert seeks == [("theirs", window._replay.current_reference_wall_clock)]
+
+
+def test_nothing_is_reseated_while_the_marker_is_paused(qtbot):
+    """A paused picture is where it was put; moving it would be the drift."""
+    from apex.widgets.replay_window import RESYNC_TOLERANCE_MS, ReplayWindow
+
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+    window.show_stretch(_positioned_lap(20.0, wall_clock=True), _point())
+    seeks = []
+    window._footage.drift_ms = lambda _w: RESYNC_TOLERANCE_MS + 500
+    window._footage.seek_to = seeks.append
+
+    window._replay.driftCheckDue.emit()
+
+    assert not window._replay.playing
+    assert seeks == []
 
 
 def test_the_two_pictures_are_captioned_with_the_laps_they_are_of(qtbot):

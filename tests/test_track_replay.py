@@ -111,6 +111,33 @@ def test_playback_goes_round_again_rather_than_stopping_at_the_end(qtbot):
     assert view.playing
 
 
+def test_playback_asks_for_a_drift_check_a_few_times_a_second(qtbot):
+    """The marker cannot see the pictures, so it asks whoever owns them to look.
+
+    Not on every frame: seeking a media player thirty times a second stutters it
+    for no gain, which is why the footage is anchored and then left to run in the
+    first place. Asking a few times a second is what catches a picture that has
+    wandered off the marker in the middle of a corner.
+    """
+    from apex.widgets.track_replay import RESYNC_FRAMES
+
+    lap = _positioned_lap()
+    view = TrackReplay()
+    qtbot.addWidget(view)
+    view.set_stretch(lap, 0.0, 1000.0, "T1")
+    checks = []
+    view.driftCheckDue.connect(lambda: checks.append(view._slider.value()))
+    view._play.setChecked(True)
+
+    for _ in range(RESYNC_FRAMES - 1):
+        view._advance()
+    assert checks == []
+
+    view._advance()
+    assert len(checks) == 1
+    assert checks[0] > view._first  # the marker had moved on before anyone looked
+
+
 def test_a_lap_without_position_says_so_instead_of_drawing_nothing(qtbot):
     """A lap from a source without the position channel: readout still works."""
     lap = lap_without_position()

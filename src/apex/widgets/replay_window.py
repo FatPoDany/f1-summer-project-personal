@@ -13,6 +13,7 @@ and a poor way to tell a driver what to change.
 """
 
 import html
+from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
@@ -33,8 +34,22 @@ from f1coach_core import DebriefPoint, Lap
 from f1coach_core.footage import Window, windows_for
 from racecoach.telemetry.screen_capture import Recording
 
+RATE_FLOOR = 0.25
+RATE_CEILING = 4.0
+# Drift a driver would see between two pictures of the same corner: about four
+# frames of a 30 fps clip. Below it, seeking costs more than it corrects.
+RESYNC_TOLERANCE_MS = 150
 
-def _matched_rate(mine: Window | None, theirs: Window | None) -> float:
+
+@dataclass(frozen=True)
+class MatchedRate:
+    """A playback rate, and whether it is the one the corner actually needed."""
+
+    rate: float
+    clamped: bool  # the honest rate was outside what a player can usefully hold
+
+
+def _matched_rate(mine: Window | None, theirs: Window | None) -> MatchedRate:
     """How fast the compared lap's picture must run to stay at the same place.
 
     The track map has always moved the second marker by distance rather than by
@@ -45,10 +60,15 @@ def _matched_rate(mine: Window | None, theirs: Window | None) -> float:
     less than half way through the corner when the first one leaves it.
 
     Clamped, because past about four times a player stutters more than it shows.
+    A clamped rate no longer keeps the picture beside the marker, so the caller
+    is told which of the two it got: a comparison that has quietly stopped being
+    one teaches a difference that is only the clamp.
     """
     if mine is None or theirs is None or mine.seconds <= 0 or theirs.seconds <= 0:
-        return 1.0
-    return min(max(theirs.seconds / mine.seconds, 0.25), 4.0)
+        return MatchedRate(1.0, clamped=False)
+    wanted = theirs.seconds / mine.seconds
+    rate = min(max(wanted, RATE_FLOOR), RATE_CEILING)
+    return MatchedRate(rate, clamped=rate != wanted)
 
 
 def _caption_text(colour: str, text: str) -> str:
@@ -118,6 +138,7 @@ class ReplayWindow(QDialog):
         # simulator did not keep real time.
         self._replay.playbackToggled.connect(self._playback_toggled)
         self._replay.scrubbed.connect(self._footage_seek)
+        self._replay.driftCheckDue.connect(self._resync_footage)
 
         # Two pictures of the same corner in a comparison: the participant's own
         # drive and the lap being held up against it. One picture can only show
@@ -135,6 +156,7 @@ class ReplayWindow(QDialog):
         # cannot tell from "this lap" which lap this one is.
         self._footage_caption = _caption(theme.GREEN, "this lap")
         self._ref_caption = _caption(theme.BLUE, "the lap you are comparing with")
+        self._ref_caption_base = "the lap you are comparing with"
         self._footage_caption.hide()
 
         self._ai_evidence_note = QLabel(
@@ -291,16 +313,32 @@ class ReplayWindow(QDialog):
         if self._reference is None or self._reference is self._lap:
             # Nothing beside it, so nothing may keep the name of a lap that was
             # compared here before this one.
-            self._ref_caption.setText(
-                _caption_text(theme.BLUE, "the lap you are comparing with")
-            )
+            self._ref_caption_base = "the lap you are comparing with"
+            self._caption_the_reference(clamped=False)
             self.setWindowTitle(f"Review — {mine}")
             return
         theirs = lap_caption(self._reference)
-        self._ref_caption.setText(
-            _caption_text(theme.BLUE, f"comparing with — {html.escape(theirs)}")
-        )
+        self._ref_caption_base = f"comparing with — {theirs}"
+        self._caption_the_reference(clamped=False)
         self.setWindowTitle(f"Review — {mine}  vs  {theirs}")
+
+    def _caption_the_reference(self, *, clamped: bool) -> None:
+        """Name the compared lap, and own up when its picture cannot keep step.
+
+        The clamp used to be silent. Past it the picture is running as fast as a
+        player usefully can and still finishes the corner at the wrong moment,
+        so a driver reading the two side by side would take the lag for a
+        difference in the driving. Saying which corner it happened in costs a
+        line and is the only thing that separates the two readings.
+        """
+        text = html.escape(self._ref_caption_base)
+        if clamped:
+            text += (
+                f'<br><span style="color:{theme.YELLOW}">these two laps took too '
+                "differently long through this corner for the picture to keep step "
+                "with the marker</span>"
+            )
+        self._ref_caption.setText(_caption_text(theme.BLUE, text))
 
     def _panes(self) -> tuple[FootagePane, ...]:
         """The footage the transport drives: one, or two in a comparison."""
@@ -329,6 +367,31 @@ class ReplayWindow(QDialog):
         # for the same point on track is matched by distance rather than time,
         # so both are read together and the two pictures cannot disagree.
         self._anchor_footage()
+
+    def _resync_footage(self) -> None:
+        """Pull a picture that has wandered back onto the marker, mid-corner.
+
+        Anchoring once and running at a matched rate treats the two laps' times
+        through the corner as rising evenly, and they do not: a driver who brakes
+        early and then takes the exit back is level at both ends of the stretch
+        and some way out in the middle. The dots never show this, because they
+        are matched every frame; only the pictures drift.
+
+        Corrected rather than prevented, and only when the drift is big enough to
+        see: seeking a player on every frame is what the shared transport avoids
+        in the first place.
+        """
+        if not self._replay.playing:
+            return
+        pairs = [(self._footage, self._replay.current_wall_clock)]
+        if self._ref_showing:
+            pairs.append((self._ref_footage, self._replay.current_reference_wall_clock))
+        for pane, moment in pairs:
+            if moment is None or pane.busy:
+                continue
+            drift = pane.drift_ms(moment)
+            if drift is not None and abs(drift) > RESYNC_TOLERANCE_MS:
+                pane.seek_to(moment)
 
     def _footage_busy_changed(self, _busy: bool) -> None:
         """Play waits until there is something to play in step with."""
@@ -423,13 +486,16 @@ class ReplayWindow(QDialog):
             clips_dir,
         )
         if self._ref_showing:
-            self._ref_footage.set_rate(
-                _matched_rate(self._windows.get(index), reference_window)
-            )
+            matched = _matched_rate(self._windows.get(index), reference_window)
+            self._ref_footage.set_rate(matched.rate)
+            # Per corner, not per review: the same two laps can be a stride apart
+            # at one corner and hopeless at the next.
+            self._caption_the_reference(clamped=matched.clamped)
             # Both laps' clips share the folder: each is named after the seconds
             # of recording it holds, so two laps cannot claim the same file.
             self._ref_footage.show_stretch(
                 index, self._ref_recording, reference_window, clips_dir
             )
         else:
+            self._caption_the_reference(clamped=False)
             self._ref_footage.clear()

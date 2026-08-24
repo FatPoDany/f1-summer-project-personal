@@ -11,6 +11,7 @@ Nothing here derives telemetry: it renders `Lap.df` columns as recorded.
 
 import html
 
+import numpy as np
 from PySide6.QtCore import QPointF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
@@ -24,11 +25,16 @@ from PySide6.QtWidgets import (
 
 from apex import theme
 from apex.captions import lap_caption
-from f1coach_core import Lap
+from f1coach_core import Lap, time_delta
 from f1coach_core.footage import WALL_CLOCK_COLUMN
 
 FRAME_MS = 33  # ~30 fps; the marker advances by real elapsed lap time
 MARGIN = 14
+# A picture is anchored once and then left to run, so it can drift away from the
+# marker in the middle of a corner. Checked a few times a second rather than
+# every frame: seeking a player thirty times a second stutters it for no gain.
+RESYNC_FRAMES = 15  # ~500 ms at FRAME_MS
+LEVEL_S = 0.005  # a gap that rounds to 0.00 s is not a gap worth a side
 
 
 def span_indices(lap: Lap, d0: float, d1: float) -> tuple[int, int]:
@@ -206,6 +212,10 @@ class TrackReplay(QWidget):
     # than run its own playback: one corner, one transport.
     playbackToggled = Signal(bool)
     scrubbed = Signal(float)  # wall clock the marker jumped to, out of sequence
+    # Mid-playback: whoever owns the pictures should check they are still on the
+    # marker. Nothing is asserted about where they are -- only that it is time
+    # to look -- because the marker cannot see them.
+    driftCheckDue = Signal()
 
     """Track map, transport controls, and the readout for the current instant."""
 
@@ -217,6 +227,11 @@ class TrackReplay(QWidget):
         self._reference: Lap | None = None
         self._first = 0
         self._last = 0
+        # The cumulative gap to the compared lap, on its own distance grid.
+        # None until there are two laps that can honestly be put on one.
+        self._delta_grid: np.ndarray | None = None
+        self._delta_s: np.ndarray | None = None
+        self._frames_since_resync = 0
 
         self._title = QLabel()
         self._title.setStyleSheet("font-weight: 600;")
@@ -243,6 +258,14 @@ class TrackReplay(QWidget):
         self._ref_readout.setTextFormat(Qt.TextFormat.PlainText)
         self._ref_readout.setStyleSheet(f"color: {theme.BLUE};")
         self._ref_readout.hide()
+        # The gap in seconds, which belongs to neither lap and so wears neither
+        # lap's colour. Matching the two markers by distance is what makes the
+        # corner comparable at all, and it is also what takes the gap off the
+        # screen: at the same place on track there is nothing left to see it in.
+        self._delta_readout = QLabel()
+        self._delta_readout.setTextFormat(Qt.TextFormat.PlainText)
+        self._delta_readout.setStyleSheet(f"color: {theme.TEXT_DIM};")
+        self._delta_readout.hide()
 
         self._play = QPushButton("Play")
         self._play.setCheckable(True)
@@ -271,6 +294,7 @@ class TrackReplay(QWidget):
         layout.addWidget(self._legend)
         layout.addWidget(self._readout)
         layout.addWidget(self._ref_readout)
+        layout.addWidget(self._delta_readout)
         layout.addWidget(self._note)
         layout.addLayout(controls)
 
@@ -294,6 +318,7 @@ class TrackReplay(QWidget):
         self._play.setChecked(False)  # a new stretch starts paused at its beginning
         self._lap = lap
         self._reference = reference if reference is not lap else None
+        self._prepare_delta(lap)
         self._map.set_reference(self._reference)
         self._label_the_laps(lap)
         self._legend.setVisible(self._reference is not None and lap.has_track_map)
@@ -308,6 +333,29 @@ class TrackReplay(QWidget):
         else:
             self._map.clear()
         self._update_readout(self._first)
+
+    def _prepare_delta(self, lap: Lap) -> None:
+        """The cumulative gap to the compared lap, worked out once per stretch.
+
+        It is a lap-wide curve and the marker reads one point of it per frame,
+        so computing it per frame would be the same answer at thirty times the
+        cost. `time_delta` is the core routine the Compare screen draws, so the
+        seconds quoted here and the trace there cannot disagree -- this widget
+        renders that result rather than deriving a second one of its own.
+
+        Absent when the two laps share too little distance to go on one grid,
+        which is the same answer as "there is no gap that can honestly be
+        quoted", and is shown by saying nothing.
+        """
+        self._delta_grid = None
+        self._delta_s = None
+        if self._reference is None:
+            return
+        try:
+            grid, delta = time_delta(lap, self._reference)
+        except ValueError:
+            return  # too short to share a distance grid; the Compare view says so too
+        self._delta_grid, self._delta_s = grid, delta
 
     def _label_the_laps(self, lap: Lap) -> None:
         """Say which lap each colour on the map is, rather than which role it plays.
@@ -374,6 +422,7 @@ class TrackReplay(QWidget):
         if on:
             if self._slider.value() >= self._last:
                 self._slider.setValue(self._first)
+            self._frames_since_resync = 0  # playback anchors the pictures as it starts
             self._timer.start()
         else:
             self._timer.stop()
@@ -393,6 +442,14 @@ class TrackReplay(QWidget):
         # corner whose final metres are never shown is not the corner under
         # discussion, and nothing may run past the stretch it claims to be about.
         self._slider.setValue(min(index, self._last))
+        # The dots are matched to the marker every frame; a picture is anchored
+        # once and then left to run at a rate that assumes the two laps' times
+        # rise evenly through the corner. They do not, so it is worth asking
+        # every so often whether the pictures are still where the dots are.
+        self._frames_since_resync += 1
+        if self._frames_since_resync >= RESYNC_FRAMES:
+            self._frames_since_resync = 0
+            self.driftCheckDue.emit()
 
     def _restart(self) -> None:
         """Back to the start of the stretch, bringing the footage with it.
@@ -403,6 +460,7 @@ class TrackReplay(QWidget):
         exists to prevent.
         """
         self._slider.setValue(self._first)
+        self._frames_since_resync = 0  # the seek below is itself a fresh anchor
         self._scrubbed_to(self._first)
 
     def _seek(self, index: int) -> None:
@@ -422,6 +480,7 @@ class TrackReplay(QWidget):
         )
         self._readout.setText(text)
         self._show_reference_readout(float(row["dist"]), float(row["speed"]))
+        self._show_delta_readout(float(row["dist"]))
         self.cursorMoved.emit(float(row["dist"]))
 
     def _reference_index(self, distance: float) -> int:
@@ -454,3 +513,32 @@ class TrackReplay(QWidget):
             f"{ref_speed * 3.6:5.1f} km/h  ({delta:+.1f})"
         )
         self._ref_readout.show()
+
+    def _show_delta_readout(self, distance: float) -> None:
+        """How much time has gone by the time the marker reaches this point.
+
+        The half of the comparison that matching by distance gives up. Two dots
+        held at the same place on track is what makes a corner comparable at
+        all, and it is also why the seconds cannot be seen: the space between
+        them now shows the line taken rather than the time taken. A driver came
+        to find out where the lap went, so the number is put back beside the
+        difference that explains it.
+
+        Read off the same cumulative curve the Compare screen draws, so the two
+        screens cannot quote different gaps for the same metre.
+        """
+        if self._delta_grid is None or self._delta_s is None or self._reference is None:
+            self._delta_readout.clear()
+            self._delta_readout.hide()
+            return
+        seconds = float(np.interp(distance, self._delta_grid, self._delta_s))
+        against = self._reference.source.stem
+        if abs(seconds) < LEVEL_S:
+            # "0.00 s behind" claims a side the measurement does not support.
+            self._delta_readout.setText(f"level with {against} by this point")
+        else:
+            side = "behind" if seconds > 0 else "ahead of"
+            self._delta_readout.setText(
+                f"{abs(seconds):.2f} s {side} {against} by this point"
+            )
+        self._delta_readout.show()
