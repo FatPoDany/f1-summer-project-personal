@@ -4,14 +4,15 @@ Organised around moments rather than around the lap. A participant does not need
 to be told how their lap went -- they drove it -- they need to know that at Turn
 3 they braked too early and what to do about it. So the window is a short list of
 moments, each labelled with the kind of driving it is about, and picking one
-shows the same few seconds three ways: the footage, the line against their best
-lap, and one instruction to try next time.
+shows the same few seconds three ways: the footage, the line against the lap
+they are comparing with, and one instruction to try next time.
 
 The traces on the analysis screen answer a different question, for a different
 reader. A time-series segment is a fine way to show a researcher what happened
 and a poor way to tell a driver what to change.
 """
 
+import html
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
@@ -25,11 +26,42 @@ from PySide6.QtWidgets import (
 )
 
 from apex import theme
+from apex.captions import lap_caption
 from apex.widgets.footage_pane import FootagePane
 from apex.widgets.track_replay import TrackReplay
 from f1coach_core import DebriefPoint, Lap
 from f1coach_core.footage import Window, windows_for
 from racecoach.telemetry.screen_capture import Recording
+
+
+def _matched_rate(mine: Window | None, theirs: Window | None) -> float:
+    """How fast the compared lap's picture must run to stay at the same place.
+
+    The track map has always moved the second marker by distance rather than by
+    elapsed time -- that is what makes the gap on screen mean anything -- and a
+    picture running at real time beside it ends up a corner away from the dot it
+    belongs to. This is not a nicety: Turn 7 of the baseline session takes 6.6 s
+    in one lap and 14.7 s in the other, so at real time the second picture is
+    less than half way through the corner when the first one leaves it.
+
+    Clamped, because past about four times a player stutters more than it shows.
+    """
+    if mine is None or theirs is None or mine.seconds <= 0 or theirs.seconds <= 0:
+        return 1.0
+    return min(max(theirs.seconds / mine.seconds, 0.25), 4.0)
+
+
+def _caption_text(colour: str, text: str) -> str:
+    """A dot in the colour of a lap's line, and what to call that lap."""
+    return f'<span style="color:{colour}">●</span> {text}'
+
+
+def _caption(colour: str, text: str) -> QLabel:
+    """A dot and a word saying whose driving a picture is of."""
+    label = QLabel(_caption_text(colour, text))
+    label.setStyleSheet(f"color: {theme.TEXT_DIM}; font-size: 11px;")
+    label.setWordWrap(True)
+    return label
 
 
 def _kind_suffix(point) -> str:
@@ -80,8 +112,31 @@ class ReplayWindow(QDialog):
 
         self._replay = TrackReplay(self)
         self._replay.cursorMoved.connect(self.cursorMoved)
+        # One Play button for both halves of the corner: the marker runs the
+        # transport and the footage follows it, re-anchored whenever the
+        # transport changes so the two cannot drift apart on a machine where the
+        # simulator did not keep real time.
+        self._replay.playbackToggled.connect(self._playback_toggled)
+        self._replay.scrubbed.connect(self._footage_seek)
 
+        # Two pictures of the same corner in a comparison: the participant's own
+        # drive and the lap being held up against it. One picture can only show
+        # that a corner went badly; the pair shows what the other car did
+        # instead, which is the thing the whole window is arguing about.
         self._footage = FootagePane(self)
+        self._ref_footage = FootagePane(self)
+        for pane in (self._footage, self._ref_footage):
+            pane.busyChanged.connect(self._footage_busy_changed)
+        self._ref_showing = False
+        # Captioned in the colours the two lines on the track map already use,
+        # because "which car am I watching" must not be a question. Both are
+        # renamed after the laps themselves as soon as there are laps to name:
+        # a role is not an identity, and a driver who has opened three reviews
+        # cannot tell from "this lap" which lap this one is.
+        self._footage_caption = _caption(theme.GREEN, "this lap")
+        self._ref_caption = _caption(theme.BLUE, "the lap you are comparing with")
+        self._footage_caption.hide()
+
         self._ai_evidence_note = QLabel(
             "AI advice is based on validated telemetry. Video is shown only for "
             "your review and is not sent to the model."
@@ -117,8 +172,25 @@ class ReplayWindow(QDialog):
         advice_column.addWidget(self._measured)
         advice_column.addStretch(1)
 
+        this_column = QVBoxLayout()
+        this_column.setSpacing(2)
+        this_column.addWidget(self._footage_caption)
+        this_column.addWidget(self._footage, stretch=1)
+
+        self._ref_column = QWidget()
+        ref_column = QVBoxLayout(self._ref_column)
+        ref_column.setContentsMargins(0, 0, 0, 0)
+        ref_column.setSpacing(2)
+        ref_column.addWidget(self._ref_caption)
+        ref_column.addWidget(self._ref_footage, stretch=1)
+        self._ref_column.hide()  # a single-lap review has nothing to put beside it
+
+        videos = QHBoxLayout()
+        videos.addLayout(this_column, stretch=1)
+        videos.addWidget(self._ref_column, stretch=1)
+
         right = QVBoxLayout()
-        right.addWidget(self._footage, stretch=3)
+        right.addLayout(videos, stretch=3)
         right.addWidget(self._ai_evidence_note)
         right.addLayout(advice_column, stretch=2)
 
@@ -140,6 +212,8 @@ class ReplayWindow(QDialog):
         self._advice_complete = False
         self._recording: Recording | None = None
         self._windows: dict[int, Window] = {}
+        self._ref_recording: Recording | None = None
+        self._ref_windows: dict[int, Window] = {}
         self._clips_dir: Path | None = None
 
     def show_stretch(
@@ -154,6 +228,7 @@ class ReplayWindow(QDialog):
         advice: dict | None = None,
         advice_complete: bool = False,
         recording: Recording | None = None,
+        reference_recording: Recording | None = None,
         clips_dir: Path | None = None,
     ) -> None:
         """Open on one stretch, with the rest of the lap's stretches to hand.
@@ -168,6 +243,7 @@ class ReplayWindow(QDialog):
         self._advice_by_index = dict(advice or {})
         self._advice_complete = advice_complete
         self._recording = recording
+        self._ref_recording = reference_recording
         self._clips_dir = clips_dir
         self._points = list(points) if points else [point]
         if point not in self._points:
@@ -184,9 +260,87 @@ class ReplayWindow(QDialog):
         self._chooser.blockSignals(False)
 
         self._windows = windows_for(lap, self._points)
+        # The same corners located in the compared lap's own recorded time: it
+        # drove them at a different moment, and for the two clips to be of the
+        # same piece of track each has to be cut from its own driver's clock.
+        comparing = reference is not None and reference is not lap
+        self._ref_windows = windows_for(reference, self._points) if comparing else {}
+        if comparing and self._ref_recording is not None and self.width() < 1100:
+            self.resize(1180, max(self.height(), 620))  # room for two pictures
+        self._name_the_laps()
         self._load(index, fallback_note=note)
         self.show()
         self.raise_()
+
+    def _name_the_laps(self) -> None:
+        """Say which two laps are on screen: over each picture and on the window.
+
+        The captions named the roles -- "this lap", "the lap you are comparing
+        with" -- and never the laps, so which two laps a review was of had to be
+        carried in the driver's head from the picker on the analysis screen.
+        They are named here exactly as that picker names them, and the window
+        itself carries both so a review left open beside another one still says
+        what it is.
+        """
+        if self._lap is None:
+            return
+        mine = lap_caption(self._lap)
+        self._footage_caption.setText(
+            _caption_text(theme.GREEN, f"this lap — {html.escape(mine)}")
+        )
+        if self._reference is None or self._reference is self._lap:
+            # Nothing beside it, so nothing may keep the name of a lap that was
+            # compared here before this one.
+            self._ref_caption.setText(
+                _caption_text(theme.BLUE, "the lap you are comparing with")
+            )
+            self.setWindowTitle(f"Review — {mine}")
+            return
+        theirs = lap_caption(self._reference)
+        self._ref_caption.setText(
+            _caption_text(theme.BLUE, f"comparing with — {html.escape(theirs)}")
+        )
+        self.setWindowTitle(f"Review — {mine}  vs  {theirs}")
+
+    def _panes(self) -> tuple[FootagePane, ...]:
+        """The footage the transport drives: one, or two in a comparison."""
+        return (self._footage, self._ref_footage) if self._ref_showing else (self._footage,)
+
+    def _playback_toggled(self, playing: bool) -> None:
+        if not playing:
+            for pane in self._panes():
+                pane.pause()
+            return
+        self._anchor_footage()
+        for pane in self._panes():
+            pane.resume()
+
+    def _anchor_footage(self) -> None:
+        """Put every picture on the moment the marker is at."""
+        moment = self._replay.current_wall_clock
+        if moment is not None:
+            self._footage.seek_to(moment)
+        reference = self._replay.current_reference_wall_clock
+        if self._ref_showing and reference is not None:
+            self._ref_footage.seek_to(reference)
+
+    def _footage_seek(self, _wall_clock: float) -> None:
+        # The signal carries the marker's own clock; the compared lap's clock
+        # for the same point on track is matched by distance rather than time,
+        # so both are read together and the two pictures cannot disagree.
+        self._anchor_footage()
+
+    def _footage_busy_changed(self, _busy: bool) -> None:
+        """Play waits until there is something to play in step with."""
+        working = any(pane.busy for pane in self._panes())
+        self._replay.set_transport_enabled(
+            not working,
+            reason="The footage of this corner is still being cut." if working else "",
+        )
+        if not working and self._replay.playing:
+            self._anchor_footage()
+            for pane in self._panes():
+                pane.resume()
 
     def update_advice(self, advice: dict, *, complete: bool) -> None:
         """Refresh the visible instruction when background coaching finishes."""
@@ -254,9 +408,28 @@ class ReplayWindow(QDialog):
             reference=self._reference,
             note=note,
         )
+        reference_window = self._ref_windows.get(index)
+        # Decided before either pane is told anything: the panes report whether
+        # they are busy as they go, and that answer depends on how many of them
+        # the transport is waiting for.
+        self._ref_showing = self._ref_recording is not None and reference_window is not None
+        self._ref_column.setVisible(self._ref_showing)
+        self._footage_caption.setVisible(self._ref_showing)
+        clips_dir = self._clips_dir or Path.cwd()
         self._footage.show_stretch(
             index,
             self._recording,
             self._windows.get(index),
-            self._clips_dir or Path.cwd(),
+            clips_dir,
         )
+        if self._ref_showing:
+            self._ref_footage.set_rate(
+                _matched_rate(self._windows.get(index), reference_window)
+            )
+            # Both laps' clips share the folder: each is named after the seconds
+            # of recording it holds, so two laps cannot claim the same file.
+            self._ref_footage.show_stretch(
+                index, self._ref_recording, reference_window, clips_dir
+            )
+        else:
+            self._ref_footage.clear()

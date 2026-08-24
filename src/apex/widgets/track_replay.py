@@ -9,6 +9,8 @@ the four numbers that were true at that instant.
 Nothing here derives telemetry: it renders `Lap.df` columns as recorded.
 """
 
+import html
+
 from PySide6.QtCore import QPointF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
@@ -21,7 +23,9 @@ from PySide6.QtWidgets import (
 )
 
 from apex import theme
+from apex.captions import lap_caption
 from f1coach_core import Lap
+from f1coach_core.footage import WALL_CLOCK_COLUMN
 
 FRAME_MS = 33  # ~30 fps; the marker advances by real elapsed lap time
 MARGIN = 14
@@ -40,6 +44,19 @@ def span_indices(lap: Lap, d0: float, d1: float) -> tuple[int, int]:
     if last <= first:
         last = min(first + 1, len(dist) - 1)
     return first, last
+
+
+def wall_clock_of(lap: Lap | None, index: int) -> float | None:
+    """When, in recorded wall clock, a lap was at one of its samples.
+
+    None for a lap recorded before the clock existed, which is the same answer
+    as "nothing outside TORCS can be lined up with this".
+    """
+    if lap is None or WALL_CLOCK_COLUMN not in lap.df.columns:
+        return None
+    if not 0 <= index < len(lap.df):
+        return None
+    return float(lap.df[WALL_CLOCK_COLUMN].iloc[index])
 
 
 def _pedal_pct(value: float) -> float:
@@ -185,6 +202,11 @@ class TrackMap(QWidget):
 
 
 class TrackReplay(QWidget):
+    # The footage beside it has to start, stop and seek with the marker rather
+    # than run its own playback: one corner, one transport.
+    playbackToggled = Signal(bool)
+    scrubbed = Signal(float)  # wall clock the marker jumped to, out of sequence
+
     """Track map, transport controls, and the readout for the current instant."""
 
     cursorMoved = Signal(float)  # distance in metres
@@ -207,17 +229,33 @@ class TrackReplay(QWidget):
         self._note = QLabel()
         self._note.setWordWrap(True)
         self._note.hide()
-        self._legend = QLabel(
-            f'<span style="color:{theme.GREEN}">●</span> this lap'
-            f'    <span style="color:{theme.BLUE}">●</span> your best lap'
-        )
+        # Filled in per stretch: which laps these two colours stand for is
+        # not known until one is loaded, and it is never "your best lap"
+        # unless the driver picked their best lap.
+        self._legend = QLabel()
+        self._legend.setTextFormat(Qt.TextFormat.RichText)
+        self._legend.setWordWrap(True)
         self._legend.hide()
+        # The compared lap's number at this point on track, in the colour of
+        # the line and the dot it belongs to, so no legend has to be
+        # remembered to know whose speed this is.
+        self._ref_readout = QLabel()
+        self._ref_readout.setTextFormat(Qt.TextFormat.PlainText)
+        self._ref_readout.setStyleSheet(f"color: {theme.BLUE};")
+        self._ref_readout.hide()
 
         self._play = QPushButton("Play")
         self._play.setCheckable(True)
         self._play.toggled.connect(self._toggle)
         self._slider = QSlider(Qt.Orientation.Horizontal)
         self._slider.valueChanged.connect(self._seek)
+        # Only a hand on the slider re-anchors the footage. valueChanged also
+        # fires on every frame the timer advances, and seeking a media player
+        # thirty times a second stutters it for no gain.
+        self._slider.sliderMoved.connect(self._scrubbed_to)
+        self._slider.sliderReleased.connect(
+            lambda: self._scrubbed_to(self._slider.value())
+        )
 
         self._timer = QTimer(self)
         self._timer.setInterval(FRAME_MS)
@@ -232,6 +270,7 @@ class TrackReplay(QWidget):
         layout.addWidget(self._map, stretch=1)
         layout.addWidget(self._legend)
         layout.addWidget(self._readout)
+        layout.addWidget(self._ref_readout)
         layout.addWidget(self._note)
         layout.addLayout(controls)
 
@@ -252,10 +291,11 @@ class TrackReplay(QWidget):
         the two dots are always at the same place on the circuit and the gap
         between them is the thing being explained.
         """
-        self._play.setChecked(False)
+        self._play.setChecked(False)  # a new stretch starts paused at its beginning
         self._lap = lap
         self._reference = reference if reference is not lap else None
         self._map.set_reference(self._reference)
+        self._label_the_laps(lap)
         self._legend.setVisible(self._reference is not None and lap.has_track_map)
         self._note.setText(note)
         self._note.setVisible(bool(note))
@@ -269,9 +309,65 @@ class TrackReplay(QWidget):
             self._map.clear()
         self._update_readout(self._first)
 
+    def _label_the_laps(self, lap: Lap) -> None:
+        """Say which lap each colour on the map is, rather than which role it plays.
+
+        The legend used to read "your best lap" whatever lap was being compared,
+        because the session best was once the only reference there was. It is
+        now whichever lap the driver picked, and a blue line labelled as a best
+        lap that is not one is worse than a line with no label at all.
+        """
+        if self._reference is None:
+            self._legend.clear()
+            return
+        self._legend.setText(
+            f'<span style="color:{theme.GREEN}">●</span> this lap — '
+            f"{html.escape(lap_caption(lap))}<br>"
+            f'<span style="color:{theme.BLUE}">●</span> comparing with — '
+            f"{html.escape(lap_caption(self._reference))}"
+        )
+
     @property
     def playing(self) -> bool:
         return self._timer.isActive()
+
+    def set_transport_enabled(self, enabled: bool, *, reason: str = "") -> None:
+        """Offer Play only when both halves of the corner can start together.
+
+        A clip takes seconds to cut. Play during that wait started the marker
+        against a picture that was not loaded yet: it arrived paused at its own
+        first frame while the marker was already at the apex, so the corner
+        appeared to end early -- and the two halves were out of step for the
+        whole round, which is the one thing this window must not do.
+        """
+        self._play.setEnabled(enabled)
+        self._play.setToolTip(reason)
+
+    def wall_clock_at(self, index: int) -> float | None:
+        """When, in recorded wall clock, the driver was at this sample."""
+        return wall_clock_of(self._lap, index)
+
+    @property
+    def current_wall_clock(self) -> float | None:
+        return self.wall_clock_at(self._slider.value())
+
+    @property
+    def current_reference_wall_clock(self) -> float | None:
+        """When the reference lap was at the point on track the marker is at.
+
+        Matched by distance rather than by elapsed time: the two laps take
+        different times to reach the same corner, and it is the place that has
+        to agree if two pictures side by side are to show the same driving.
+        """
+        if self._lap is None or self._reference is None:
+            return None
+        index = self._reference_index(float(self._lap.df["dist"].iloc[self._slider.value()]))
+        return wall_clock_of(self._reference, index)
+
+    def _scrubbed_to(self, index: int) -> None:
+        moment = self.wall_clock_at(index)
+        if moment is not None:
+            self.scrubbed.emit(moment)
 
     def _toggle(self, on: bool) -> None:
         self._play.setText("Pause" if on else "Play")
@@ -281,19 +377,33 @@ class TrackReplay(QWidget):
             self._timer.start()
         else:
             self._timer.stop()
+        self.playbackToggled.emit(on)
 
     def _advance(self) -> None:
         """Step by the real time the driver took, so playback matches the drive."""
         if self._lap is None:
             return
+        if self._slider.value() >= self._last:
+            self._restart()  # one press replays the stretch until it is paused
+            return
         t = self._lap.df["t"]
         target = float(t.iloc[self._slider.value()]) + FRAME_MS / 1000.0
         index = int(t.searchsorted(target, side="left"))
-        if index >= self._last:
-            self._slider.setValue(self._last)
-            self._play.setChecked(False)  # stop at the end rather than looping
-            return
-        self._slider.setValue(index)
+        # Land on the stretch's own last sample before going round again: a
+        # corner whose final metres are never shown is not the corner under
+        # discussion, and nothing may run past the stretch it claims to be about.
+        self._slider.setValue(min(index, self._last))
+
+    def _restart(self) -> None:
+        """Back to the start of the stretch, bringing the footage with it.
+
+        The clip does not end where the corner does -- it carries a tail -- so a
+        marker that jumped back on its own would leave the picture running on
+        into the next corner, which is exactly the drift the shared transport
+        exists to prevent.
+        """
+        self._slider.setValue(self._first)
+        self._scrubbed_to(self._first)
 
     def _seek(self, index: int) -> None:
         self._map.set_cursor(index)
@@ -310,18 +420,37 @@ class TrackReplay(QWidget):
             f"   ·   brake {_pedal_pct(row['brake']):3.0f}%"
             f"   ·   gear {int(row['gear'])}"
         )
-        text += self._reference_readout(float(row["dist"]), float(row["speed"]))
         self._readout.setText(text)
+        self._show_reference_readout(float(row["dist"]), float(row["speed"]))
         self.cursorMoved.emit(float(row["dist"]))
 
-    def _reference_readout(self, distance: float, speed: float) -> str:
-        """The best lap at the same point on track, and the difference."""
+    def _reference_index(self, distance: float) -> int:
+        """The reference lap's sample at the same point on track."""
+        ref_dist = self._reference.df["dist"]
+        return int(min(ref_dist.searchsorted(distance, side="left"), len(ref_dist) - 1))
+
+    def _show_reference_readout(self, distance: float, speed: float) -> None:
+        """The compared lap at the same point on track, and the difference.
+
+        Named after the lap the number came from: "best lap here" was printed
+        against whichever lap was being compared, so two mid-session laps held
+        up against each other both reported a best lap that was neither of them.
+
+        Its own line rather than a tail on the driver's own numbers: the two
+        readings are of two different laps, and the colour saying which is
+        which only works if the colour covers the whole line.
+        """
         if self._reference is None:
             self._map.set_reference_cursor(None)
-            return ""
-        ref_dist = self._reference.df["dist"]
-        index = int(min(ref_dist.searchsorted(distance, side="left"), len(ref_dist) - 1))
+            self._ref_readout.clear()
+            self._ref_readout.hide()
+            return
+        index = self._reference_index(distance)
         self._map.set_reference_cursor(index)
         ref_speed = float(self._reference.df["speed"].iloc[index])
         delta = (speed - ref_speed) * 3.6
-        return f"      best lap here: {ref_speed * 3.6:5.1f} km/h  ({delta:+.1f})"
+        self._ref_readout.setText(
+            f"{self._reference.source.stem} here: "
+            f"{ref_speed * 3.6:5.1f} km/h  ({delta:+.1f})"
+        )
+        self._ref_readout.show()

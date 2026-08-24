@@ -194,7 +194,8 @@ def test_debrief_names_where_time_went_and_zooms_to_it(qtbot):
     view.set_context(slowest, session)
     view._ref_combo.setCurrentIndex(view._ref_combo.findData(best))
 
-    assert "off your best lap" in view._debrief_heading.text()
+    # Named after the lap it was compared with, whichever lap that is.
+    assert f"off {best.source.stem}" in view._debrief_heading.text()
     assert view._debrief_points  # still computed: it is what the coach narrates
 
     # The stretches are no longer listed under the sentence — the corner table

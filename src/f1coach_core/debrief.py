@@ -195,12 +195,28 @@ def corner_review_points(lap: Lap, reference: Lap | None = None) -> list[Debrief
 
 
 def debrief_summary(lap: Lap, reference: Lap, points: list[DebriefPoint]) -> str:
-    """One sentence a participant can act on, or an honest nothing-to-report."""
+    """One sentence a participant can act on, or an honest nothing-to-report.
+
+    Said of the lap actually compared against, which is whichever lap the driver
+    picked. It read "off your best lap" from the days when the session best was
+    the only reference on offer, and a sentence that calls a mid-session lap
+    their best one is wrong about the one fact it asserts.
+
+    Naming it also makes the other direction sayable: a lap can now be compared
+    with a slower one, and "-1.20 s off" is not something to hand a driver.
+    """
+    against = reference.source.stem
     total = lap.lap_time - reference.lap_time
+    if total > 0:
+        standing = f"{total:.2f} s off {against}"
+    elif total < 0:
+        standing = f"{-total:.2f} s quicker than {against}"
+    else:
+        standing = f"The same lap time as {against}"
     if not points:
-        if total <= 0:
-            return "This was your quickest lap of the session."
-        return f"{total:.2f} s off your best lap, spread evenly rather than at any one corner."
+        if total > 0:
+            return f"{standing}, spread evenly rather than at any one corner."
+        return f"{standing}, with no corner to pick out."
     accounted = sum(point.time_lost_s for point in points)
     corners = ", ".join(point.corner for point in points)
     if accounted > total:
@@ -208,10 +224,10 @@ def debrief_summary(lap: Lap, reference: Lap, points: list[DebriefPoint]) -> str
         # can cost more than the lap did, because the rest of it gave time back.
         # "16.68 s of it" against a 13.22 s deficit is arithmetic the reader can
         # see is impossible, and it discredits every other number on the screen.
+        # The same sentence covers a lap that was quicker overall and still lost
+        # time somewhere, which is what comparing with a slower lap looks like.
         return (
-            f"{total:.2f} s off your best lap. {corners} cost {accounted:.2f} s "
+            f"{standing}. {corners} cost {accounted:.2f} s "
             "between them, and the rest of the lap gave some of that back."
         )
-    return (
-        f"{total:.2f} s off your best lap. {accounted:.2f} s of it went at {corners}."
-    )
+    return f"{standing}. {accounted:.2f} s of it went at {corners}."

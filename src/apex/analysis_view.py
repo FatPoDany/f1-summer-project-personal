@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from apex import theme
+from apex.captions import lap_caption
 from apex.coach_panel import CoachPanel
 from apex.widgets.replay_window import ReplayWindow
 from apex.widgets.strip_stack import StripStack
@@ -256,7 +257,7 @@ class AnalysisView(QWidget):
         if self._session is not None and self._lap is not None:
             others = [lap for lap in self._session.laps if lap is not self._lap]
             for lap in others:
-                self._ref_combo.addItem(f"{lap.source.stem} · {lap.lap_time:.3f} s", lap)
+                self._ref_combo.addItem(lap_caption(lap), lap)
             # Every non-best lap opens against the session best so its debrief is
             # immediately useful. The best lap stays a single-lap technique review:
             # comparing it to a slower lap would create a different context from
@@ -392,6 +393,10 @@ class AnalysisView(QWidget):
         directory = self._session_dir()
         return session_recording(directory) if directory is not None else None
 
+    def _recording_of(self, lap: Lap | None):
+        """The recording behind whichever session a lap was driven in."""
+        return session_recording(lap.source.parent) if lap is not None else None
+
     def _clips_dir(self) -> Path:
         """Beside the laps, so clips travel with the session they explain."""
         directory = self._session_dir()
@@ -434,6 +439,10 @@ class AnalysisView(QWidget):
             advice=self._advice,
             advice_complete=self._advice_complete,
             recording=self._session_recording(),
+            # The compared lap's footage comes from its own session's recording:
+            # normally the same file, and named per lap so it stays right if a
+            # reference ever comes from somewhere else.
+            reference_recording=self._recording_of(self._reference),
             clips_dir=self._clips_dir(),
         )
 

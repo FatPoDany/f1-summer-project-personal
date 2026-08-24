@@ -342,3 +342,42 @@ class _Bytes:
 
     def read(self):
         return self._data
+
+
+def test_an_interrupted_cut_leaves_nothing_under_the_clip_name(ffmpeg, tmp_path):
+    """A short file named like a finished clip cannot be told from one.
+
+    Apex being killed mid-cut left exactly that -- two of them, found on disk
+    with the crash that made them -- and from then on those corners played a
+    picture that stopped before the corner did, with nothing to say why.
+    """
+    recording = sc.Recording(tmp_path / "session.mp4", started_at=1000.0, duration_s=600.0)
+    destination = tmp_path / "clip.mp4"
+
+    def runner(command, **kwargs):
+        written = Path(command[command.index("-y") + 1])
+        assert written != destination, "ffmpeg must not write the clip's own name"
+        # ffmpeg picks the container from the extension, so it has to survive.
+        assert written.suffix == destination.suffix
+        written.write_bytes(b"half a clip")
+        return subprocess.CompletedProcess(command, 255, b"", b"killed")
+
+    with pytest.raises(sc.RecordingError):
+        sc.cut_clip(recording, 1100.0, 1108.0, destination, runner=runner)
+
+    assert not destination.exists()
+    assert list(tmp_path.glob("*.part.mp4")) == []  # and nothing left lying around
+
+
+def test_a_finished_cut_is_moved_into_place_whole(ffmpeg, tmp_path):
+    """So a clip on disk under its own name is that clip, cut in full."""
+    recording = sc.Recording(tmp_path / "session.mp4", started_at=1000.0, duration_s=600.0)
+    destination = tmp_path / "clip.mp4"
+
+    def runner(command, **kwargs):
+        Path(command[command.index("-y") + 1]).write_bytes(b"the whole clip")
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    assert sc.cut_clip(recording, 1100.0, 1108.0, destination, runner=runner) == destination
+    assert destination.read_bytes() == b"the whole clip"
+    assert list(tmp_path.glob("*.part.mp4")) == []

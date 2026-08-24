@@ -310,6 +310,19 @@ class ScreenRecorder:
         )
 
 
+def clip_start_offset(
+    recording: "Recording", from_wall_clock: float, *, lead_s: float = CLIP_LEAD_S
+) -> float:
+    """Where in the recording a clip of this stretch begins.
+
+    Exposed rather than inlined because a player has to answer the reverse
+    question -- which moment of the clip a point on track is -- and near the
+    start of a recording the lead is truncated. Assuming a fixed lead there puts
+    the marker seconds away from the picture it is supposed to explain.
+    """
+    return max(0.0, recording.offset_of(from_wall_clock) - lead_s)
+
+
 def cut_clip(
     recording: Recording,
     from_wall_clock: float,
@@ -331,13 +344,20 @@ def cut_clip(
     if binary is None:
         raise RecordingError("No ffmpeg with this install, so no clip can be cut.")
 
-    start = max(0.0, recording.offset_of(from_wall_clock) - lead_s)
+    start = clip_start_offset(recording, from_wall_clock, lead_s=lead_s)
     end = recording.offset_of(to_wall_clock) + tail_s
     if end <= start:
         raise RecordingError("That stretch is not inside the recording.")
 
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
+    # Cut beside the clip and moved into place once ffmpeg is done. An
+    # interrupted cut -- Apex killed, the machine asleep -- otherwise leaves a
+    # short file under the name of a finished one, and from then on that corner
+    # plays a picture that stops before the corner does with nothing to say why.
+    # Keeping the real extension: ffmpeg chooses the container from it, and a
+    # bare ".part" is a format it has never heard of.
+    partial = destination.with_name(f"{destination.stem}.part{destination.suffix}")
     command = [
         str(binary),
         "-hide_banner",
@@ -362,12 +382,14 @@ def cut_clip(
         "yuv420p",
         "-an",  # the recording has no audio, and the study is not about sound
         "-y",
-        str(destination),
+        str(partial),
     ]
     completed = runner(command, capture_output=True, **_no_console_window())
-    if completed.returncode != 0 or not destination.is_file():
+    if completed.returncode != 0 or not partial.is_file():
+        partial.unlink(missing_ok=True)
         detail = (getattr(completed, "stderr", b"") or b"").decode("utf-8", "replace")
         raise RecordingError(f"Could not cut the clip: {detail.strip()[:200]}")
+    os.replace(partial, destination)
     return destination
 
 

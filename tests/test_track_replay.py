@@ -12,7 +12,7 @@ from f1coach_core import DebriefPoint, Lap
 from sample_laps import lap_without_position
 
 
-def _positioned_lap() -> Lap:
+def _positioned_lap(source: str = "lap.csv") -> Lap:
     """A lap carrying world position, as a real capture does.
 
     Synthesised rather than read from a captured run so the test runs anywhere,
@@ -35,7 +35,7 @@ def _positioned_lap() -> Lap:
                 "y": 120.0 * np.sin(angle),
             }
         ),
-        Path("lap.csv"),
+        Path(source),
         schema_version=1,
         dist_derived=False,
     )
@@ -85,7 +85,13 @@ def test_playback_advances_by_the_time_the_driver_actually_took(qtbot):
     assert after - before == pytest.approx(0.033, abs=0.03)
 
 
-def test_playback_stops_at_the_end_rather_than_looping(qtbot):
+def test_playback_goes_round_again_rather_than_stopping_at_the_end(qtbot):
+    """One press replays the stretch until it is paused.
+
+    A corner is watched several times over before anything about it sinks in,
+    and a few seconds of footage that stopped dead each round made the
+    participant reach for the button instead of the driving.
+    """
     lap = _positioned_lap()
     view = TrackReplay()
     qtbot.addWidget(view)
@@ -96,8 +102,13 @@ def test_playback_stops_at_the_end_rather_than_looping(qtbot):
     view._slider.setValue(view._last - 1)
     view._advance()
 
-    assert view._slider.value() == view._last
-    assert not view.playing
+    assert view._slider.value() == view._last  # the stretch's last metres are shown
+    assert view.playing
+
+    view._advance()
+
+    assert view._slider.value() == view._first
+    assert view.playing
 
 
 def test_a_lap_without_position_says_so_instead_of_drawing_nothing(qtbot):
@@ -144,3 +155,37 @@ def test_a_pedal_reads_as_its_travel_not_the_raw_command(qtbot):
     assert "throttle 100%" in view._readout.text()
     # The recorded value itself is untouched.
     assert lap.df["throttle"].max() == pytest.approx(1.253)
+
+
+def test_the_legend_and_the_readout_name_the_lap_being_compared_with(qtbot):
+    """The blue line is whichever lap the driver picked, not their best one.
+
+    Both said "best lap" whatever they were handed, because the session best was
+    once the only reference on offer. A driver comparing two mid-session laps
+    was reading a label for a lap that was not on the screen.
+    """
+    lap = _positioned_lap("lap07.csv")
+    reference = _positioned_lap("lap02.csv")
+    view = TrackReplay()
+    qtbot.addWidget(view)
+
+    view.set_stretch(lap, 500.0, 950.0, "T1", reference=reference)
+
+    legend = view._legend.text()
+    assert "lap07" in legend and "lap02" in legend  # both colours are accounted for
+    assert "best lap" not in legend
+    assert view._ref_readout.text().startswith("lap02 here:")
+    assert "km/h" in view._ref_readout.text()
+    assert "best lap" not in view._readout.text()
+
+
+def test_a_replay_with_nothing_to_compare_claims_no_second_lap(qtbot):
+    """No reference means no blue line, so nothing may be labelled as one."""
+    view = TrackReplay()
+    qtbot.addWidget(view)
+
+    view.set_stretch(_positioned_lap(), 500.0, 950.0, "T1")
+
+    assert view._legend.text() == ""
+    assert not view._ref_readout.isVisibleTo(view)
+    assert view._ref_readout.text() == ""

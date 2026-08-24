@@ -103,10 +103,24 @@ def test_the_largest_gap_relative_to_its_own_threshold_is_the_one_shown():
     assert "Braked" in ranked[1][1]
 
 
-def test_summary_states_the_quickest_lap_plainly():
+def test_the_summary_names_the_lap_it_was_actually_compared_against():
+    """The reference is whichever lap the driver picked, not always their best.
+
+    It used to say "off your best lap" whatever it had been handed, so a driver
+    comparing two mid-session laps was told one of them was their best.
+    """
     session = load_sample_session()
     best = session.best_lap
-    assert debrief_summary(best, best, []) == "This was your quickest lap of the session."
+    slowest = max(session.laps, key=lambda lap: lap.lap_time)
+    middling = min(
+        (lap for lap in session.laps if lap is not best and lap is not slowest),
+        key=lambda lap: lap.lap_time,
+    )
+
+    summary = debrief_summary(slowest, middling, lap_debrief(slowest, middling))
+
+    assert middling.source.stem in summary
+    assert "best lap" not in summary
 
 
 def test_summary_names_the_corners_it_accounted_for():
@@ -117,9 +131,26 @@ def test_summary_names_the_corners_it_accounted_for():
     points = lap_debrief(slowest, best)
     summary = debrief_summary(slowest, best, points)
 
-    assert "off your best lap" in summary
+    assert f"off {best.source.stem}" in summary
     for point in points:
         assert point.corner in summary
+
+
+def test_a_lap_quicker_than_its_reference_is_not_reported_as_a_loss():
+    """Any lap can be the reference now, including a slower one.
+
+    Held against a slower lap, the deficit is negative, and "-1.20 s off" is
+    arithmetic dressed as a finding rather than something to hand a driver.
+    """
+    session = load_sample_session()
+    best = session.best_lap
+    slowest = max(session.laps, key=lambda lap: lap.lap_time)
+
+    summary = debrief_summary(best, slowest, [])
+
+    assert summary.startswith(f"{slowest.lap_time - best.lap_time:.2f} s quicker than")
+    assert slowest.source.stem in summary
+    assert " off " not in summary
 
 
 def test_a_summary_never_claims_more_loss_than_the_lap_had():
@@ -139,10 +170,11 @@ def test_a_summary_never_claims_more_loss_than_the_lap_had():
         )
 
     class FakeLap:
-        def __init__(self, lap_time):
+        def __init__(self, lap_time, stem="lap"):
             self.lap_time = lap_time
+            self.source = Path(f"{stem}.csv")
 
-    lap, best = FakeLap(113.22), FakeLap(100.0)  # 13.22 s off
+    lap, best = FakeLap(113.22, "lap07"), FakeLap(100.0, "lap02")  # 13.22 s off
     over = debrief_summary(lap, best, [point("T2", 8.0), point("T10", 8.68)])
 
     assert "of it went at" not in over

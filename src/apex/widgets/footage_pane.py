@@ -9,6 +9,7 @@ Cutting a clip is ffmpeg work, so it happens off the GUI thread. A participant
 clicking between corners must not be waiting on an encoder.
 """
 
+import hashlib
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
@@ -16,7 +17,28 @@ from PySide6.QtWidgets import QLabel, QStackedWidget, QVBoxLayout, QWidget
 
 from apex import theme
 from f1coach_core.footage import Window
-from racecoach.telemetry.screen_capture import Recording, RecordingError, cut_clip
+from racecoach.telemetry.screen_capture import (
+    Recording,
+    RecordingError,
+    clip_start_offset,
+    cut_clip,
+)
+
+
+def clip_path(clips_dir: Path, index: int, recording: Recording, window: Window) -> Path:
+    """Where the clip of one stretch belongs, named after what is inside it.
+
+    The position in the list is not an identity. A session keeps one `clips`
+    folder for all of its laps, and corner three of a technique review is not
+    corner three of a comparison -- different laps, different spans, different
+    seconds of footage, all previously written to `stretch-03.mp4`. Whoever cut
+    last decided what everyone else was shown. The wall-clock bounds are what
+    actually decide the contents, so they decide the name, and a clip already on
+    disk under that name is the right one by construction.
+    """
+    key = f"{recording.path}|{window.from_wall_clock:.3f}|{window.to_wall_clock:.3f}"
+    digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:10]
+    return clips_dir / f"stretch-{index:02d}-{digest}.mp4"
 
 
 def video_support() -> tuple[type, type] | None:
@@ -77,15 +99,31 @@ class _ClipTask(QRunnable):
 class FootagePane(QWidget):
     """Plays the clip of one stretch, or says plainly why it cannot."""
 
+    # Cutting takes seconds, and a corner cannot be played back until it is
+    # done. The transport beside it hears about that rather than offering a Play
+    # button that starts the marker against a picture which is not there yet.
+    busyChanged = Signal(bool)
+
     def __init__(self, parent: QWidget | None = None, *, pool: QThreadPool | None = None):
         super().__init__(parent)
         self._pool = pool or QThreadPool.globalInstance()
         self._token: object | None = None
-        # The pool owns the runnable, but its signals are a Python object: let
-        # this go and the task can be collected before ffmpeg is even started,
-        # leaving the pane saying "Preparing…" about a clip nobody is cutting.
-        self._task: _ClipTask | None = None
-        self._clips: dict[int, str] = {}  # cut once per stretch, then reused
+        # Every task this pane has ever started. The pool owns the C++ runnable,
+        # but its signals are a Python object: drop the last reference to one
+        # that is still cutting -- which keeping only the newest task did, the
+        # moment a participant moved to the next corner -- and the interpreter
+        # frees an object ffmpeg's thread is still inside. That is not an
+        # exception, it is an access violation, and it takes Apex with it. They
+        # are a few hundred bytes each and a session has tens of corners.
+        self._tasks: list[_ClipTask] = []
+        # What the clip on screen is of, so a moment on track can be turned into
+        # a position in it.
+        self._recording: Recording | None = None
+        self._window: Window | None = None
+        # What the transport asked for, which is not always what Qt is doing.
+        self._running = False
+        self._working = False
+        self._rate = 1.0
 
         self._message = QLabel()
         self._message.setWordWrap(True)
@@ -108,23 +146,37 @@ class FootagePane(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._stack)
-        self.setMinimumWidth(320)
+        # Narrow enough that two of these fit side by side in a comparison.
+        self.setMinimumWidth(260)
         self.setStyleSheet(f"border: 1px solid {theme.NEUTRAL};")
         self._say("Open a stretch to see its footage.")
 
     # -- state -------------------------------------------------------------
 
+    @property
+    def busy(self) -> bool:
+        """Whether a clip is being cut for the stretch now on screen."""
+        return self._working
+
     def clear(self) -> None:
         self._token = None
         self._stop()
+        self._busy(False)
         self._say("Open a stretch to see its footage.")
 
     def show_stretch(
         self, index: int, recording: Recording | None, window: Window | None, clips_dir: Path
     ) -> None:
-        """Show the footage for one stretch, cutting it if this is the first time."""
+        """Show the footage for one stretch, cutting it if this is the first time.
+
+        Loaded paused. The replay beside it owns the transport: two players each
+        starting on their own is what made the picture and the track marker show
+        different moments of the same corner.
+        """
         self._token = token = object()
         self._stop()
+        self._busy(False)  # whatever was being cut is no longer what is on screen
+        self._recording, self._window = recording, window
 
         if self._player is None:
             self._say(
@@ -147,42 +199,107 @@ class FootagePane(QWidget):
             )
             return
 
-        existing = self._clips.get(index)
-        if existing and Path(existing).is_file():
-            self._play(existing)
+        destination = clip_path(clips_dir, index, recording, window)
+        if destination.is_file():
+            # Named after its own bounds and moved into place whole, so a file
+            # under this name is this stretch, cut in full, whichever run cut it.
+            self._play(str(destination))
             return
 
         self._say("Preparing the footage of this stretch…")
-        task = _ClipTask(recording, window, clips_dir / f"stretch-{index:02d}.mp4")
-        task.signals.ready.connect(
-            lambda path, t=token, i=index: self._clip_ready(t, i, path)
-        )
+        self._busy(True)
+        task = _ClipTask(recording, window, destination)
+        # The pool must not delete it out from under the reference kept below.
+        task.setAutoDelete(False)
+        task.signals.ready.connect(lambda path, t=token: self._clip_ready(t, path))
         task.signals.failed.connect(lambda message, t=token: self._clip_failed(t, message))
-        self._task = task
+        self._tasks.append(task)
         self._pool.start(task)
 
     # -- outcomes ----------------------------------------------------------
 
-    def _clip_ready(self, token: object, index: int, path: str) -> None:
-        self._clips[index] = path
+    def _clip_ready(self, token: object, path: str) -> None:
         if token is not self._token:
-            return  # the participant moved on; the clip is kept for next time
-        self._play(path)
+            return  # the participant moved on; the clip keeps until they return
+        try:
+            self._busy(False)
+            self._play(path)
+        except RuntimeError:
+            pass  # the review closed while ffmpeg worked; Qt has taken the pane
 
     def _clip_failed(self, token: object, message: str) -> None:
         if token is not self._token:
             return
-        self._say(f"The footage of this stretch could not be prepared. {message}")
+        try:
+            self._busy(False)
+            self._say(f"The footage of this stretch could not be prepared. {message}")
+        except RuntimeError:
+            pass
+
+    def _busy(self, working: bool) -> None:
+        if working != self._working:
+            self._working = working
+            self.busyChanged.emit(working)
 
     def _play(self, path: str) -> None:
+        """Load the clip and hold it at the start, ready for the transport."""
         from PySide6.QtCore import QUrl
 
         self._stack.setCurrentWidget(self._video)
         self._player.setSource(QUrl.fromLocalFile(str(Path(path).resolve())))
-        self._player.setLoops(-1)  # a few seconds of corner, watched over and over
-        self._player.play()
+        self._player.setPlaybackRate(self._rate)
+        self._player.pause()
+
+    # -- transport, driven by the replay beside it -------------------------
+
+    def set_rate(self, rate: float) -> None:
+        """How fast this clip must run to keep step with the marker beside it.
+
+        One for the lap being replayed, whose marker advances by the time the
+        driver actually took. Not one for a lap being compared with it: that
+        driver was somewhere else at every moment, and its picture has to cover
+        its own seconds of the corner in the time this one takes.
+        """
+        self._rate = rate
+        if self._player is not None:
+            self._player.setPlaybackRate(rate)
+
+    def position_ms_for(self, wall_clock: float) -> int | None:
+        """Where in the loaded clip a moment on track is, in milliseconds.
+
+        None when nothing is loaded or the stretch could not be placed, which is
+        the same answer as "there is no picture to line up with".
+        """
+        if self._recording is None or self._window is None:
+            return None
+        start = clip_start_offset(self._recording, self._window.from_wall_clock)
+        return max(0, int((self._recording.offset_of(wall_clock) - start) * 1000))
+
+    def seek_to(self, wall_clock: float) -> None:
+        position = self.position_ms_for(wall_clock)
+        if self._player is None or position is None:
+            return
+        self._player.setPosition(position)
+        # A clip whose tail was cut short by the end of the recording runs out as
+        # the corner does, and Qt stops the player there. Seeking a stopped
+        # player leaves the picture frozen for every later round of the replay,
+        # so ask again for what the transport is already doing; asking a playing
+        # player to play is nothing.
+        if self._running:
+            self._player.play()
+
+    def resume(self) -> None:
+        self._running = True
+        if self._player is not None and self._player.source().isValid():
+            self._player.play()
+
+    def pause(self) -> None:
+        self._running = False
+        if self._player is not None:
+            self._player.pause()
 
     def _stop(self) -> None:
+        self._running = False
         if self._player is not None:
             self._player.stop()
 

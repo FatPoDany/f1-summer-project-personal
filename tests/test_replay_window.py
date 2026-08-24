@@ -1,7 +1,12 @@
 
 
-def _positioned_lap(seconds, offset=0.0, driver="A001"):
-    """A lap with world position, shifted sideways so two lines differ visibly."""
+def _positioned_lap(seconds, offset=0.0, driver="A001", wall_clock=False,
+                    source="lap.csv"):
+    """A lap with world position, shifted sideways so two lines differ visibly.
+
+    ``wall_clock`` adds the channel a real capture stamps on every sample, which
+    is what lines the marker up with the footage.
+    """
     from pathlib import Path
 
     import numpy as np
@@ -23,8 +28,13 @@ def _positioned_lap(seconds, offset=0.0, driver="A001"):
             "gear": np.full(n, 4),
             "x": 100 * np.cos(angle) + offset,
             "y": 100 * np.sin(angle),
+            **(
+                {"wall_clock_s": 1_700_000_000.0 + np.linspace(0.0, seconds, n)}
+                if wall_clock
+                else {}
+            ),
         }),
-        Path("lap.csv"),
+        Path(source),
         schema_version=1,
         dist_derived=False,
     )
@@ -50,7 +60,7 @@ def test_the_reference_line_is_drawn_so_the_difference_is_visible(qtbot):
         _positioned_lap(20.0), _point(), reference=_positioned_lap(18.0, offset=8.0)
     )
 
-    assert window._replay._map._ref_x  # the best lap's path is on the map
+    assert window._replay._map._ref_x  # the compared lap's path is on the map
     assert window._replay._legend.isVisibleTo(window)
 
 
@@ -268,3 +278,292 @@ def test_the_measurement_stays_on_screen_beneath_the_words(qtbot):
     window.show_stretch(_positioned_lap(20.0), _point())
 
     assert "118 m" in window._measured.text()
+
+
+def test_one_play_button_drives_both_halves_of_the_corner(qtbot):
+    """The picture and the marker are two views of one moment, so one transport.
+
+    They used to be two players: the clip started itself as soon as ffmpeg was
+    done and looped for ever, while the marker waited on its own Play button and
+    stopped at the end. Whatever the participant did, the two showed different
+    parts of the same corner.
+    """
+    from apex.widgets.replay_window import ReplayWindow
+
+    lap = _positioned_lap(20.0, wall_clock=True)
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+    window.show_stretch(lap, _point())
+    moves = []
+    window._footage.resume = lambda: moves.append("resume")
+    window._footage.pause = lambda: moves.append("pause")
+    window._footage.seek_to = lambda w: moves.append(("seek", round(w, 3)))
+
+    window._replay._play.setChecked(True)
+    assert window._replay.playing
+    # Anchored before it runs, so the picture starts on the marker's moment.
+    assert moves[-2:] == [("seek", round(window._replay.current_wall_clock, 3)), "resume"]
+
+    window._replay._play.setChecked(False)
+    assert not window._replay.playing
+    assert moves[-1] == "pause"
+
+
+def test_dragging_the_slider_moves_the_footage_with_it(qtbot):
+    """Scrubbing the marker has to scrub the picture, not just the track."""
+    from apex.widgets.replay_window import ReplayWindow
+
+    lap = _positioned_lap(20.0, wall_clock=True)
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+    window.show_stretch(lap, _point())
+    seeks = []
+    window._footage.seek_to = seeks.append
+
+    target = (window._replay._first + window._replay._last) // 2
+    window._replay._slider.setValue(target)
+    window._replay._slider.sliderMoved.emit(target)
+
+    assert seeks == [window._replay.wall_clock_at(target)]
+
+
+def test_going_round_again_takes_the_footage_back_with_it(qtbot):
+    """The clip outlasts the corner, so looping the marker alone would drift.
+
+    Playback repeats until it is paused; on each round the picture has to be put
+    back to the corner's start, or the second time through shows the marker at
+    the turn-in and the footage already down the following straight.
+    """
+    from apex.widgets.replay_window import ReplayWindow
+
+    lap = _positioned_lap(20.0, wall_clock=True)
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+    window.show_stretch(lap, _point())
+    seeks = []
+    window._footage.seek_to = seeks.append
+    window._footage.resume = lambda: None
+
+    window._replay._play.setChecked(True)
+    window._replay._slider.setValue(window._replay._last)
+    seeks.clear()  # the anchor taken when playback started
+    window._replay._advance()  # the round ends here
+
+    assert window._replay._slider.value() == window._replay._first
+    assert window._replay.playing
+    assert seeks == [window._replay.wall_clock_at(window._replay._first)]
+
+
+def test_a_lap_without_the_clock_still_plays_but_anchors_nothing(qtbot):
+    """It cannot be lined up with footage, and must not pretend to be."""
+    from apex.widgets.replay_window import ReplayWindow
+
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+    window.show_stretch(_positioned_lap(20.0), _point())  # no wall clock
+    moves = []
+    window._footage.resume = lambda: moves.append("resume")
+    window._footage.seek_to = lambda w: moves.append(("seek", w))
+
+    window._replay._play.setChecked(True)
+
+    assert window._replay.playing  # the marker still runs
+    assert moves == ["resume"]  # but nothing claims to know where the picture is
+
+
+def _recording(tmp_path, started_at=1_699_999_990.0):
+    from racecoach.telemetry.screen_capture import Recording
+
+    return Recording(path=tmp_path / "session.mp4", started_at=started_at, duration_s=600.0)
+
+
+def _cut_into(monkeypatch, tmp_path):
+    """Make clip cutting instant, and hand back what was written where."""
+    from apex.widgets import footage_pane
+
+    def cut(_recording, _from, _to, destination):
+        from pathlib import Path as _Path
+
+        _Path(destination).write_bytes(b"clip")
+        return _Path(destination)
+
+    monkeypatch.setattr(footage_pane, "cut_clip", cut)
+
+
+def test_play_waits_until_the_footage_of_the_corner_is_cut(qtbot, tmp_path, monkeypatch):
+    """Otherwise the marker runs against a picture that is not loaded yet.
+
+    The clip arrives paused at its own first frame while the marker is already
+    at the apex, so the corner looks like it ended early -- and the two halves
+    are out of step for the whole round.
+    """
+    from apex.widgets.replay_window import ReplayWindow
+
+    _cut_into(monkeypatch, tmp_path)
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+    played = []
+    window._footage._play = played.append
+
+    window.show_stretch(
+        _positioned_lap(20.0, wall_clock=True),
+        _point(),
+        recording=_recording(tmp_path),
+        clips_dir=tmp_path,
+    )
+
+    assert not window._replay._play.isEnabled()  # a clip is being cut
+    assert "still being cut" in window._replay._play.toolTip()
+
+    qtbot.waitUntil(lambda: len(played) == 1, timeout=5000)
+
+    assert window._replay._play.isEnabled()
+    assert window._replay._play.toolTip() == ""
+
+
+def test_a_comparison_shows_the_other_lap_beside_this_one(qtbot, tmp_path, monkeypatch):
+    """One picture shows a corner going badly; the pair shows what to do instead."""
+    from apex.widgets.replay_window import ReplayWindow
+
+    _cut_into(monkeypatch, tmp_path)
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+    mine, theirs = [], []
+    window._footage._play = mine.append
+    window._ref_footage._play = theirs.append
+
+    window.show_stretch(
+        _positioned_lap(20.0, wall_clock=True),
+        _point(),
+        reference=_positioned_lap(18.0, offset=8.0, wall_clock=True),
+        recording=_recording(tmp_path),
+        reference_recording=_recording(tmp_path),
+        clips_dir=tmp_path,
+    )
+
+    assert window._ref_showing
+    assert window._ref_column.isVisibleTo(window)
+    qtbot.waitUntil(lambda: len(mine) == 1 and len(theirs) == 1, timeout=5000)
+    # Two laps, two stretches of recording, two files: the clip of one lap's
+    # corner must never be handed to the other.
+    assert mine != theirs
+
+
+def test_a_single_lap_review_keeps_the_second_picture_out_of_the_way(qtbot, tmp_path):
+    """There is no other lap, so there is nothing honest to put beside it."""
+    from apex.widgets.replay_window import ReplayWindow
+
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+
+    window.show_stretch(_positioned_lap(20.0, wall_clock=True), _point())
+
+    assert not window._ref_showing
+    assert not window._ref_column.isVisibleTo(window)
+
+
+def test_the_compared_lap_is_shown_at_the_same_place_not_the_same_moment(qtbot):
+    """The two drove the corner at different times; it is the place that matches.
+
+    Anchoring the second picture by elapsed time would put it at a point on
+    track the marker is not at, which is the one thing two pictures side by side
+    must never do.
+    """
+    from apex.widgets.replay_window import ReplayWindow
+
+    lap = _positioned_lap(20.0, wall_clock=True)
+    reference = _positioned_lap(18.0, offset=8.0, wall_clock=True)
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+    window.show_stretch(lap, _point(), reference=reference)
+    window._ref_showing = True  # as a comparison with footage on both sides
+    seeks = []
+    for pane in (window._footage, window._ref_footage):
+        pane.resume = lambda: None
+    window._footage.seek_to = lambda w: seeks.append(("mine", w))
+    window._ref_footage.seek_to = lambda w: seeks.append(("theirs", w))
+
+    window._replay._play.setChecked(True)
+
+    marker = window._replay._slider.value()
+    distance = float(lap.df["dist"].iloc[marker])
+    matched = int(reference.df["dist"].searchsorted(distance, side="left"))
+    assert seeks == [
+        ("mine", float(lap.df["wall_clock_s"].iloc[marker])),
+        ("theirs", float(reference.df["wall_clock_s"].iloc[matched])),
+    ]
+
+
+def test_the_compared_lap_runs_at_the_speed_that_keeps_it_alongside(qtbot, tmp_path, monkeypatch):
+    """Real time would leave the second picture a corner behind the first.
+
+    The two drivers took different times through the same metres -- 6.6 s and
+    14.7 s at Turn 7 of the baseline session -- and the track map has always
+    moved the second marker by distance to match. The picture follows the dot.
+    """
+    import pytest
+
+    from apex.widgets.replay_window import ReplayWindow, _matched_rate
+    from f1coach_core.footage import Window
+
+    assert _matched_rate(Window(0.0, 6.6), Window(0.0, 14.7)) == pytest.approx(2.227, abs=1e-3)
+    assert _matched_rate(Window(0.0, 14.7), Window(0.0, 6.6)) == pytest.approx(0.449, abs=1e-3)
+    assert _matched_rate(Window(0.0, 6.6), None) == 1.0  # nothing to match
+    assert _matched_rate(Window(0.0, 0.0), Window(0.0, 6.6)) == 1.0  # and no dividing by it
+    assert _matched_rate(Window(0.0, 1.0), Window(0.0, 90.0)) == 4.0  # clamped, not stuttering
+
+    _cut_into(monkeypatch, tmp_path)
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+    rates = []
+    window._ref_footage.set_rate = rates.append
+    window._footage._play = lambda _path: None
+    window._ref_footage._play = lambda _path: None
+
+    window.show_stretch(
+        _positioned_lap(20.0, wall_clock=True),
+        _point(),
+        reference=_positioned_lap(10.0, offset=8.0, wall_clock=True),  # half the time
+        recording=_recording(tmp_path),
+        reference_recording=_recording(tmp_path),
+        clips_dir=tmp_path,
+    )
+
+    assert rates and rates[-1] == pytest.approx(0.5, abs=0.02)
+
+
+def test_the_two_pictures_are_captioned_with_the_laps_they_are_of(qtbot):
+    """"this lap" and "the lap you are comparing with" name roles, not laps.
+
+    Which two laps a review was of had to be carried over in the driver's head
+    from the picker on the analysis screen, and a window left open beside
+    another one said nothing at all about which comparison it was showing.
+    """
+    from apex.widgets.replay_window import ReplayWindow
+
+    lap = _positioned_lap(20.0, source="lap07.csv")
+    reference = _positioned_lap(18.0, offset=8.0, source="lap02.csv")
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+
+    window.show_stretch(lap, _point(), reference=reference)
+
+    assert "lap07" in window._footage_caption.text()
+    assert "lap02" in window._ref_caption.text()
+    assert "best lap" not in window._ref_caption.text()
+    # And the same two laps on the window itself, in the same words.
+    assert "lap07" in window.windowTitle() and "lap02" in window.windowTitle()
+
+
+def test_a_single_lap_review_names_the_one_lap_it_has(qtbot):
+    """Nothing to compare with, so nothing may be named as the comparison."""
+    from apex.widgets.replay_window import ReplayWindow
+
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+
+    window.show_stretch(_positioned_lap(20.0, source="lap07.csv"), _point())
+
+    assert "lap07" in window._footage_caption.text()
+    assert "lap07" in window.windowTitle()
+    assert "vs" not in window.windowTitle()
