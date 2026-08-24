@@ -396,8 +396,19 @@ def test_play_waits_until_the_footage_of_the_corner_is_cut(qtbot, tmp_path, monk
     The clip arrives paused at its own first frame while the marker is already
     at the apex, so the corner looks like it ended early -- and the two halves
     are out of step for the whole round.
+
+    Only a build with a player ever waits. Without one, ``show_stretch`` says so
+    and returns before anything is cut, so Play is offered at once and there is
+    no wait to assert -- which is the right behaviour, not a bug this should
+    fail over.
     """
+    import pytest
+
+    from apex.widgets import footage_pane
     from apex.widgets.replay_window import ReplayWindow
+
+    if footage_pane.video_support() is None:
+        pytest.skip("this build has no Qt multimedia, so nothing is ever cut")
 
     _cut_into(monkeypatch, tmp_path)
     window = ReplayWindow()
@@ -422,8 +433,48 @@ def test_play_waits_until_the_footage_of_the_corner_is_cut(qtbot, tmp_path, monk
 
 
 def test_a_comparison_shows_the_other_lap_beside_this_one(qtbot, tmp_path, monkeypatch):
-    """One picture shows a corner going badly; the pair shows what to do instead."""
+    """One picture shows a corner going badly; the pair shows what to do instead.
+
+    The column is put there by the two laps and their two recordings, not by
+    the player that fills it, so this holds in a build that cannot show video
+    and is checked separately from what gets played into it.
+    """
     from apex.widgets.replay_window import ReplayWindow
+
+    _cut_into(monkeypatch, tmp_path)
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+
+    window.show_stretch(
+        _positioned_lap(20.0, wall_clock=True),
+        _point(),
+        reference=_positioned_lap(18.0, offset=8.0, wall_clock=True),
+        recording=_recording(tmp_path),
+        reference_recording=_recording(tmp_path),
+        clips_dir=tmp_path,
+    )
+
+    assert window._ref_showing
+    assert window._ref_column.isVisibleTo(window)
+
+
+def test_each_lap_of_a_comparison_is_played_its_own_clip(qtbot, tmp_path, monkeypatch):
+    """Two laps, two stretches of recording, two files.
+
+    One lap's corner handed to the other is the failure nobody catches by
+    looking: both pictures move, both show a car in a corner, and only the
+    numbers underneath ever disagree.
+
+    Needs a build with a player: without one nothing is cut and nothing is
+    played, so there are no two clips to keep apart.
+    """
+    import pytest
+
+    from apex.widgets import footage_pane
+    from apex.widgets.replay_window import ReplayWindow
+
+    if footage_pane.video_support() is None:
+        pytest.skip("this build has no Qt multimedia, so nothing is ever cut")
 
     _cut_into(monkeypatch, tmp_path)
     window = ReplayWindow()
@@ -441,11 +492,7 @@ def test_a_comparison_shows_the_other_lap_beside_this_one(qtbot, tmp_path, monke
         clips_dir=tmp_path,
     )
 
-    assert window._ref_showing
-    assert window._ref_column.isVisibleTo(window)
     qtbot.waitUntil(lambda: len(mine) == 1 and len(theirs) == 1, timeout=5000)
-    # Two laps, two stretches of recording, two files: the clip of one lap's
-    # corner must never be handed to the other.
     assert mine != theirs
 
 
