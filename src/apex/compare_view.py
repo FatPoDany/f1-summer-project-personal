@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from apex import theme
+from apex.captions import reference_caption
 from f1coach_core import Lap, Session, corner_table, time_delta
 
 AXIS_WIDTH = 64
@@ -78,7 +79,13 @@ class CompareView(QWidget):
 
     def set_session(self, session: Session, lap_a: Lap | None = None) -> None:
         """Populate the pickers: A is the given lap (default: first non-best),
-        B the session best — or the next-best when A already is the best."""
+        B the session best — or the next-best when A already is the best.
+
+        Both pickers name laps the way every other screen does, and mark the
+        session best among them. Both list the whole session, so unlike the
+        Lap Analysis picker -- which cannot offer the lap being read -- the
+        mark is always on the lap that earned it.
+        """
         self._session = session
         best = session.best_lap
         others = [lap for lap in session.laps if lap is not best]
@@ -92,7 +99,7 @@ class CompareView(QWidget):
             combo.blockSignals(True)
             combo.clear()
             for lap in session.laps:
-                combo.addItem(f"{lap.source.stem} · {lap.lap_time:.3f} s", lap)
+                combo.addItem(reference_caption(lap, best), lap)
                 if lap is selected:
                     combo.setCurrentIndex(combo.count() - 1)
             combo.blockSignals(False)

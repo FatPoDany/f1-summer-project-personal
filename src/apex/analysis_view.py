@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from apex import theme
-from apex.captions import lap_caption
+from apex.captions import reference_caption
 from apex.coach_panel import CoachPanel
 from apex.widgets.replay_window import ReplayWindow
 from apex.widgets.strip_stack import StripStack
@@ -255,15 +255,16 @@ class AnalysisView(QWidget):
         self._ref_combo.addItem("Single-lap analysis", None)
         default = 0
         if self._session is not None and self._lap is not None:
+            best = self._session.best_lap
             others = [lap for lap in self._session.laps if lap is not self._lap]
             for lap in others:
-                self._ref_combo.addItem(lap_caption(lap), lap)
+                self._ref_combo.addItem(reference_caption(lap, best), lap)
             # Every non-best lap opens against the session best so its debrief is
             # immediately useful. The best lap stays a single-lap technique review:
             # comparing it to a slower lap would create a different context from
             # the report the Garage has already generated and make Granite run twice.
-            if others and self._lap is not self._session.best_lap:
-                default = self._ref_combo.findData(self._session.best_lap)
+            if others and self._lap is not best:
+                default = self._ref_combo.findData(best)
         self._ref_combo.setCurrentIndex(max(default, 0))
         self._ref_combo.blockSignals(False)
 

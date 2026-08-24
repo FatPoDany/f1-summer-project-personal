@@ -11,6 +11,7 @@ from apex.analysis_view import (
     SINGLE_LAP_HEADERS,
     AnalysisView,
 )
+from apex.captions import lap_caption
 from f1coach_core import (
     build_evidence_summary,
     corner_table,
@@ -327,6 +328,44 @@ def test_opening_a_lap_compares_it_with_the_drivers_best_by_default(qtbot):
 
     assert view._ref_combo.currentData() is best
     assert view._debrief_points  # so there is something to coach and to replay
+
+
+def test_the_reference_picker_marks_the_session_best(qtbot):
+    """Which lap to beat is not readable from a list of names and times.
+
+    The picker offers every other lap in the session, and the one a driver is
+    normally measuring themselves against sat in there unmarked: finding it
+    meant reading four lap times and doing the comparison by eye, in a dropdown
+    that had already made that choice for them by default.
+    """
+    view, session = make_view(qtbot)
+    marked = [
+        view._ref_combo.itemText(i)
+        for i in range(view._ref_combo.count())
+        if "(session best)" in view._ref_combo.itemText(i)
+    ]
+
+    assert marked == [f"{lap_caption(session.best_lap)} (session best)"]
+    assert view._ref_combo.itemText(view._ref_combo.findData(session.best_lap)) == marked[0]
+
+
+def test_no_lap_is_called_the_session_best_while_the_driver_is_on_it(qtbot):
+    """A lap is absent from its own picker, so its mark has to be absent too.
+
+    Marking the quickest lap on offer would have handed the label to the
+    second-quickest here -- naming a lap the session best in the one situation
+    where the real one is not on screen to be checked against.
+    """
+    session = load_sample_session()
+    view = AnalysisView()
+    qtbot.addWidget(view)
+    view.set_context(session.best_lap, session)
+
+    texts = [view._ref_combo.itemText(i) for i in range(view._ref_combo.count())]
+
+    # Single-lap analysis, plus every lap but the one being read.
+    assert len(texts) == len(session.laps)
+    assert not any("session best" in text for text in texts)
 
 
 def test_a_lap_with_nothing_to_compare_against_still_opens(qtbot, tmp_path):

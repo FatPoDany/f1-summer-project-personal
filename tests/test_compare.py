@@ -2,6 +2,7 @@
 
 import pytest
 
+from apex.captions import lap_caption
 from apex.compare_view import CompareView
 from f1coach_core import load_sample_session
 
@@ -40,6 +41,30 @@ def test_ahead_wording(qtbot):
     # A is the best lap, so B defaults to the next-best and A runs ahead
     assert view._combo_b.currentData().source.stem == "0822-coached-lap02"
     assert "ahead" in view._verdict.text()
+
+
+def test_both_pickers_name_laps_as_the_rest_of_the_app_does(qtbot):
+    """Compare spelled the caption out by hand, so it would have drifted alone.
+
+    The string was identical to the shared one, which is what made it easy to
+    miss: nothing looked wrong until the day somebody changed how a lap is
+    named and five screens followed while these two stayed behind.
+    """
+    session = load_sample_session()
+    view = CompareView()
+    qtbot.addWidget(view)
+    view.set_session(session)
+
+    best = session.best_lap
+    expected = [
+        f"{lap_caption(lap)} (session best)" if lap is best else lap_caption(lap)
+        for lap in session.laps
+    ]
+    for combo in (view._combo_a, view._combo_b):
+        texts = [combo.itemText(i) for i in range(combo.count())]
+        assert texts == expected
+        # Both pickers offer the whole session, so the mark lands exactly once.
+        assert sum("(session best)" in text for text in texts) == 1
 
 
 def test_too_short_laps_read_as_cant_compare(qtbot, tmp_path):
