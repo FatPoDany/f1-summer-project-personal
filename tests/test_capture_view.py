@@ -388,3 +388,41 @@ def test_saving_a_file_to_send_reports_a_failure_instead_of_looking_done(
 
     assert "no files to hand over" in view._result_path.text()
     assert not (tmp_path / "out.zip").exists()
+
+
+def test_the_facilitator_can_record_a_control_run_without_the_command_line(
+    qtbot, torcs_binary, study_preset
+):
+    """A study with no unadvised second run cannot tell coaching from practice.
+
+    The condition existed underneath all along -- phase is a free slug -- but only
+    on the command line, where nothing checks the participant id or the phase. An
+    arm that can only be collected by the facilitator typing it correctly under
+    time pressure is an arm that will be collected wrong.
+    """
+    view = CaptureGuideView(torcs_binary=torcs_binary, study_preset=study_preset)
+    qtbot.addWidget(view)
+
+    offered = [
+        (view._phase.itemText(i), view._phase.itemData(i))
+        for i in range(view._phase.count())
+    ]
+    assert [slug for _label, slug in offered] == [
+        "baseline",
+        "coached",
+        "control",
+        "familiarisation",
+    ]
+    assert view._phase.currentData() == "baseline"  # unchanged default
+
+    # Both second-run arms have to be distinguishable from the baseline and from
+    # each other by reading one line, and the control has to say what it is: the
+    # participant practised on their own and was given nothing.
+    labels = dict((slug, label) for label, slug in offered)
+    assert "first run" in labels["baseline"]
+    assert "after AI advice" in labels["coached"]
+    assert "own practice only, no AI advice" in labels["control"]
+
+    make_ready(view)
+    view._phase.setCurrentIndex(2)
+    assert view._current_config().phase == "control"

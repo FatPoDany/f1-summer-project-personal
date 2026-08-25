@@ -47,8 +47,23 @@ class CaptureSetupPage(QWidget):
 
         phase_label = QLabel("Study phase")
         self.phase = QComboBox()
-        self.phase.addItem("Baseline — no coaching", "baseline")
-        self.phase.addItem("Coached — advice provided", "coached")
+        # Control is the arm that makes the comparison mean anything. Without a
+        # group that drives the second run having been given no advice, a
+        # participant getting quicker between baseline and coached is explained
+        # just as well by having driven the same track three more times, and
+        # nothing in the data can separate the two.
+        #
+        # Each label says both when the run happens and what the participant was
+        # given, because "no coaching" on its own is true of the baseline and of
+        # the control alike: what distinguishes them is the point in the session,
+        # not the absence of advice. A facilitator reading the list with somebody
+        # already sitting at the wheel has to be able to tell them apart at a
+        # glance, and picking the wrong one mislabels a whole session.
+        self.phase.addItem("Baseline — first run, before any advice", "baseline")
+        self.phase.addItem("Coached — second run, after AI advice", "coached")
+        self.phase.addItem(
+            "Control — second run, own practice only, no AI advice", "control"
+        )
         self.phase.addItem("Familiarisation — not measured", "familiarisation")
         self.phase.setAccessibleName("Study phase")
         phase_label.setBuddy(self.phase)

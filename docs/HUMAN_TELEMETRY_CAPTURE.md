@@ -28,6 +28,25 @@ On Windows this must be a local sign-in: Apex disables Start in Remote Desktop
 sessions because the legacy OpenGL/input path is not reliable there and remote
 input latency would invalidate a participant measurement.
 
+## Study phases
+
+Collect Data offers four, and the phase is written into every lap file this
+session produces, so a lap states its own condition wherever it ends up.
+
+| Shown in Apex | Written to the file | What it is |
+|---|---|---|
+| Baseline — first run, before any advice | `baseline` | The measured first run. Every participant drives this. |
+| Coached — second run, after AI advice | `coached` | The measured second run, driven after Apex's feedback. |
+| Control — second run, own practice only, no AI advice | `control` | The measured second run for participants assigned to the control arm: same track, same number of laps, no feedback between the two runs. |
+| Familiarisation — not measured | `familiarisation` | Getting used to the controls. Excluded from the comparison. |
+
+The control arm is what separates coaching from practice. A participant who
+improves between `baseline` and `coached` may have improved because of the
+advice or simply because they have now driven the track three more times, and
+nothing in the telemetry can tell those apart on its own — only a group that
+drove the second run without advice can. Assign the arm before the participant
+arrives and record it here; the phase is not something to decide afterwards.
+
 ## Build once
 
 ```bash

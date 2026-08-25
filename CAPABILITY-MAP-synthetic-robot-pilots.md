@@ -38,8 +38,8 @@ synthetic-capture-contract
 - The UI defaults to three sessions and accepts 1–20 per batch.
 - Synthetic ids use `SIM-BERNIW9-NNN`; data lives under
   `<workspace>/captures/synthetic/` and run metadata says `synthetic-robot`.
-- Synthetic phases use `reference-pilot`; `baseline`, `coached`, and
-  `familiarisation` remain reserved for real participant collection.
+- Synthetic phases use `reference-pilot`; `baseline`, `coached`, `control`
+  and `familiarisation` remain reserved for real participant collection.
 - The existing human recorder, human-only graphical preset, validation rules,
   and `captures/human/` layout remain unchanged.
 
