@@ -138,6 +138,7 @@ def _adopt_background(folder: Path) -> None:
 class GarageView(QWidget):
     lapOpened = Signal(object, object)  # (Lap, Session)
     coachingRequested = Signal(object)  # Session
+    debriefRequested = Signal(object)  # Session — the whole run, not one lap
     sessionDeleted = Signal(str)  # absolute managed session path
     status = Signal(str)
 
@@ -176,6 +177,15 @@ class GarageView(QWidget):
         )
         self._open_button.clicked.connect(self._open_selected)
 
+        # A session is the unit a participant drove, so what it cost them is a
+        # question about the session and not about whichever row is selected.
+        self._debrief_button = QPushButton("Session debrief")
+        self._debrief_button.setEnabled(False)
+        self._debrief_button.setToolTip(
+            "Every lap of this session against its best, and what to try next"
+        )
+        self._debrief_button.clicked.connect(self._open_debrief)
+
         self._table = QTableWidget(0, len(TABLE_HEADERS))
         self._table.setHorizontalHeaderLabels(TABLE_HEADERS)
         self._table.horizontalHeader().setStretchLastSection(True)
@@ -204,6 +214,7 @@ class GarageView(QWidget):
         buttons = QHBoxLayout()
         buttons.addWidget(import_button)
         buttons.addStretch(1)
+        buttons.addWidget(self._debrief_button)
         buttons.addWidget(self._open_button)
 
         right = QWidget()
@@ -417,6 +428,15 @@ class GarageView(QWidget):
         row = self._table.currentRow()
         ready = self._session is not None and 0 <= row < len(self._session.laps)
         self._open_button.setEnabled(ready)
+        # The debrief is about the session, so it needs laps rather than a
+        # selected row -- a participant who has just driven has no row selected.
+        self._debrief_button.setEnabled(
+            self._session is not None and bool(self._session.laps)
+        )
+
+    def _open_debrief(self) -> None:
+        if self._session is not None and self._session.laps:
+            self.debriefRequested.emit(self._session)
 
     def _open_selected(self) -> None:
         if self._open_button.isEnabled():

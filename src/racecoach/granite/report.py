@@ -10,7 +10,8 @@ top, so a session that could not reach a model still yields a complete report --
 one without narration, not one without findings.
 """
 
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from f1coach_core.debrief import DebriefPoint, debrief_summary, lap_debrief
@@ -69,6 +70,44 @@ def fastest(laps: list[Lap]) -> Lap | None:
     return min(laps, key=lambda lap: lap.lap_time) if laps else None
 
 
+def measure_report(laps: list[Lap], *, limit: int = 3) -> SessionReport:
+    """Every lap against the session best, with no model involved at all.
+
+    Split out of ``build_report`` because a reader should not have to wait on a
+    3B model running on a laptop CPU before seeing any numbers. The desktop puts
+    this on screen as soon as the laps are read and lets the prose arrive on top
+    of it, lap by lap.
+    """
+    reference = fastest(laps)
+    if reference is None:
+        return SessionReport(laps=(), reference=None)
+    return SessionReport(
+        laps=tuple(_measure(lap, reference, limit=limit) for lap in laps),
+        reference=reference,
+    )
+
+
+def _measure(lap: Lap, reference: Lap, *, limit: int) -> LapReport:
+    """One lap's measured debrief. The reference has nothing to lose to itself."""
+    if lap is reference:
+        return LapReport(
+            lap=lap,
+            reference=reference,
+            points=(),
+            summary="This was your quickest lap of the session.",
+        )
+    try:
+        points = lap_debrief(lap, reference, limit=limit)
+    except ValueError:  # laps too short to share a distance grid
+        points = []
+    return LapReport(
+        lap=lap,
+        reference=reference,
+        points=tuple(points),
+        summary=debrief_summary(lap, reference, points),
+    )
+
+
 def build_report(
     laps: list[Lap],
     *,
@@ -77,64 +116,62 @@ def build_report(
     api_key: str | None = None,
     transport=None,
     limit: int = 3,
+    on_measured: Callable[[SessionReport], None] | None = None,
+    on_narrated: Callable[[SessionReport], None] | None = None,
 ) -> SessionReport:
     """Measure every lap against the session best, narrating if a model is offered.
 
     ``base_url`` of None means measurement only. A model that fails mid-way stops
     narration for the rest of the session but never discards what was measured;
     the reason travels back on the report so a caller can say why it is quiet.
+
+    ``on_measured`` fires once, with every lap measured and nothing narrated yet;
+    ``on_narrated`` fires after each lap the model actually spoke about, carrying
+    the report as it stands. A caller with a window to fill uses the two to show
+    the numbers at once and let the prose land as it arrives. Passing neither --
+    which is what the CLI does -- leaves the behaviour exactly as it was.
     """
-    reference = fastest(laps)
-    if reference is None:
-        return SessionReport(laps=(), reference=None)
+    measured = measure_report(laps, limit=limit)
+    if measured.reference is None:
+        return measured
+    if on_measured is not None:
+        on_measured(measured)
+    if not (base_url and model):
+        return measured
 
-    reports: list[LapReport] = []
+    reports = list(measured.laps)
     narration_error = ""
-
-    for lap in laps:
-        if lap is reference:
-            reports.append(
-                LapReport(
-                    lap=lap,
-                    reference=reference,
-                    points=(),
-                    summary="This was your quickest lap of the session.",
-                )
-            )
+    for index, report in enumerate(reports):
+        if not report.points or narration_error:
             continue
         try:
-            points = lap_debrief(lap, reference, limit=limit)
-        except ValueError:  # laps too short to share a distance grid
-            points = []
-        summary = debrief_summary(lap, reference, points)
-
-        narrated = None
-        if base_url and model and points and not narration_error:
-            try:
-                narrated = narrate_debrief(
-                    summary,
-                    points,
-                    base_url=base_url,
-                    model=model,
-                    api_key=api_key,
-                    transport=transport,
-                )
-                summary = narrated.summary
-            except NarrationError as exc:
-                narration_error = str(exc)
-
-        reports.append(
-            LapReport(
-                lap=lap,
-                reference=reference,
-                points=tuple(points),
-                summary=summary,
-                narrated=narrated,
+            narrated = narrate_debrief(
+                report.summary,
+                list(report.points),
+                base_url=base_url,
+                model=model,
+                api_key=api_key,
+                transport=transport,
             )
+        except NarrationError as exc:
+            narration_error = str(exc)
+            continue
+        reports[index] = replace(
+            report, summary=narrated.summary, narrated=narrated
         )
+        if on_narrated is not None:
+            on_narrated(
+                SessionReport(
+                    laps=tuple(reports),
+                    reference=measured.reference,
+                    narration_error=narration_error,
+                )
+            )
 
     return SessionReport(
-        laps=tuple(reports), reference=reference, narration_error=narration_error
+        laps=tuple(reports),
+        reference=measured.reference,
+        narration_error=narration_error,
     )
 
 

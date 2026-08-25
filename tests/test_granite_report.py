@@ -137,6 +137,75 @@ def test_the_rendered_report_carries_the_study_identity(session):
     assert "Setup: apex-study-v1" in text
 
 
+def test_the_measurements_arrive_before_the_model_is_asked(session):
+    """A screen must be able to show numbers while the model is still thinking.
+
+    On a laptop CPU the first answer takes minutes, and a participant staring at
+    an empty panel for that long concludes the app is broken.
+    """
+    order = []
+
+    def refuse(*_a, **_k):
+        order.append("asked")
+        raise GraniteError("connection refused")
+
+    def measured(report):
+        order.append("measured")
+        assert report.findings > 0
+        assert all(item.narrated is None for item in report.laps)
+
+    gr.build_report(
+        gr.session_laps(session),
+        base_url="http://x/v1",
+        model="granite",
+        transport=refuse,
+        on_measured=measured,
+    )
+
+    assert order[0] == "measured"
+    assert order.count("measured") == 1  # once for the session, not once per lap
+    assert "asked" in order  # and the model really was tried afterwards
+
+
+def test_each_narrated_lap_arrives_as_it_is_written(session, monkeypatch):
+    body = json.dumps({
+        "summary": "You lost time braking early.",
+        "stretches": [{"observation": "You braked earlier here.", "advice": ""}] * 4,
+    })
+    updates = []
+
+    result = gr.build_report(
+        gr.session_laps(session),
+        base_url="http://x/v1",
+        model="granite",
+        transport=transport_returning(body),
+        on_narrated=updates.append,
+    )
+
+    spoken = sum(1 for item in result.laps if item.narrated is not None)
+    assert spoken >= 1
+    assert len(updates) == spoken
+    # Each update carries one more spoken lap than the one before it.
+    counts = [sum(1 for item in u.laps if item.narrated is not None) for u in updates]
+    assert counts == sorted(counts) and counts[-1] == spoken
+
+
+def test_callbacks_are_optional_and_change_nothing(session):
+    """The CLI passes neither; it must get exactly the report it always got."""
+    laps = gr.session_laps(session)
+    plain = gr.build_report(laps)
+    watched = gr.build_report(laps, on_measured=lambda _r: None, on_narrated=lambda _r: None)
+
+    assert gr.render_markdown(plain) == gr.render_markdown(watched)
+
+
+def test_measure_report_is_the_whole_debrief_with_no_model_argument_at_all(session):
+    laps = gr.session_laps(session)
+    assert gr.render_markdown(gr.measure_report(laps)) == gr.render_markdown(
+        gr.build_report(laps)
+    )
+
+
 def test_an_empty_session_renders_something_honest(tmp_path):
     result = gr.build_report(gr.session_laps(tmp_path))
     assert result.laps == () and result.reference is None

@@ -24,6 +24,7 @@ from apex.analysis_view import AnalysisView
 from apex.capture_view import CaptureGuideView, _saved_summary
 from apex.coaching_queue import GarageCoachingQueue
 from apex.compare_view import CompareView
+from apex.debrief_view import SessionDebriefView
 from apex.garage_view import GarageView
 from apex.live_view import LivePitWallView
 from apex.study_view import StudyView
@@ -70,6 +71,12 @@ class MainWindow(QMainWindow):
             coach_server=self._coaching_server,
         )
         self._compare = CompareView(self)
+        # The whole-session debrief shares the coach's serial pool and its one
+        # model server: a participant reading their session and a Garage lap
+        # being analysed must not become two 3B models on one laptop CPU.
+        self._debrief = SessionDebriefView(
+            self, pool=self._coaching_pool, server=self._coaching_server
+        )
         # Live coaching is a different intervention from the post-drive coaching
         # the study is testing. A participant who used it is no longer a subject
         # who only received a debrief, so it stays out of their reach.
@@ -81,6 +88,7 @@ class MainWindow(QMainWindow):
         self._stacked.addWidget(self._capture)
         if self._synthetic is not None:
             self._stacked.addWidget(self._synthetic)
+        self._stacked.addWidget(self._debrief)
         self._stacked.addWidget(self._analysis)
         self._stacked.addWidget(self._compare)
         if self._study is not None:
@@ -91,6 +99,8 @@ class MainWindow(QMainWindow):
 
         self._garage.lapOpened.connect(self.show_analysis)
         self._garage.coachingRequested.connect(self._coaching_queue.queue_session)
+        self._garage.debriefRequested.connect(self.show_debrief)
+        self._debrief.status.connect(lambda text: self.statusBar().showMessage(text))
         self._coaching_queue.progress.connect(self._garage.apply_coaching_progress)
         self._garage.sessionDeleted.connect(self._session_deleted)
         self._garage.status.connect(lambda text: self.statusBar().showMessage(text))
@@ -124,6 +134,17 @@ class MainWindow(QMainWindow):
     def show_garage(self) -> None:
         self._stacked.setCurrentWidget(self._garage)
         self._garage_action.setChecked(True)
+
+    def show_debrief(self, session: Session) -> None:
+        """The whole session: every lap against its best, and what to try next.
+
+        Reached from the Garage rather than from a lap, because the thing being
+        debriefed is the run the participant just drove and not one lap of it.
+        """
+        self._debrief.set_session(session)
+        self._debrief_action.setEnabled(True)
+        self._stacked.setCurrentWidget(self._debrief)
+        self._debrief_action.setChecked(True)
 
     def show_analysis(self, lap: Lap, session: Session | None = None) -> None:
         self._analysis.set_context(lap, session)
@@ -196,6 +217,10 @@ class MainWindow(QMainWindow):
         if compare_session is not None and compare_session.path.resolve(strict=False) == deleted:
             self._compare.clear_session()
             self._compare_action.setEnabled(False)
+        debrief_session = self._debrief.session
+        if debrief_session is not None and debrief_session.path.resolve(strict=False) == deleted:
+            self._debrief.clear_session()
+            self._debrief_action.setEnabled(False)
         self.show_garage()
 
     # -- opening files ---------------------------------------------------------
@@ -283,6 +308,14 @@ class MainWindow(QMainWindow):
             self._synthetic_action.triggered.connect(
                 lambda: self._stacked.setCurrentWidget(self._synthetic)
             )
+        self._debrief_action = QAction("Session Debrief", self, checkable=True)
+        self._debrief_action.setEnabled(False)  # until a session is opened into it
+        self._debrief_action.setToolTip(
+            "What a whole session cost, lap by lap, with the written coaching"
+        )
+        self._debrief_action.triggered.connect(
+            lambda: self._stacked.setCurrentWidget(self._debrief)
+        )
         self._analysis_action = QAction("Lap Analysis", self, checkable=True)
         self._analysis_action.setEnabled(False)  # until a lap is opened
         self._analysis_action.triggered.connect(
@@ -312,6 +345,7 @@ class MainWindow(QMainWindow):
             self._garage_action,
             self._capture_action,
             self._synthetic_action,
+            self._debrief_action,
             self._analysis_action,
             self._compare_action,
             self._study_action,
@@ -330,6 +364,7 @@ class MainWindow(QMainWindow):
             (self._garage, self._garage_action),
             (self._capture, self._capture_action),
             (self._synthetic, self._synthetic_action),
+            (self._debrief, self._debrief_action),
             (self._analysis, self._analysis_action),
             (self._compare, self._compare_action),
             (self._live, self._live_action),
