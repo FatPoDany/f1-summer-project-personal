@@ -297,7 +297,8 @@ class MainWindow(QMainWindow):
         if self._study is not None:
             self._study_action = QAction("Study Results", self, checkable=True)
             self._study_action.setToolTip(
-                "Baseline against coached, per participant, and the export for statistics"
+                "One condition against another, per participant, and the export "
+                "for statistics"
             )
             self._study_action.triggered.connect(self._show_study)
             self._study.status.connect(lambda text: self.statusBar().showMessage(text))

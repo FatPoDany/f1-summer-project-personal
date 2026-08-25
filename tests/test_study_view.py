@@ -43,6 +43,20 @@ def paired(tmp_path):
     return [tmp_path / "A001-baseline", tmp_path / "A001-coached"]
 
 
+@pytest.fixture
+def arms(tmp_path):
+    """Two participants in two arms: one coached, one left to practise alone.
+
+    Nobody drove all three phases, which is the point -- an arm is an assignment,
+    not a missing session.
+    """
+    write_lap(tmp_path / "A001-baseline", 1, driver="A001", phase="baseline", seconds=20.0)
+    write_lap(tmp_path / "A001-coached", 1, driver="A001", phase="coached", seconds=17.0)
+    write_lap(tmp_path / "B002-baseline", 1, driver="B002", phase="baseline", seconds=21.0)
+    write_lap(tmp_path / "B002-control", 1, driver="B002", phase="control", seconds=20.5)
+    return sorted(tmp_path.glob("*-*"))
+
+
 def test_a_participant_who_drove_both_phases_is_paired(qtbot, paired):
     view = StudyView()
     qtbot.addWidget(view)
@@ -50,7 +64,7 @@ def test_a_participant_who_drove_both_phases_is_paired(qtbot, paired):
 
     assert view._table.rowCount() == 2  # one row per participant per phase
     assert [view._table.item(r, 1).text() for r in range(2)] == ["baseline", "coached"]
-    assert "1 of 1 participant(s) have both phases" in view._headline.text()
+    assert "1 of 1 participant(s) drove both 'baseline' and 'coached'" in view._headline.text()
     assert "-2.00 s" in view._headline.text()  # 19.0 best -> 17.0 best
 
 
@@ -138,3 +152,73 @@ def test_reload_survives_being_wired_to_a_button(qtbot, paired, monkeypatch):
     view._reload_button_clicked(False)
 
     assert view._table.rowCount() == 2
+
+
+def test_the_control_arm_is_compared_against_its_own_baseline(qtbot, arms):
+    """Hard-coding baseline against coached told the control arm its data was short.
+
+    It was not short: those participants drove the second run with no advice,
+    which is the comparison that separates coaching from having driven the track
+    three more times. The screen could show the table but could not name it.
+    """
+    view = StudyView()
+    qtbot.addWidget(view)
+    view.reload(arms)
+
+    assert view._table.rowCount() == 4
+    assert view._selected_phases() == ("baseline", "coached")
+    assert [driver for driver, _b, _a in view._paired()] == ["A001"]
+    assert "1 of 2 participant(s) drove both 'baseline' and 'coached'" in view._headline.text()
+
+    view._right_phase.setCurrentText("control")
+
+    assert [driver for driver, _b, _a in view._paired()] == ["B002"]
+    text = view._headline.text()
+    assert "1 of 2 participant(s) drove both 'baseline' and 'control'" in text
+    assert "-0.50 s" in text  # 21.0 -> 20.5, the practice-only arm's own change
+
+
+def test_the_pickers_offer_every_condition_the_data_carries_in_protocol_order(qtbot, arms):
+    view = StudyView()
+    qtbot.addWidget(view)
+    view.reload(arms)
+
+    offered = [view._left_phase.itemText(i) for i in range(view._left_phase.count())]
+    assert offered == ["baseline", "coached", "control"]
+    assert view._left_phase.isEnabled() and view._right_phase.isEnabled()
+
+
+def test_a_phase_is_never_left_compared_with_itself(qtbot, arms):
+    """Every participant would pair with themselves and the difference be zero."""
+    view = StudyView()
+    qtbot.addWidget(view)
+    view.reload(arms)
+
+    view._left_phase.setCurrentText("coached")
+
+    left, right = view._selected_phases()
+    assert left == "coached"
+    assert right != "coached"
+    assert f"'{left}' and '{right}'" in view._headline.text()
+
+
+def test_reloading_keeps_the_comparison_being_read(qtbot, arms):
+    """A reload after one more session must not move the comparison under somebody."""
+    view = StudyView()
+    qtbot.addWidget(view)
+    view.reload(arms)
+    view._right_phase.setCurrentText("control")
+
+    view.reload(arms)
+
+    assert view._selected_phases() == ("baseline", "control")
+
+
+def test_one_phase_on_its_own_leaves_the_pickers_alone(qtbot, paired):
+    view = StudyView()
+    qtbot.addWidget(view)
+    view.reload([paired[0]])
+
+    assert view._selected_phases() == ("baseline", "")
+    assert not view._left_phase.isEnabled()
+    assert view._paired() == []

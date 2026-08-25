@@ -128,7 +128,7 @@
 
   是可以的，`racecoach study-summary` 也会照常导出这一组 —— **只有 Apex 的 Study 界面不认。**
 
-结论（已更新）：**采集这一半已经通了** —— 对照组现在走同一个防呆的引导页，不必敲命令行。**剩下的是展示这一半**：control 的数据会完整地落盘、也会被 `racecoach study-summary` 导出，但 Apex 的 Study 界面仍然只会把 `baseline` 和 `coached` 配成对，对照组的人会出现在表里却永远配不上。这就是 6.3，现在它是下一个卡点。
+结论（2026-08-25 已全部解决）：采集那一半由 §8 修掉，展示这一半由 **§9** 修掉 —— Study 界面现在让你自己选比哪两个条件，`baseline` vs `control` 是一个正常选项。本节留作记录。
 
 ### 4.3 导出粒度只到 phase 级
 
@@ -216,12 +216,12 @@ racecoach study-summary pooled/ --out summary.csv   # 走 CLI，背景列才是�
 |---|---|---|---|
 | **6.1** | `study_view.py:239` 传上 `backgrounds=`，并把导出测试的断言改成检查整行表头和背景列有值 | **一行 + 一条断言** | 修掉 4.4；GUI 导出的文件才真的是"可以直接做检验的文件" |
 | ~~**6.2**~~ **已完成** | 采集页下拉框加 control 一项 | — | 对照组能走防呆的引导页，不必让 facilitator 敲命令行。**见 §8** |
-| **6.3** | `StudyView` 的配对改成"任选两个 phase 比较"（下拉选 A/B），不再硬编码 baseline/coached | 半天 | 修掉 4.2；对照组、多次干预、任何三臂设计都能在界面上看 |
+| ~~**6.3**~~ **已完成** | `StudyView` 的配对改成"任选两个 phase 比较"，不再硬编码 baseline/coached | — | 修掉 4.2；对照组、多次干预、任何三臂设计都能在界面上看。**见 §9** |
 | **6.4** | 新增 `racecoach study-laps --out laps.csv`：一行一圈（driver, phase, lap 序号, lap_time, off_track, damage + 背景列） | 半天 | 修掉 4.3 —— 学习曲线、混合效应模型、把练习效应剥出来，全靠这个文件 |
 | **6.5** | 审计记录里加 participant / phase 字段；review 窗口记录"打开了哪个弯角、停留多久" | 1–2 天 | 修掉 4.5，拿到剂量-反应这条独立证据链 |
 | **6.6** | 随机分配名单：Apex 里生成并锁定 participant → condition 的映射 | 半天 | 现在靠人工名单，容易出错，也没有留痕 |
 
-**下一件：6.3**（对照组已经能采了，却在 Study 界面上看不到），然后 6.1（一行，且现在导出的文件是有缺陷的）。**要拿到能发表的因果结论，6.4 + 一个对照组是最低门槛。**
+**下一件：6.1**（一行，且现在从界面导出的文件是有缺陷的），然后 **6.4**。**要拿到能发表的因果结论，6.4 + 一个对照组是最低门槛** —— 对照组现在采得了、也看得见了，缺的是逐圈那个文件。
 
 ---
 
@@ -277,3 +277,43 @@ racecoach study-summary pooled/ --out summary.csv   # 走 CLI，背景列才是�
 - 导出的 CSV **是全的** —— `racecoach study-summary` 按任意 phase 分组，control 的行照样在里面。所以**统计不受影响，受影响的只是界面上看不看得见**。
 
 也就是说：**现在就可以开始收对照组的数据，收到的数据完全可用**；6.3 决定的只是你能不能在 Apex 里直接看到这个对比。下一步建议就做 6.3。
+
+
+---
+
+## 9. 6.3 也做完了：Study 界面现在自己选比哪两个条件（2026-08-25）
+
+### 9.1 改了什么
+
+`StudyView` 顶上多了一行：**Compare [phase] against [phase]**。两个下拉框列出**这批数据里实际出现过的**条件，按流程顺序排（baseline → coached → control → familiarisation），没见过的 slug 排在后面按字母序 —— 因为 `phase` 在文件格式里本来就是自由字符串，研究有权发明一个这个界面没听说过的条件。
+
+原来 `_paired()` 里那两个硬编码常量没了：现在配对、表头那句话、下面那张圈速图，全都跟着你选的两个条件走（左边蓝、右边绿）。
+
+- **默认**仍然是 `baseline` vs `coached`，所以什么都不动的话界面和以前一模一样。`coached` 不在而 `control` 在的时候，默认第二项就是 `control`。
+- **重新 Reload 不会把你正在看的比较挪走** —— 只有当你选的那个条件在新数据里不存在了才会重挑。
+- **不允许拿一个条件跟它自己比**：那会让每个人都跟自己配上、差值恒等于 0，是真的但没用。你把左边改成右边那个值时，右边会自动让开，而不是拒绝你刚做出的选择。
+- **只有一个条件时**，右边的下拉框是空的、两个都禁用，那句话直接说"这里每一圈都是 `baseline`，配对需要第二个条件"。
+
+### 9.2 为什么这不是"多加一个功能"，而是修一个错
+
+原来那句 `n of N participant(s) have both phases`，在只有一条臂的时候是对的。有了对照组之后它变成误导：对照组的人**没有缺数据**，他们只是被分到了另一条臂上，会在另一种选法下配上对。所以那句话现在把两个条件的名字写出来 —— `2 of 3 participant(s) drove both 'baseline' and 'coached'`，换成 control 就是 `1 of 3 participant(s) drove both 'baseline' and 'control'`。分母是全部参与者，读起来"少了一半"是正常的，因为另一半在另一条臂上。
+
+**这两个数字正是方案 A 的论证要用的**：辅导组自己前后变了多少、对照组自己前后变了多少，比的是这两个数之差。界面把这两个数给你，**但它仍然不做检验** —— 这条立场没动，测试还锁着（界面文字里不许出现 "significant" / "p =" / "p<"）。
+
+### 9.3 验证
+
+- 新增 5 条测试（`tests/test_study_view.py`），核心那条 `test_the_control_arm_is_compared_against_its_own_baseline` 用一个**两条臂、没有人跑满三个 phase** 的工作区：默认选法只配上 A001，切到 `control` 之后只配上 B002，并且读数里出现的是对照组自己那 −0.50 s。其余几条覆盖下拉框的内容与顺序、自己跟自己比时的让位、Reload 不挪动选择、只有一个条件时的禁用状态。
+- 旧的那条 `have both phases` 断言按新措辞更新了。
+- 这次**没有做"先在旧代码上跑一遍确认失败"**，因为旧代码里 `_selected_phases` 这些根本不存在，失败是 AttributeError，证明不了行为。真正的证据是结构性的：旧 `_paired()` 要求 `BASELINE in phases and COACHED in phases`，而 B002 只有 baseline 和 control —— 它永远进不了那个列表。
+- 全套 **642 passed / 17 skipped**，`ruff check src tests` 干净。
+- 离屏渲染检查过布局：pickers 那一行在标题行和说明行之间，紧凑靠左，下拉框宽度由最长的那一项自动决定，不会截断。
+
+### 9.4 打包
+
+`repos\Apex` 已重新打包换上并验证：新 exe 里有 `Compare this phase`、`Against this phase`、`_offer_phases`、`One condition against another`，旧的 `have both phases` 和 `Baseline against coached` 都没了，上一步的 Control 选项仍在。
+
+（一个小教训：我一开始还拿新读数里的 `drove both` 当标记，结果它在**旧** exe 里也有 —— 旧 `_paired()` 的 docstring 正好写着 "Participants who drove both phases"，而 **docstring 是会被编译进字节码的，注释不会**。挑标记要挑代码里的名字，别挑给人读的措辞。）`_internal` 逐个哈希比过 —— 只有 `base_library.zip` 因为重打包时间戳不同而不一致，已一并换掉，现在两边完全一致。`racecoach.exe --help` 退出码 0；**带 `APEX_RESEARCH_MODE=1` 启动**（这样 Study Results 才会真的被构造出来）出窗口、干净退出。
+
+### 9.5 你要怎么看到它
+
+Study Results 在**研究模式**下才出现：菜单 **View → Research tools** 勾上。勾上之后顶部导航会多出 Study Results / Robot Pilot / Live Pit Wall 三项 —— 这个开关默认关着是故意的，参与者不该看到这些。顺带把这一项的悬停提示也改了，它原来还写着 "Baseline against coached"。
