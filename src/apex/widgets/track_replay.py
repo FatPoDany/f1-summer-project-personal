@@ -12,7 +12,7 @@ Nothing here derives telemetry: it renders `Lap.df` columns as recorded.
 import html
 
 import numpy as np
-from PySide6.QtCore import QPointF, Qt, QTimer, Signal
+from PySide6.QtCore import QElapsedTimer, QPointF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -28,12 +28,14 @@ from apex.captions import lap_caption
 from f1coach_core import Lap, time_delta
 from f1coach_core.footage import WALL_CLOCK_COLUMN
 
-FRAME_MS = 33  # ~30 fps; the marker advances by real elapsed lap time
+FRAME_MS = 33  # how often the marker is redrawn -- not how far it moves
 MARGIN = 14
 # A picture is anchored once and then left to run, so it can drift away from the
 # marker in the middle of a corner. Checked a few times a second rather than
 # every frame: seeking a player thirty times a second stutters it for no gain.
-RESYNC_FRAMES = 15  # ~500 ms at FRAME_MS
+# Counted in seconds of the lap rather than in frames: a frame is however long
+# Qt took to get round to one, which on Windows is half again what it asked for.
+RESYNC_S = 0.5
 LEVEL_S = 0.005  # a gap that rounds to 0.00 s is not a gap worth a side
 
 
@@ -231,7 +233,17 @@ class TrackReplay(QWidget):
         # None until there are two laps that can honestly be put on one.
         self._delta_grid: np.ndarray | None = None
         self._delta_s: np.ndarray | None = None
-        self._frames_since_resync = 0
+        # Where the marker is in the lap's own seconds, and how long it has been
+        # since the last frame. Playback reads a clock rather than counting
+        # frames -- see `_advance` for what counting them cost.
+        self._playhead_s = 0.0
+        self._clock = QElapsedTimer()
+        self._last_frame_s = 0.0
+        self._since_check_s = 0.0
+        # Whether the marker is moving itself. Everything else that moves it --
+        # a hand on the slider, an arrow key, a click on the groove, a new
+        # stretch -- has to start the clock again from where it was put.
+        self._stepping = False
 
         self._title = QLabel()
         self._title.setStyleSheet("font-weight: 600;")
@@ -328,6 +340,7 @@ class TrackReplay(QWidget):
         self._first, self._last = span_indices(lap, d0, d1)
         self._slider.setRange(self._first, self._last)
         self._slider.setValue(self._first)
+        self._anchor_clock(self._first)  # in case it was already sitting there
         if lap.has_track_map:
             self._map.set_lap(lap, self._first, self._last)
         else:
@@ -417,38 +430,85 @@ class TrackReplay(QWidget):
         if moment is not None:
             self.scrubbed.emit(moment)
 
+    def _anchor_clock(self, index: int) -> None:
+        """Start playback's clock again from the sample the marker is on."""
+        if self._lap is None or not 0 <= index < len(self._lap.df):
+            return
+        self._playhead_s = float(self._lap.df["t"].iloc[index])
+        self._clock.restart()
+        self._last_frame_s = 0.0
+        self._since_check_s = 0.0
+
     def _toggle(self, on: bool) -> None:
         self._play.setText("Pause" if on else "Play")
         if on:
             if self._slider.value() >= self._last:
                 self._slider.setValue(self._first)
-            self._frames_since_resync = 0  # playback anchors the pictures as it starts
+            # From here and from now, not from wherever the clock was left when
+            # the corner was paused: a pause is not time the driver spent driving.
+            self._anchor_clock(self._slider.value())
             self._timer.start()
         else:
             self._timer.stop()
         self.playbackToggled.emit(on)
 
     def _advance(self) -> None:
-        """Step by the real time the driver took, so playback matches the drive."""
+        """One frame: however much real time has actually gone by since the last.
+
+        A frame is not a fixed step. Qt fires a 33 ms timer when it can get to
+        one rather than when it says -- on Windows every 47 ms, the granularity
+        of the system clock -- while the footage beside it runs off the media
+        clock and is never late. Counting frames therefore ran the marker and
+        the picture at two different speeds, and the picture that is supposed to
+        show the moment the marker is on ended the corner a second away from it.
+        """
+        # Measured from the anchor rather than frame to frame, and in
+        # nanoseconds: `restart` answers in whole milliseconds, and dropping the
+        # remainder of every frame is itself a slow clock, worth about 1% here.
+        elapsed = self._clock.nsecsElapsed() / 1e9
+        seconds = elapsed - self._last_frame_s
+        # Booked before the step rather than after it, so that a step which
+        # starts the clock again has the last word. Going round at the end does
+        # exactly that, and a frame that wrote its own reading back afterwards
+        # put a reading from the clock it had just replaced on top of the fresh
+        # anchor: the next frame then measured a whole stretch of negative time,
+        # and the marker sat on the first sample waiting for the playhead to
+        # climb back to where it already was -- for as long as the stretch had
+        # just taken -- while the footage beside it ran on without it.
+        self._last_frame_s = elapsed
+        self._step(seconds)
+
+    def _step(self, seconds: float) -> None:
+        """Move the marker on by that much lap time, going round at the end."""
         if self._lap is None:
             return
         if self._slider.value() >= self._last:
             self._restart()  # one press replays the stretch until it is paused
             return
         t = self._lap.df["t"]
-        target = float(t.iloc[self._slider.value()]) + FRAME_MS / 1000.0
-        index = int(t.searchsorted(target, side="left"))
+        # The playhead is kept in the lap's own seconds rather than read back off
+        # the sample the marker landed on. Landing takes the first sample at or
+        # after the step, which rounds up, and rounding up once per frame is a
+        # ratchet rather than a rounding: at the 50 Hz these laps are recorded
+        # at, every 33 ms of it became 40, and the replay ran a fifth faster
+        # than the drive it claims to be replaying.
+        self._playhead_s += seconds
+        index = int(t.searchsorted(self._playhead_s, side="left"))
         # Land on the stretch's own last sample before going round again: a
         # corner whose final metres are never shown is not the corner under
         # discussion, and nothing may run past the stretch it claims to be about.
-        self._slider.setValue(min(index, self._last))
+        self._stepping = True
+        try:
+            self._slider.setValue(min(index, self._last))
+        finally:
+            self._stepping = False
         # The dots are matched to the marker every frame; a picture is anchored
         # once and then left to run at a rate that assumes the two laps' times
         # rise evenly through the corner. They do not, so it is worth asking
         # every so often whether the pictures are still where the dots are.
-        self._frames_since_resync += 1
-        if self._frames_since_resync >= RESYNC_FRAMES:
-            self._frames_since_resync = 0
+        self._since_check_s += seconds
+        if self._since_check_s >= RESYNC_S:
+            self._since_check_s = 0.0
             self.driftCheckDue.emit()
 
     def _restart(self) -> None:
@@ -460,10 +520,14 @@ class TrackReplay(QWidget):
         exists to prevent.
         """
         self._slider.setValue(self._first)
-        self._frames_since_resync = 0  # the seek below is itself a fresh anchor
-        self._scrubbed_to(self._first)
+        self._scrubbed_to(self._first)  # which starts the clock again from here
 
     def _seek(self, index: int) -> None:
+        if not self._stepping:
+            # Put here by something other than playback, so playback carries on
+            # from here rather than snapping back to wherever its clock had got
+            # to. The drift check brings the pictures over within half a second.
+            self._anchor_clock(index)
         self._map.set_cursor(index)
         self._update_readout(index)
 

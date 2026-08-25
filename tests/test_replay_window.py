@@ -739,6 +739,69 @@ def test_a_picture_that_has_drifted_is_pulled_back_onto_the_marker(qtbot):
     assert seeks == [("theirs", window._replay.current_reference_wall_clock)]
 
 
+def test_a_picture_that_will_not_stay_put_is_left_alone_after_one_try(qtbot):
+    """A correction that corrects nothing is a stutter bought for nothing.
+
+    A seek costs a visible hitch, so it is only worth paying when it buys a
+    picture that is then in step. A player that cannot say where it is reports
+    the same drift after being moved as before it was, and paying that hitch at
+    every check is a stutter on the beat of the check -- the exact failure this
+    mechanism exists to prevent, arriving by way of the cure.
+    """
+    from apex.widgets.replay_window import RESYNC_TOLERANCE_MS, ReplayWindow
+
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+    window.show_stretch(_positioned_lap(20.0, wall_clock=True), _point())
+    seeks = []
+    window._footage.resume = lambda: None
+    window._footage.drift_ms = lambda _w: RESYNC_TOLERANCE_MS + 500  # never settles
+    window._footage.seek_to = seeks.append
+
+    window._replay._play.setChecked(True)
+    seeks.clear()  # the anchor taken as playback started
+    for _ in range(6):
+        window._replay.driftCheckDue.emit()
+
+    assert len(seeks) == 1
+
+    # Another corner is another judgement: a picture written off here is not
+    # written off for the rest of the review.
+    window.show_stretch(_positioned_lap(20.0, wall_clock=True), _point())
+    window._replay._play.setChecked(True)
+    seeks.clear()
+    window._replay.driftCheckDue.emit()
+
+    assert len(seeks) == 1
+
+
+def test_a_picture_that_settles_is_corrected_again_when_it_wanders_again(qtbot):
+    """Standing down is for a correction that failed, not for one that worked."""
+    from apex.widgets.replay_window import RESYNC_TOLERANCE_MS, ReplayWindow
+
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+    window.show_stretch(_positioned_lap(20.0, wall_clock=True), _point())
+    seeks = []
+    window._footage.resume = lambda: None
+    window._footage.seek_to = seeks.append
+    readings = iter(
+        [
+            RESYNC_TOLERANCE_MS + 300,  # out of step: pulled back
+            0,  # and the correction took
+            RESYNC_TOLERANCE_MS + 300,  # out again, later in the same corner
+        ]
+    )
+    window._footage.drift_ms = lambda _w: next(readings)
+
+    window._replay._play.setChecked(True)
+    seeks.clear()
+    for _ in range(3):
+        window._replay.driftCheckDue.emit()
+
+    assert len(seeks) == 2
+
+
 def test_nothing_is_reseated_while_the_marker_is_paused(qtbot):
     """A paused picture is where it was put; moving it would be the drift."""
     from apex.widgets.replay_window import RESYNC_TOLERANCE_MS, ReplayWindow
@@ -791,3 +854,36 @@ def test_a_single_lap_review_names_the_one_lap_it_has(qtbot):
     assert "lap07" in window._footage_caption.text()
     assert "lap07" in window.windowTitle()
     assert "vs" not in window.windowTitle()
+
+
+def test_a_picture_written_off_is_given_another_chance_next_time_round(qtbot):
+    """Standing down is a judgement about one pass through the corner.
+
+    Going round again puts every picture back on the marker, so whatever made
+    the last correction fail is no longer the state being judged. Holding the
+    verdict past that point kept a player that had run to the end of its clip
+    from ever being asked to come back: a black rectangle for the rest of the
+    corner, every time round.
+    """
+    from apex.widgets.replay_window import RESYNC_TOLERANCE_MS, ReplayWindow
+
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+    window.show_stretch(_positioned_lap(20.0, wall_clock=True), _point())
+    seeks = []
+    window._footage.resume = lambda: None
+    window._footage.drift_ms = lambda _w: RESYNC_TOLERANCE_MS + 500  # never settles
+    window._footage.seek_to = seeks.append
+
+    window._replay._play.setChecked(True)
+    seeks.clear()
+    for _ in range(4):
+        window._replay.driftCheckDue.emit()
+    assert len(seeks) == 1  # written off once the correction did not take
+
+    window._replay._restart()  # round again, every picture put back on the marker
+    seeks.clear()
+    for _ in range(4):
+        window._replay.driftCheckDue.emit()
+
+    assert len(seeks) == 1

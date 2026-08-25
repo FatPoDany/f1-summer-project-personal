@@ -36,9 +36,13 @@ from racecoach.telemetry.screen_capture import Recording
 
 RATE_FLOOR = 0.25
 RATE_CEILING = 4.0
-# Drift a driver would see between two pictures of the same corner: about four
-# frames of a 30 fps clip. Below it, seeking costs more than it corrects.
-RESYNC_TOLERANCE_MS = 150
+# Drift a driver would see between two pictures of the same corner. Set well
+# above what the marker's own clock can produce -- a quarter of a second is
+# visible if you are looking for it, and a seek is visible whether you are or
+# not -- so that only a picture genuinely out of step is ever worth the stutter
+# of correcting. A player also reports its position to its own granularity, and
+# a tolerance under that turns rounding into a correction.
+RESYNC_TOLERANCE_MS = 250
 
 
 @dataclass(frozen=True)
@@ -146,6 +150,10 @@ class ReplayWindow(QDialog):
         # instead, which is the thing the whole window is arguing about.
         self._footage = FootagePane(self)
         self._ref_footage = FootagePane(self)
+        # Which pictures were pulled back at the last check, and which are being
+        # left alone for the rest of this corner. See `_resync_footage`.
+        self._corrected: set[FootagePane] = set()
+        self._left_alone: set[FootagePane] = set()
         for pane in (self._footage, self._ref_footage):
             pane.busyChanged.connect(self._footage_busy_changed)
         self._ref_showing = False
@@ -354,7 +362,16 @@ class ReplayWindow(QDialog):
             pane.resume()
 
     def _anchor_footage(self) -> None:
-        """Put every picture on the moment the marker is at."""
+        """Put every picture on the moment the marker is at.
+
+        Which also settles what is known about them: a picture written off as
+        one that will not stay put was written off for the pass it was in, and
+        this is a new one. Keeping that verdict meant a picture whose clip had
+        run out while the marker was elsewhere was never asked to come back --
+        a black rectangle for the rest of the corner, every time round.
+        """
+        self._corrected.clear()
+        self._left_alone.clear()
         moment = self._replay.current_wall_clock
         if moment is not None:
             self._footage.seek_to(moment)
@@ -380,6 +397,15 @@ class ReplayWindow(QDialog):
         Corrected rather than prevented, and only when the drift is big enough to
         see: seeking a player on every frame is what the shared transport avoids
         in the first place.
+
+        A correction that does not take is the end of correcting this picture.
+        A seek costs a visible hitch, so it is only worth paying when it buys a
+        picture that is then in step; if the next check finds the same picture
+        still out, either the player cannot say where it is or these two laps
+        are too far apart for one rate to hold, and paying that hitch twice a
+        second for the rest of the corner buys neither. The failure this guards
+        against is exactly the one it would otherwise cause: a stutter on the
+        beat of the check.
         """
         if not self._replay.playing:
             return
@@ -387,11 +413,20 @@ class ReplayWindow(QDialog):
         if self._ref_showing:
             pairs.append((self._ref_footage, self._replay.current_reference_wall_clock))
         for pane, moment in pairs:
-            if moment is None or pane.busy:
+            if moment is None or pane.busy or pane in self._left_alone:
                 continue
             drift = pane.drift_ms(moment)
-            if drift is not None and abs(drift) > RESYNC_TOLERANCE_MS:
-                pane.seek_to(moment)
+            if drift is None:
+                continue
+            if abs(drift) <= RESYNC_TOLERANCE_MS:
+                self._corrected.discard(pane)  # in step, however it got there
+                continue
+            if pane in self._corrected:
+                self._corrected.discard(pane)
+                self._left_alone.add(pane)
+                continue
+            pane.seek_to(moment)
+            self._corrected.add(pane)
 
     def _footage_busy_changed(self, _busy: bool) -> None:
         """Play waits until there is something to play in step with."""
@@ -479,6 +514,11 @@ class ReplayWindow(QDialog):
         self._ref_column.setVisible(self._ref_showing)
         self._footage_caption.setVisible(self._ref_showing)
         clips_dir = self._clips_dir or Path.cwd()
+        # A new corner, and a fresh judgement about its pictures: whichever of
+        # the last one's were being corrected, or had been given up on, says
+        # nothing about these.
+        self._corrected.clear()
+        self._left_alone.clear()
         self._footage.show_stretch(
             index,
             self._recording,

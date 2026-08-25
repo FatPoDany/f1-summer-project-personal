@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from PySide6.QtCore import QElapsedTimer
 
 from apex.widgets.replay_window import ReplayWindow
 from apex.widgets.track_replay import TrackReplay
@@ -70,7 +71,14 @@ def test_the_replayed_span_is_exactly_the_requested_stretch(qtbot):
 
 
 def test_playback_advances_by_the_time_the_driver_actually_took(qtbot):
-    """One frame of playback must cover one frame of lap time, not one sample."""
+    """One frame of playback must cover one frame of lap time, not one sample.
+
+    The playhead is kept in the lap's own seconds. Reading it back off the
+    sample the marker landed on rounds up, because landing takes the first
+    sample at or after the step, and rounding up once per frame is a ratchet
+    rather than a rounding: at the 50 Hz these laps are recorded at, every 33 ms
+    became 40 and the replay ran a fifth faster than the drive it was replaying.
+    """
     lap = _positioned_lap()
     view = TrackReplay()
     qtbot.addWidget(view)
@@ -78,11 +86,51 @@ def test_playback_advances_by_the_time_the_driver_actually_took(qtbot):
 
     t = lap.df["t"]
     before = float(t.iloc[view._slider.value()])
-    view._advance()
+    for _ in range(30):
+        view._step(0.033)
     after = float(t.iloc[view._slider.value()])
 
     assert after > before
-    assert after - before == pytest.approx(0.033, abs=0.03)
+    # One sample of slack: the marker sits on samples, the playhead does not.
+    assert after - before == pytest.approx(30 * 0.033, abs=0.08)
+
+
+def test_the_marker_runs_at_real_time_rather_than_at_a_count_of_frames(qtbot):
+    """Playback claims to run at the speed it happened, so measure it doing so.
+
+    Qt fires a 33 ms timer when it can get to one rather than when it says: on
+    Windows every 47 ms, the granularity of the system clock. Stepping a nominal
+    frame per tick therefore ran the marker at 0.84x the drive it was replaying
+    while the footage beside it ran off the media clock at real time -- so the
+    picture supposed to be showing the moment under the marker ended the corner
+    a second away from it, and the drift check dragged it back twice a second
+    for the whole corner. The stutter that caused is what this test is for.
+    """
+    lap = _positioned_lap()
+    view = TrackReplay()
+    qtbot.addWidget(view)
+    view.set_stretch(lap, 300.0, 1100.0, "T1")  # long enough not to go round again
+    t = lap.df["t"]
+    start = float(t.iloc[view._slider.value()])
+    clock = QElapsedTimer()
+    seen: list[tuple[float, float]] = []
+    # Read at each frame rather than at the end: the marker is only ever as
+    # current as its last frame, and on a loaded machine that can be a while ago.
+    view.cursorMoved.connect(
+        lambda _d: seen.append(
+            (clock.elapsed() / 1000.0, float(t.iloc[view._slider.value()]) - start)
+        )
+    )
+
+    clock.start()
+    view._play.setChecked(True)
+    qtbot.wait(600)
+    view._play.setChecked(False)
+
+    assert seen, "playback never moved the marker"
+    real, covered = seen[-1]
+    assert real > 0.2  # the timer did run
+    assert covered == pytest.approx(real, abs=0.08)  # one sample of slack
 
 
 def test_playback_goes_round_again_rather_than_stopping_at_the_end(qtbot):
@@ -99,15 +147,41 @@ def test_playback_goes_round_again_rather_than_stopping_at_the_end(qtbot):
     view._play.setChecked(True)
     assert view.playing
 
-    view._slider.setValue(view._last - 1)
-    view._advance()
+    t = lap.df["t"]
+    view._step(float(t.iloc[view._last]) - float(t.iloc[view._first]))
 
     assert view._slider.value() == view._last  # the stretch's last metres are shown
     assert view.playing
 
-    view._advance()
+    view._step(0.033)
 
     assert view._slider.value() == view._first
+
+
+def test_the_marker_carries_straight_on_after_it_has_gone_round(qtbot):
+    """Going round again costs nothing: the next pass starts at once.
+
+    Driven by the timer rather than by `_step`, because the fault was in the
+    bookkeeping between the two. Going round starts the clock afresh, and the
+    frame that had asked for the step wrote its own reading back on top of that
+    anchor, so the frame after it measured a whole stretch of negative time.
+    The marker then sat on the first sample -- one instant, one set of numbers,
+    a progress bar parked at the left -- for as long as the corner had just
+    taken, while the two pictures beside it played on to the end of their clips
+    and went black.
+    """
+    lap = _positioned_lap()
+    view = TrackReplay()
+    qtbot.addWidget(view)
+    view.set_stretch(lap, 500.0, 560.0, "T1")  # a couple of seconds, so it goes round
+
+    view._play.setChecked(True)
+    qtbot.waitUntil(lambda: view._slider.value() == view._last, timeout=5000)
+    qtbot.waitUntil(lambda: view._slider.value() == view._first, timeout=5000)
+    qtbot.wait(400)  # a fifth of the stretch, and several frames whatever the load
+
+    assert view.playing
+    assert view._slider.value() > view._first
     assert view.playing
 
 
@@ -119,7 +193,7 @@ def test_playback_asks_for_a_drift_check_a_few_times_a_second(qtbot):
     first place. Asking a few times a second is what catches a picture that has
     wandered off the marker in the middle of a corner.
     """
-    from apex.widgets.track_replay import RESYNC_FRAMES
+    from apex.widgets.track_replay import RESYNC_S
 
     lap = _positioned_lap()
     view = TrackReplay()
@@ -129,13 +203,36 @@ def test_playback_asks_for_a_drift_check_a_few_times_a_second(qtbot):
     view.driftCheckDue.connect(lambda: checks.append(view._slider.value()))
     view._play.setChecked(True)
 
-    for _ in range(RESYNC_FRAMES - 1):
-        view._advance()
-    assert checks == []
+    frame = RESYNC_S / 10  # ten frames to a check, near enough
+    for _ in range(9):
+        view._step(frame)
+    assert checks == []  # not once a frame: a seek a frame is the stutter itself
 
-    view._advance()
+    view._step(frame * 2)
     assert len(checks) == 1
     assert checks[0] > view._first  # the marker had moved on before anyone looked
+
+
+def test_the_marker_carries_on_from_where_a_key_put_it_mid_playback(qtbot):
+    """Anything that moves the marker but playback restarts playback's clock.
+
+    Playback keeps its own playhead in lap seconds so that landing on samples
+    cannot ratchet it. That playhead has to be told when the marker is put
+    somewhere else, and not every way of doing that is a drag: an arrow key or a
+    click on the slider's groove moves it without one. A playhead that had not
+    heard about it pulled the marker straight back on the next frame.
+    """
+    lap = _positioned_lap()
+    view = TrackReplay()
+    qtbot.addWidget(view)
+    view.set_stretch(lap, 300.0, 1100.0, "T1")
+    view._play.setChecked(True)
+
+    put = view._first + 120
+    view._slider.setValue(put)  # as an arrow key or a click on the groove does
+    view._step(0.05)
+
+    assert view._slider.value() >= put  # carried on from there, not snapped back
 
 
 def test_a_lap_without_position_says_so_instead_of_drawing_nothing(qtbot):
