@@ -1,7 +1,6 @@
 """Garage screen: session library, lap table with deltas/status, import and
 watched folder. Double-click a lap to open it in Lap Analysis."""
 
-import json
 import shutil
 from pathlib import Path
 
@@ -27,7 +26,6 @@ from apex import theme
 from apex.coaching_queue import CoachingProgress, CoachingStage
 from f1coach_core import (
     Session,
-    StudyIdentity,
     TelemetrySchemaError,
     create_session,
     delete_session,
@@ -36,15 +34,19 @@ from f1coach_core import (
     list_sessions,
     load_session,
 )
-from f1coach_core.lap import NO_IDENTITY
 from f1coach_core.participant import (
-    Background,
     background_summary,
     load_background,
-    save_background,
 )
 from f1coach_core.workspace import RECORDING_POINTER, session_recording
-from racecoach.telemetry.handover import HandoverError, handovers_root, unpack
+from racecoach.telemetry.handover import (
+    HandoverError,
+    adopt_background,
+    handover_identity,
+    handovers_root,
+    session_name,
+    unpack,
+)
 
 # Driver sits beside Lap so a researcher collecting several participants can
 # tell whose laps these are without opening the files.
@@ -84,55 +86,6 @@ def _analysed_against(analysed: list[tuple[str | None, int]], best, *, is_best: 
             label = reference
         lines.append(f"  {label} — {_findings(count)}")
     return "\n".join(lines)
-
-
-def _handover_identity(folder: Path) -> tuple[StudyIdentity, dict | None]:
-    """Who drove this handover, and where its screen recording now lives.
-
-    Read from the capture's own manifest rather than asked for at import time:
-    a package opened months later, by somebody who was not there, still says
-    what it came with.
-    """
-    try:
-        manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return NO_IDENTITY, None
-    if not isinstance(manifest, dict):
-        return NO_IDENTITY, None
-    preset = manifest.get("study_preset")
-    identity = StudyIdentity(
-        driver=manifest.get("participant_id") or None,
-        phase=manifest.get("phase") or None,
-        setup=preset.get("preset_id") if isinstance(preset, dict) else None,
-    )
-    recording = manifest.get("recording")
-    if not isinstance(recording, dict):
-        return identity, None
-    # The path recorded on the participant's machine means nothing here, but
-    # the file itself travelled inside the package.
-    local = folder / Path(str(recording.get("path", ""))).name
-    return identity, {**recording, "path": str(local)} if local.is_file() else None
-
-
-def _adopt_background(folder: Path) -> None:
-    """Keep the questionnaire that travelled with the laps.
-
-    Nothing in a telemetry file records prior experience, and a comparability
-    check months from now cannot go back and ask. Dropping it on import is the
-    one loss a handover cannot recover from.
-    """
-    try:
-        data = json.loads((folder / "participant.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return
-    if not isinstance(data, dict):
-        return
-    try:
-        background = Background.from_dict(data)
-    except TypeError:
-        return
-    if background.participant_id:
-        save_background(background)
 
 
 class GarageView(QWidget):
@@ -563,8 +516,8 @@ class GarageView(QWidget):
         except HandoverError as exc:
             QMessageBox.critical(self, "Can't import handover", str(exc))
             return None
-        identity, recording = _handover_identity(handover.path)
-        _adopt_background(handover.path)
+        identity, recording = handover_identity(handover.path)
+        adopt_background(handover.path)
         runs = sorted(handover.path.glob("*.csv"))
         if not runs:
             QMessageBox.critical(
@@ -573,13 +526,7 @@ class GarageView(QWidget):
                 f"{archive.name} unpacked, but holds no telemetry CSV.",
             )
             return None
-        # unpack() prefixes the folder with the participant id, and a capture
-        # folder is already named after them, so the folder name on its own
-        # reads "P007-P007-baseline-...". Use the capture's own name.
-        name = handover.path.name
-        doubled = f"{handover.participant_id}-" * 2
-        if handover.participant_id and name.startswith(doubled):
-            name = name[len(handover.participant_id) + 1 :]
+        name = session_name(handover)
         summaries = []
         for run in runs:
             try:

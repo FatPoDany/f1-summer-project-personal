@@ -29,6 +29,20 @@ def list_sessions() -> list[Path]:
     return sorted(p for p in root.iterdir() if p.is_dir() and not p.is_symlink())
 
 
+def list_study_sessions() -> list[Path]:
+    """The sessions this machine collected, without the sample that ships with it.
+
+    The bundled sample is five real laps that still carry a real study identity,
+    which is what makes it a good demonstration and exactly what makes it
+    dangerous here: read as evidence it is a participant nobody recruited,
+    present on every install, in the coached arm, on every export. It belongs in
+    the Garage, where it demonstrates; it does not belong in the comparison,
+    where it would be a claim. Pointing a study command at the folder by name
+    still reads it -- explicit is explicit.
+    """
+    return [p for p in list_sessions() if p.name != SAMPLE_SESSION_NAME]
+
+
 def _validate_session_name(name: str) -> str:
     name = name.strip()
     if not name or not name.strip(".") or "/" in name or "\\" in name or "\x00" in name:

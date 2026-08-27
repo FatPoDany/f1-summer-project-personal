@@ -18,8 +18,15 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from f1coach_core.participant import background_path, load_background
-from f1coach_core.workspace import workspace_root
+from f1coach_core.lap import NO_IDENTITY, StudyIdentity
+from f1coach_core.loader import TelemetrySchemaError
+from f1coach_core.participant import (
+    Background,
+    background_path,
+    load_background,
+    save_background,
+)
+from f1coach_core.workspace import import_telemetry, sessions_root, workspace_root
 
 MANIFEST_NAME = "handover.json"
 SCHEMA_VERSION = "apex-handover-v1"
@@ -45,6 +52,16 @@ class Handover:
     participant_id: str
     files: int
     laps: int
+
+
+@dataclass(frozen=True)
+class Registered:
+    """What arriving data became once this workspace could read it."""
+
+    session: str
+    laps: int
+    background: bool
+    skipped: tuple[str, ...] = ()
 
 
 def _digest(path: Path) -> str:
@@ -182,3 +199,111 @@ def collect(archives: list[str | Path], into: str | Path) -> list[Handover]:
         seen.add(key)
         results.append(handover)
     return results
+
+
+def handover_identity(folder: str | Path) -> tuple[StudyIdentity, dict | None]:
+    """Who drove this handover, and where its screen recording now lives.
+
+    Read from the capture's own manifest rather than asked for at import time:
+    a package opened months later, by somebody who was not there, still says
+    what it came with.
+    """
+    folder = Path(folder)
+    try:
+        manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return NO_IDENTITY, None
+    if not isinstance(manifest, dict):
+        return NO_IDENTITY, None
+    preset = manifest.get("study_preset")
+    identity = StudyIdentity(
+        driver=manifest.get("participant_id") or None,
+        phase=manifest.get("phase") or None,
+        setup=preset.get("preset_id") if isinstance(preset, dict) else None,
+    )
+    recording = manifest.get("recording")
+    if not isinstance(recording, dict):
+        return identity, None
+    # The path recorded on the participant's machine means nothing here, but
+    # the file itself travelled inside the package.
+    local = folder / Path(str(recording.get("path", ""))).name
+    return identity, {**recording, "path": str(local)} if local.is_file() else None
+
+
+def adopt_background(folder: str | Path) -> str | None:
+    """Keep the questionnaire that travelled with the laps; return whose it is.
+
+    Nothing in a telemetry file records prior experience, and a comparability
+    check months from now cannot go back and ask. Dropping it on import is the
+    one loss a handover cannot recover from.
+
+    It has to be adopted into this workspace, not merely left in the unpacked
+    folder, because the export reads a participant's background by id from the
+    workspace. A questionnaire that arrived and stayed where it landed is a
+    background column that exports blank.
+    """
+    folder = Path(folder)
+    try:
+        data = json.loads((folder / "participant.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    try:
+        background = Background.from_dict(data)
+    except TypeError:
+        return None
+    if not background.participant_id:
+        return None
+    save_background(background)
+    return background.participant_id
+
+
+def session_name(handover: Handover) -> str:
+    """What the laps in this handover should be called in the workspace.
+
+    ``unpack`` prefixes the folder with the participant id, and a capture folder
+    is already named after them, so the folder name on its own reads
+    "P007-P007-baseline-...". Use the capture's own name.
+    """
+    name = handover.path.name
+    doubled = f"{handover.participant_id}-" * 2
+    if handover.participant_id and name.startswith(doubled):
+        name = name[len(handover.participant_id) + 1 :]
+    return name
+
+
+def register(handover: Handover) -> Registered:
+    """Turn a verified handover into laps this workspace can actually read.
+
+    Verifying that files arrived intact is not the same as being able to analyse
+    them. What travels is the participant's raw TORCS run export, and every
+    reader on the study path -- the summary, the per-lap export, the Study
+    Results screen -- takes canonical single-lap CSVs. Until the run is split,
+    a pooled folder full of correct data summarises to nothing at all, which is
+    indistinguishable from having collected nothing.
+
+    Importing is content-addressed, so collecting the same handover twice adds
+    no laps the second time rather than counting that participant twice.
+    """
+    identity, recording = handover_identity(handover.path)
+    background = adopt_background(handover.path)
+    name = session_name(handover)
+    skipped: list[str] = []
+    for run in sorted(handover.path.glob("*.csv")):
+        try:
+            import_telemetry(run, name, identity=identity, recording=recording)
+        except (TelemetrySchemaError, OSError) as exc:
+            # One unreadable file must not cost four participants their data. A
+            # capture folder routinely holds an export for a race that was
+            # started and abandoned, and the participant is in no position to
+            # tidy it up; say which file and carry on with the rest.
+            skipped.append(f"{run.name}: {exc}")
+    session = sessions_root() / name
+    laps = len(list(session.glob("*.csv"))) if session.is_dir() else 0
+    return Registered(
+        session=name,
+        laps=laps,
+        background=background is not None,
+        skipped=tuple(skipped),
+    )

@@ -10,6 +10,7 @@
     racecoach debrief <session>    coached debrief for a folder of canonical laps
     racecoach install-model <f>   adopt a Granite weights file you already have
     racecoach study-summary       per-participant, per-phase rows for statistics
+    racecoach study-laps          one row per lap, for learning curves
     racecoach package <dir>       bundle one capture into a file to hand over
     racecoach collect <zips>      verify and pool handovers from participants
     racecoach capture-synthetic    run pinned unattended robot reference sessions
@@ -148,6 +149,21 @@ def main(argv: list[str] | None = None) -> int:
         "--out", type=Path, default=None, help="write CSV here instead of stdout"
     )
 
+    laps_cmd = commands.add_parser(
+        "study-laps",
+        help="one row per lap, for learning curves and mixed-effects models",
+    )
+    laps_cmd.add_argument(
+        "roots",
+        nargs="*",
+        type=Path,
+        default=None,
+        help="session folders, or folders of them; defaults to the whole workspace",
+    )
+    laps_cmd.add_argument(
+        "--out", type=Path, default=None, help="write CSV here instead of stdout"
+    )
+
     install_model_cmd = commands.add_parser(
         "install-model",
         help="adopt a Granite weights file supplied by other means",
@@ -257,6 +273,41 @@ def main(argv: list[str] | None = None) -> int:
     ) as exc:
         print(f"racecoach: {exc}", file=sys.stderr)
         return 2
+
+
+def _study_laps(roots: list[Path] | None) -> list:
+    """Every readable lap under the folders given, or the whole workspace.
+
+    Accepts a session folder, a folder of session folders, or nothing at all,
+    because a researcher pooling what several participants sent in has the
+    middle case and should not have to expand it into arguments by hand.
+    """
+    from f1coach_core.workspace import list_study_sessions
+    from racecoach.granite.report import session_laps
+
+    laps = []
+    for root in roots or list_study_sessions():
+        found = session_laps(root)
+        if found:
+            laps.extend(found)
+            continue
+        for child in sorted(Path(root).iterdir()) if Path(root).is_dir() else []:
+            if child.is_dir():
+                laps.extend(session_laps(child))
+    if not laps:
+        raise RunImportError(
+            "No readable laps found. A folder of handovers holds raw simulator "
+            "runs, not laps -- `racecoach collect` registers those; point this "
+            "at the workspace, or at session folders."
+        )
+    return laps
+
+
+def _backgrounds_for(rows: list) -> dict:
+    """The questionnaire for every participant in these rows, by id."""
+    from f1coach_core.participant import load_background
+
+    return {row.driver: load_background(row.driver) for row in rows}
 
 
 def _dispatch(args: argparse.Namespace) -> int:
@@ -380,50 +431,61 @@ def _dispatch(args: argparse.Namespace) -> int:
         print("Send this one file to the research team.")
         return 0
     if args.command == "collect":
-        from racecoach.telemetry.handover import collect
+        from f1coach_core.workspace import sessions_root
+        from racecoach.telemetry.handover import collect, register
 
         results = collect(args.archives, args.into)
+        # Verifying and registering are two different promises. The first says
+        # the data arrived intact; only the second makes it readable by anything
+        # downstream, because what a participant hands over is a raw TORCS run
+        # and every study reader takes canonical single laps.
+        total = 0
         for handover in results:
             who = handover.participant_id or "(no id)"
             print(f"{who}: {handover.files} files -> {handover.path}")
-        print(f"{len(results)} handover(s) verified into {args.into}")
-        print(f"Next: racecoach study-summary {args.into} --out summary.csv")
+            registered = register(handover)
+            total += registered.laps
+            kept = "background kept" if registered.background else "no background travelled"
+            print(f"  {registered.laps} lap(s) in session {registered.session} ({kept})")
+            for note in registered.skipped:
+                print(f"  skipped {note}")
+        print(
+            f"{len(results)} handover(s) verified into {args.into}; "
+            f"{total} lap(s) registered in {sessions_root()}"
+        )
+        print("Next: racecoach study-summary --out summary.csv (or study-laps for one row per lap)")
         return 0
     if args.command == "study-summary":
         from f1coach_core.study import summarise_all, summary_csv
-        from f1coach_core.workspace import list_sessions
-        from racecoach.granite.report import session_laps
 
-        roots = args.roots or list_sessions()
-        laps = []
-        for root in roots:
-            found = session_laps(root)
-            if found:
-                laps.extend(found)
-                continue
-            # A folder of session folders: what a researcher gets after pooling
-            # what several participants sent in.
-            for child in sorted(Path(root).iterdir()) if Path(root).is_dir() else []:
-                if child.is_dir():
-                    laps.extend(session_laps(child))
-        if not laps:
-            raise RunImportError("No readable laps found to summarise.")
-
+        laps = _study_laps(args.roots)
         summaries = summarise_all(laps)
-        from f1coach_core.participant import load_background
-
-        backgrounds = {
-            summary.driver: load_background(summary.driver) for summary in summaries
-        }
         if not summaries:
             raise RunImportError(
                 f"{len(laps)} laps found, but none carry both a driver and a phase, "
                 "so they cannot be assigned to a group."
             )
-        text = summary_csv(summaries, backgrounds=backgrounds)
+        text = summary_csv(summaries, backgrounds=_backgrounds_for(summaries))
         if args.out:
             args.out.write_text(text, encoding="utf-8")
             print(f"{len(summaries)} rows from {len(laps)} laps -> {args.out}")
+        else:
+            print(text, end="")
+        return 0
+    if args.command == "study-laps":
+        from f1coach_core.study import lap_csv, lap_rows
+
+        laps = _study_laps(args.roots)
+        rows = lap_rows(laps)
+        if not rows:
+            raise RunImportError(
+                f"{len(laps)} laps found, but none carry both a driver and a phase, "
+                "so they cannot be assigned to a group."
+            )
+        text = lap_csv(laps, backgrounds=_backgrounds_for(rows))
+        if args.out:
+            args.out.write_text(text, encoding="utf-8")
+            print(f"{len(rows)} rows from {len(laps)} laps -> {args.out}")
         else:
             print(text, end="")
         return 0

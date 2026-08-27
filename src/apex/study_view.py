@@ -42,7 +42,7 @@ from apex import theme
 from f1coach_core.lap import Lap
 from f1coach_core.participant import background_summary, load_background
 from f1coach_core.study import PhaseSummary, summarise_all, summary_csv
-from f1coach_core.workspace import list_sessions
+from f1coach_core.workspace import list_study_sessions
 
 BASELINE = "baseline"
 COACHED = "coached"
@@ -174,7 +174,7 @@ class StudyView(QWidget):
         from racecoach.granite.report import session_laps
 
         laps: list[Lap] = []
-        for root in roots if roots is not None else list_sessions():
+        for root in roots if roots is not None else list_study_sessions():
             laps.extend(session_laps(root))
         self._laps = laps
         self._summaries = summarise_all(laps)
@@ -298,7 +298,19 @@ class StudyView(QWidget):
             if left in phases and right in phases
         ]
 
+    def _backgrounds(self) -> dict:
+        """Each participant's questionnaire, read once and keyed by id.
+
+        One mapping fills the Background column and rides out in the export.
+        Reading it separately in each place is how the screen came to show a
+        background that the exported file did not carry.
+        """
+        return {
+            summary.driver: load_background(summary.driver) for summary in self._summaries
+        }
+
     def _fill_table(self) -> None:
+        backgrounds = self._backgrounds()
         self._table.setRowCount(len(self._summaries))
         for row, summary in enumerate(self._summaries):
             values = summary.to_row()
@@ -312,7 +324,7 @@ class StudyView(QWidget):
                 str(values["off_track_events"]),
                 str(values["off_track_seconds"]),
                 str(values["damage_events"]),
-                background_summary(load_background(summary.driver)),
+                background_summary(backgrounds.get(summary.driver)),
             ]
             for column, text in enumerate(cells):
                 item = QTableWidgetItem(text)
@@ -362,7 +374,13 @@ class StudyView(QWidget):
         if not target:
             return
         try:
-            Path(target).write_text(summary_csv(self._summaries), encoding="utf-8")
+            # With the background columns: the export exists so a comparability
+            # check and an outcome test read the same file, and without them it
+            # sends the analyst back to join the questionnaire in by hand.
+            Path(target).write_text(
+                summary_csv(self._summaries, backgrounds=self._backgrounds()),
+                encoding="utf-8",
+            )
         except OSError as exc:
             QMessageBox.critical(self, "Can't export summary", str(exc))
             return

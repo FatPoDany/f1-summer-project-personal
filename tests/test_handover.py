@@ -4,10 +4,19 @@ import json
 import zipfile
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import pytest
 
-from f1coach_core.participant import Background, save_background
-from racecoach.telemetry.handover import HandoverError, collect, package, unpack
+from f1coach_core.participant import Background, load_background, save_background
+from racecoach.telemetry.handover import (
+    HandoverError,
+    collect,
+    package,
+    register,
+    session_name,
+    unpack,
+)
 
 
 @pytest.fixture
@@ -126,3 +135,149 @@ def test_pooling_keeps_participants_in_separate_folders(tmp_path, monkeypatch):
     assert {h.participant_id for h in results} == {"A001", "B002"}
     assert len({h.path for h in results}) == 2
     assert all(Path(h.path).is_dir() for h in results)
+
+
+TRACK_LENGTH = 2050.0
+
+
+def torcs_run(path: Path, laps: int = 3) -> Path:
+    """What a participant's machine actually writes: a whole race, unsplit.
+
+    The tiny two-row CSV the other tests hand over is enough to prove bytes
+    survived the journey. It is not enough to prove the data can be analysed
+    afterwards, and those are different claims.
+    """
+    per_lap = 60
+    dist = np.concatenate(
+        [np.linspace(TRACK_LENGTH - 40, TRACK_LENGTH - 1, 25)]  # grid to the line
+        + [np.linspace(0, TRACK_LENGTH, per_lap, endpoint=False)] * laps
+    )
+    n = dist.size
+    race_lap = np.concatenate(
+        [np.full(25, 1)] + [np.full(per_lap, i + 1) for i in range(laps)]
+    )
+    pd.DataFrame(
+        {
+            "sim_time_s": 100.0 + np.arange(n) * 0.02,
+            "dist_from_start_m": dist,
+            "total_speed_mps": 50.0 + 10.0 * np.sin(dist / 200.0),
+            "accel_cmd": np.clip(np.cos(dist / 150.0), 0, 1),
+            "brake_cmd": np.clip(-np.cos(dist / 150.0), 0, 1),
+            "steer_cmd": 0.2 * np.sin(dist / 300.0),
+            "gear": np.full(n, 5),
+            "race_lap": race_lap,
+            "car_name": "car7-trb1",
+        }
+    ).to_csv(path, index=False)
+    return path
+
+
+@pytest.fixture
+def driven(tmp_path, monkeypatch):
+    """A capture folder as a participant's own machine leaves it."""
+    monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "ws"))
+    directory = tmp_path / "A001-baseline-20260826-091209"
+    directory.mkdir()
+    torcs_run(directory / "human-1-1787735531-9624-1.csv")
+    (directory / "manifest.json").write_text(
+        json.dumps(
+            {
+                "participant_id": "A001",
+                "phase": "baseline",
+                "study_preset": {"preset_id": "apex-study-v1"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return directory
+
+
+def test_a_collected_handover_becomes_laps_the_study_can_actually_read(driven, tmp_path):
+    """Verified and readable are different promises, and only one was being kept.
+
+    What travels is a whole race in one file. Every reader on the study path
+    takes canonical single laps, so a pool of intact handovers summarised to
+    nothing at all -- which looks exactly like having collected nothing.
+    """
+    from f1coach_core.study import summarise_all
+    from f1coach_core.workspace import list_sessions
+    from racecoach.granite.report import session_laps
+
+    package(driven, tmp_path / "A001.zip")
+    (handover,) = collect([tmp_path / "A001.zip"], tmp_path / "pool")
+
+    registered = register(handover)
+
+    assert registered.session == driven.name  # not "A001-A001-baseline-..."
+    assert registered.laps == 3
+    (session,) = list_sessions()
+    laps = session_laps(session)
+    assert [lap.identity.driver for lap in laps] == ["A001"] * 3
+    assert [lap.identity.phase for lap in laps] == ["baseline"] * 3
+    (summary,) = summarise_all(laps)
+    assert summary.driver == "A001" and summary.laps == 3
+
+
+def test_the_questionnaire_is_adopted_here_not_left_in_the_pool(driven, tmp_path, monkeypatch):
+    """A background that arrives and stays where it landed exports as blank."""
+    save_background(Background(participant_id="A001", racing_games="weekly"))
+    package(driven, tmp_path / "A001.zip")
+    # A different analyst's machine: it has never met this participant.
+    monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "analyst"))
+    assert load_background("A001") is None
+
+    (handover,) = collect([tmp_path / "A001.zip"], tmp_path / "pool")
+    registered = register(handover)
+
+    assert registered.background is True
+    kept = load_background("A001")
+    assert kept is not None and kept.racing_games == "weekly"
+
+
+def test_collecting_the_same_handover_twice_does_not_count_it_twice(driven, tmp_path):
+    """Re-running a pool must not double a participant's weight in the comparison."""
+    package(driven, tmp_path / "A001.zip")
+
+    (first,) = collect([tmp_path / "A001.zip"], tmp_path / "pool-a")
+    assert register(first).laps == 3
+    (again,) = collect([tmp_path / "A001.zip"], tmp_path / "pool-b")
+
+    assert register(again).laps == 3
+
+
+def test_a_handover_with_no_manifest_still_registers_what_it_carries(tmp_path, monkeypatch):
+    """Identity missing is not data missing; the laps still exist to be looked at."""
+    monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "ws"))
+    directory = tmp_path / "loose-run"
+    directory.mkdir()
+    torcs_run(directory / "run.csv")
+    (directory / "manifest.json").write_text("not json at all", encoding="utf-8")
+
+    package(directory, tmp_path / "loose.zip")
+    (handover,) = collect([tmp_path / "loose.zip"], tmp_path / "pool")
+    registered = register(handover)
+
+    assert registered.laps == 3
+    assert registered.background is False
+    assert session_name(handover) == "unknown-loose-run"
+
+
+def test_collect_then_summarise_is_a_path_that_runs_end_to_end(driven, tmp_path, monkeypatch):
+    """The command `collect` names as the next step has to be one that works."""
+    from racecoach import cli
+
+    save_background(Background(participant_id="A001", racing_games="weekly"))
+    package(driven, tmp_path / "A001.zip")
+    monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "analyst"))
+
+    assert cli.main(["collect", str(tmp_path / "A001.zip"), "--into", str(tmp_path / "pool")]) == 0
+    summary = tmp_path / "summary.csv"
+    assert cli.main(["study-summary", "--out", str(summary)]) == 0
+    laps = tmp_path / "laps.csv"
+    assert cli.main(["study-laps", "--out", str(laps)]) == 0
+
+    rows = summary.read_text("utf-8").strip().splitlines()
+    assert len(rows) == 2 and rows[1].startswith("A001,baseline,3,")
+    # The comparability columns travelled with the laps and are on the row.
+    assert rows[1].endswith("weekly,3,,,,,,")
+    assert len(laps.read_text("utf-8").strip().splitlines()) == 4

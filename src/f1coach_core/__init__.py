@@ -54,6 +54,7 @@ from f1coach_core.workspace import (
     import_lap,
     import_telemetry,
     list_sessions,
+    list_study_sessions,
     sessions_root,
     workspace_root,
 )
@@ -95,6 +96,7 @@ __all__ = [
     "latest_coaching_outcomes",
     "latest_coaching_report",
     "list_sessions",
+    "list_study_sessions",
     "load_sample_lap",
     "load_sample_session",
     "load_session",

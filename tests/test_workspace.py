@@ -12,6 +12,7 @@ from f1coach_core import (
     import_lap,
     import_telemetry,
     list_sessions,
+    list_study_sessions,
     load_session,
     sessions_root,
 )
@@ -184,3 +185,20 @@ def test_a_session_that_was_never_recorded_reads_as_none(tmp_path, monkeypatch):
     monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "ws"))
     (tmp_path / "s").mkdir()
     assert session_recording(tmp_path / "s") is None
+
+
+def test_the_sample_that_ships_with_the_app_is_not_collected_data():
+    """It carries a real driver and phase, which is what makes it dangerous here.
+
+    Read as evidence, the demonstration is a participant nobody recruited, in
+    the coached arm, on every install. It stays in the Garage and out of the
+    comparison.
+    """
+    ensure_sample_session()
+    create_session("A001-baseline-20260826-091209")
+
+    assert [p.name for p in list_sessions()] == [
+        "A001-baseline-20260826-091209",
+        SAMPLE_SESSION_NAME,
+    ]
+    assert [p.name for p in list_study_sessions()] == ["A001-baseline-20260826-091209"]

@@ -4,6 +4,8 @@ import numpy as np
 import pytest
 
 from apex.study_view import StudyView
+from f1coach_core.participant import Background, save_background
+from f1coach_core.study import summary_columns
 
 
 def write_lap(directory, lap_number, *, driver, phase, seconds, off_track=0):
@@ -108,6 +110,15 @@ def test_a_channel_the_recording_lacks_shows_as_missing_not_as_zero(qtbot, tmp_p
 
 
 def test_the_export_is_the_file_a_statistical_test_consumes(qtbot, paired, tmp_path, monkeypatch):
+    """Every column, including the ones that say whether the groups were comparable.
+
+    Asserting only the first few fields let the background columns export empty
+    for as long as they did: the screen showed a background the file did not
+    carry, and the export exists precisely so that an outcome test and a
+    comparability check read one file rather than a join of two.
+    """
+    monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "ws"))
+    save_background(Background(participant_id="A001", racing_games="weekly", age_band="25-34"))
     view = StudyView()
     qtbot.addWidget(view)
     view.reload(paired)
@@ -119,11 +130,13 @@ def test_the_export_is_the_file_a_statistical_test_consumes(qtbot, paired, tmp_p
     )
     view._export_csv()
 
-    lines = target.read_text("utf-8").strip().split("\n")
-    assert lines[0].startswith("driver,phase,laps,best_lap_s")
+    lines = target.read_text("utf-8").strip().splitlines()
+    assert lines[0] == ",".join(summary_columns())
     assert len(lines) == 3
     assert lines[1].startswith("A001,baseline")
     assert lines[2].startswith("A001,coached")
+    for line in lines[1:]:
+        assert line.endswith("weekly,3,,,,,25-34,1")
 
 
 def test_the_view_reports_measurements_and_leaves_significance_to_the_analyst(
@@ -143,7 +156,7 @@ def test_the_view_reports_measurements_and_leaves_significance_to_the_analyst(
 def test_reload_survives_being_wired_to_a_button(qtbot, paired, monkeypatch):
     """clicked emits `checked`, which arrived as `roots` and was then iterated."""
     monkeypatch.setattr(
-        "apex.study_view.list_sessions", lambda: paired
+        "apex.study_view.list_study_sessions", lambda: paired
     )
     view = StudyView()
     qtbot.addWidget(view)
@@ -222,3 +235,24 @@ def test_one_phase_on_its_own_leaves_the_pickers_alone(qtbot, paired):
     assert view._selected_phases() == ("baseline", "")
     assert not view._left_phase.isEnabled()
     assert view._paired() == []
+
+
+def test_the_sample_that_ships_with_the_app_is_not_a_participant(qtbot, tmp_path, monkeypatch):
+    """Every install would otherwise show the same phantom in the coached arm.
+
+    The bundled sample is five real laps that still carry `driver: 0822` and
+    `phase: coached`, so a screen that reads the workspace read it as a sixth
+    person -- one nobody recruited, whose numbers no assignment explains.
+    """
+    from f1coach_core.workspace import ensure_sample_session, sessions_root
+
+    monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "ws"))
+    ensure_sample_session()
+    write_lap(sessions_root() / "A001-baseline", 1, driver="A001", phase="baseline",
+              seconds=20.0)
+
+    view = StudyView()
+    qtbot.addWidget(view)
+    view.reload()
+
+    assert [summary.driver for summary in view._summaries] == ["A001"]

@@ -2,7 +2,7 @@
 
 > 起点是 2026-08-25 的问题：**目前这套软件能不能拿来对比"接受了 AI 赛后反馈辅导的玩家"和"他最开始跑的那几圈"，判断是否有显著提升？**
 >
-> 下面每一条结论都指向具体代码位置，不凭印象。第 1 节是结论，第 2 节列已经具备的能力，第 3 节讲软件刻意不做的那一件事，第 4 节是真正挡在"显著"前面的六个问题（其中 4.4 是一个实打实的 bug），第 5 节给一条现在就能走的路径，第 6 节是按性价比排序的改动建议。
+> 下面每一条结论都指向具体代码位置，不凭印象。第 1 节是结论，第 2 节列已经具备的能力，第 3 节讲软件刻意不做的那一件事，第 4 节是真正挡在"显著"前面的六个问题（其中 4.4 是一个实打实的 bug），第 5 节给一条现在就能走的路径，第 6 节是按性价比排序的改动建议。第 8–10 节是逐次的进展记录：§8 = 6.2，§9 = 6.3，**§10 = 6.1 + 6.4，以及第一批真实数据暴露出来的三处问题**。
 
 ---
 
@@ -140,7 +140,7 @@
 
 原始 lap CSV 全都在盘上（`~/Apex/sessions/<name>/*.csv`，每个文件自带 driver/phase），所以**这些分析都做得了，只是软件现在不给那个文件**，要自己写一段脚本遍历 session 目录。
 
-### 4.4 GUI 导出把背景列丢了 —— 这是一个 bug
+### 4.4 GUI 导出把背景列丢了 —— 这是一个 bug（**2026-08-26 已修，见 §10.4**）
 
 ```python
 # src/apex/study_view.py:239
@@ -194,8 +194,11 @@ text = summary_csv(summaries, backgrounds=backgrounds)
 
 ```bash
 racecoach collect <participant-archives...> --into pooled/
-racecoach study-summary pooled/ --out summary.csv   # 走 CLI，背景列才是全的
+racecoach study-summary --out summary.csv           # collect 已经把圈入库了
+racecoach study-laps    --out laps.csv              # 一行一圈，做学习曲线用
 ```
+
+> **2026-08-26 更正**：原来这里写的是 `racecoach study-summary pooled/`，那条命令当时跑不出任何东西 —— pooled 目录里是整场原始导出，不是单圈。现在 `collect` 会把圈注册进 workspace，所以第二条不带参数即可。见 §10.1。
 
 **检验**
 
@@ -203,7 +206,7 @@ racecoach study-summary pooled/ --out summary.csv   # 走 CLI，背景列才是�
 |---|---|---|
 | 辅导组自己前后有没有变化 | Wilcoxon signed-rank（n < 20 或不正态）/ paired t | 主指标 `mean_lap_s`；同时报效应量（Cohen's dz 或 rank-biserial），别只报 p |
 | **改善是不是辅导带来的** | 组 × 时间交互：mixed ANOVA，或对 Δ = post − pre 做**两独立样本**检验 | **这一条才是研究问题**，见 4.1 |
-| 两组一开始是否可比 | 对四个 `*_rank` 列 + baseline 的 `mean_lap_s` 做组间比较 | 需要背景列非空 → 走 CLI 导出，或先修 4.4 |
+| 两组一开始是否可比 | 对四个 `*_rank` 列 + baseline 的 `mean_lap_s` 做组间比较 | 背景列两条路都非空了（§10.1、§10.4） |
 | 安全性/一致性有没有变 | 同样的检验跑在 `off_track_events`、`damage_events`、`sd_lap_s` 上 | 记得多重比较校正，并预先声明哪个是主指标 |
 
 **空白单元格**必须当成 missing 读进统计软件（`na.strings=""`），不能当 0 —— 这是 `_blank` 那条设计的全部意义。
@@ -214,18 +217,20 @@ racecoach study-summary pooled/ --out summary.csv   # 走 CLI，背景列才是�
 
 | # | 改动 | 工作量 | 换来什么 |
 |---|---|---|---|
-| **6.1** | `study_view.py:239` 传上 `backgrounds=`，并把导出测试的断言改成检查整行表头和背景列有值 | **一行 + 一条断言** | 修掉 4.4；GUI 导出的文件才真的是"可以直接做检验的文件" |
+| ~~**6.1**~~ **已完成** | `study_view.py` 传上 `backgrounds=`，并把导出测试的断言改成检查整行表头和背景列有值 | — | 修掉 4.4；GUI 导出的文件才真的是"可以直接做检验的文件"。**见 §10.4** |
 | ~~**6.2**~~ **已完成** | 采集页下拉框加 control 一项 | — | 对照组能走防呆的引导页，不必让 facilitator 敲命令行。**见 §8** |
 | ~~**6.3**~~ **已完成** | `StudyView` 的配对改成"任选两个 phase 比较"，不再硬编码 baseline/coached | — | 修掉 4.2；对照组、多次干预、任何三臂设计都能在界面上看。**见 §9** |
-| **6.4** | 新增 `racecoach study-laps --out laps.csv`：一行一圈（driver, phase, lap 序号, lap_time, off_track, damage + 背景列） | 半天 | 修掉 4.3 —— 学习曲线、混合效应模型、把练习效应剥出来，全靠这个文件 |
+| ~~**6.4**~~ **已完成** | 新增 `racecoach study-laps --out laps.csv`：一行一圈（driver, phase, lap 序号, race_lap, lap_time, off_track, damage + 背景列） | — | 修掉 4.3 —— 学习曲线、混合效应模型、把练习效应剥出来，全靠这个文件。**见 §10.5** |
 | **6.5** | 审计记录里加 participant / phase 字段；review 窗口记录"打开了哪个弯角、停留多久" | 1–2 天 | 修掉 4.5，拿到剂量-反应这条独立证据链 |
 | **6.6** | 随机分配名单：Apex 里生成并锁定 participant → condition 的映射 | 半天 | 现在靠人工名单，容易出错，也没有留痕 |
 
-**下一件：6.1**（一行，且现在从界面导出的文件是有缺陷的），然后 **6.4**。**要拿到能发表的因果结论，6.4 + 一个对照组是最低门槛** —— 对照组现在采得了、也看得见了，缺的是逐圈那个文件。
+~~**下一件：6.1**，然后 **6.4**。~~ **两件都在 2026-08-26 做完了（§10）。**对照组采得了（§8）、看得见了（§9）、逐圈那个文件也有了（§10.5）—— 剩下的门槛不在代码里，是人数，以及每段跑几圈（见 §10.10）。
 
 ---
 
 ## 7. 一句话回答
+
+> 这一节写于 2026-08-25 改动之前。最后半句已经不成立了 —— Study 界面现在自己选比哪两个条件（§9）。其余仍然作数。
 
 **测量、记录、配对、导出 —— 这套软件已经胜任，而且做得比一般的学生项目扎实（条件冻结、身份随文件走、缺失不当零、指标不止圈速）。"是否显著"要你在 R 里按最后一步，这是刻意的设计。真正的短板不在代码里：没有对照组，"变快了"就没法归因于 AI 辅导 —— 而现在的 Study 界面还恰好只认 baseline 和 coached 两个条件，对照组连显示都显示不出来。**
 
@@ -317,3 +322,156 @@ racecoach study-summary pooled/ --out summary.csv   # 走 CLI，背景列才是�
 ### 9.5 你要怎么看到它
 
 Study Results 在**研究模式**下才出现：菜单 **View → Research tools** 勾上。勾上之后顶部导航会多出 Study Results / Robot Pilot / Live Pit Wall 三项 —— 这个开关默认关着是故意的，参与者不该看到这些。顺带把这一项的悬停提示也改了，它原来还写着 "Baseline against coached"。
+
+
+---
+
+## 10. 真实数据到位之后（2026-08-26）：6.1 和 6.4 做完，另外修了三处只有真实数据才暴露得出来的问题
+
+`win_collect_data/` 里新增了 4 个 handover —— **B0826 的 baseline + coached**（辅导组一个完整被试）和 **C0826 的 baseline + control**（对照组一个完整被试），加上原来的 0823，一共 5 个包、15 圈。数据是在另一台 Windows 机器上用便携包采的（capture manifest 里的 `torcs_binary` 是 `D:\Apex\Apex-Study\torcs-runtime\wtorcs.exe`）。
+
+拿到数据之后第一件事不是写新功能，是**把文档里写的那条路真的走一遍**。走不通。
+
+### 10.1 `collect` → `study-summary` 这条路原本是断的（最要紧的一条）
+
+照 §5 写的做：
+
+```
+racecoach collect win_collect_data/*.zip --into pool/
+racecoach study-summary pool/ --out summary.csv
+```
+
+第一条成功，5 个包逐文件校验通过。第二条：
+
+```
+racecoach: No readable laps found to summarise.
+```
+
+**而这条命令正是 `collect` 自己在最后一行推荐的下一步。**
+
+原因：参与者交回来的是**采集文件夹**，里面是 TORCS 的整场原始导出（真实数据里是一个 18833 采样、17 MB 的文件），不是切好的单圈。而 study 这一侧每个读取者 —— `study-summary`、Study Results 界面、新的 `study-laps` —— 用的都是 `session_laps()`，它只认规范化的单圈 CSV。切分这一步（`split_torcs_run`）当时**只存在于 GUI 里**：`GarageView.import_handover()`。命令行没有任何入口。
+
+也就是说：**"校验通过"和"能分析"是两个承诺，而软件只兑现了第一个，措辞上却说成了一件事。** 一池完好无损的数据汇总出 0 行，看起来和"什么都没收到"完全一样。
+
+修法是把 GUI 里那段搬到该在的层：`_handover_identity` / `_adopt_background` / 会话命名去重这三段从 `apex/garage_view.py` 移到 `racecoach/telemetry/handover.py`，成为 `handover_identity()` / `adopt_background()` / `session_name()`，再加一个 `register(handover)`。GUI 改成调用同一批函数（它保留自己的 Qt 报错和 fresh 标记），`racecoach collect` 在校验之后调 `register`。这也符合 AGENTS.md 的分层：`src/apex/` 负责渲染，不该独占一整条数据通路的真相。
+
+现在：
+
+```
+B0826: 5 files -> ...\handovers\B0826-B0826-baseline-20260826-091209
+  3 lap(s) in session B0826-baseline-20260826-091209 (background kept)
+  skipped human-1-1787736065-9624-1.csv: ... holds no sample rows.
+...
+5 handover(s) verified into ...; 15 lap(s) registered in C:\Users\hh25303\Apex\sessions
+Next: racecoach study-summary --out summary.csv (or study-laps for one row per lap)
+```
+
+**顺带修掉一个隐性的空列问题。** `load_background()` 只从**本机 workspace** 的 `participants/<id>.json` 读。问卷确实随包旅行（`participant.json` 就在 zip 里），但以前只有 GUI 的 import 会把它收编进 workspace。所以研究者在自己机器上跑 CLI 导出时，**背景列同样是空的** —— §5 里那句"走 CLI 导出，背景列才是全的"其实只在"参与者就是在这台机器上采的"时候成立，而那恰恰不是 handover 存在的理由。`register()` 现在收编问卷，两条路都全了。
+
+### 10.2 每一台机器的每一次导出，都混进了一个不存在的参与者
+
+第一次跑通 `study-summary`，第一行是：
+
+```
+0822,coached,5,103.56,128.023,13.689,140,268.43,254,,,,,,,,
+```
+
+`0822` 不是这个研究招的任何人。它是**软件自带的示例 session**：`ensure_sample_session()` 在每台机器第一次启动时把 `f1coach_core/data/sample_session/` 铺进 workspace，而那五个文件的头部写着 `# driver: 0822 / # phase: coached / # setup: apex-study-v1` —— 它本来就是一份真实的研究采集，`sample.py` 的 docstring 也是这么写的。
+
+后果：**每一台装了 Apex 的机器，导出的 summary 里都会多出一个 coached 组的参与者**，5 圈、mean 128.0 s、sd 13.7、140 次出界、254 次损伤。在目前 n=2 的规模下，这个幽灵占三分之一，而且它的数字比谁都花哨。它还会进 Study Results 的表格，并且把 headline 里 "n of N" 的分母顶大一个。
+
+**不能靠删掉它的身份来解决** —— 那份示例是**故意**带身份的，它同时是"身份跟着文件走"的演示，`test_session.py` 和 `test_garage_view.py` 都锁着这一点。所以修在边界上：新增 `list_study_sessions()`（`workspace.py`），study 这一侧的默认扫描改用它，Garage 仍然用 `list_sessions()`。
+
+> 示例的用途是**演示**；演示不能进证据。把 `sample-session` 显式作为参数指给 `study-summary` 仍然读得到 —— 显式就是显式。
+
+### 10.3 一个空的导出文件会让整批 collect 崩掉
+
+B0826 的 baseline 采集文件夹里有两个 CSV：真正那次跑的 17 MB，和一个 **1584 字节、只有表头、0 行数据**的。时间戳 09:21:05，就在第一次跑结束（09:21:13）前后 —— TORCS 被再开了一次，车还没动就退了。这种文件在采集现场是常态，参与者也没有能力去收拾它。
+
+`split_torcs_run()` 对它做 `np.nanmax(空数组)`，抛出 numpy 的 `ValueError: zero-size array to reduction operation fmax which has no identity`，而这个函数的 docstring 写的是 "Raises TelemetrySchemaError with readable text"。往上 `register` 没有接住，于是**一个人的一个废文件，让另外四个人的数据全都没入库**。
+
+两处修：`split_torcs_run` 对无采样行的导出抛 `TelemetrySchemaError("… holds no sample rows.")`；`register` 跳过读不了的文件并把文件名和原因打出来。后者沿用 `session_laps` 早就写下的原则 —— 一个多出来的坏文件不该让好文件陪葬。
+
+### 10.4 6.1 完成
+
+`study_view.py` 的导出补上 `backgrounds=`，并且把"读问卷"收成视图上的一个 `_backgrounds()`：表格那一列和导出的文件现在用**同一个 mapping**。屏幕上看得见、文件里是空的，正是因为这两处以前各读各的。
+
+导出测试改成断言**整行表头**（`",".join(summary_columns())`）加上背景列有值。**先在改动前的代码上跑过并确认失败**：
+
+```
+'A001,baseline,2,19.0,19.5,0.5,5,8.23,,,,,,,,,'.endswith('weekly,3,,,,,25-34,1')  ->  False
+```
+
+尾巴上那一串逗号就是 §4.4 描述的八个空列。
+
+### 10.5 6.4 完成：`racecoach study-laps`
+
+一行一圈：
+
+```
+driver,phase,lap,race_lap,lap_time_s,off_track_events,off_track_seconds,damage_events,damage_total,source
+```
+
+外加八个背景列。两个决定值得写下来：
+
+- **`lap` 是这一圈在这个 phase 里的序号，不是模拟器的圈号。** 模拟器的圈号每次开跑都从 1 重来，而一个 phase 完全可能是分两次录完的（B0826 的 baseline 文件夹里就有两个导出）。排序按文件名走 —— 导出文件名里带这次跑的起始时间戳加补零的圈号，也就是**真正开的顺序**。模拟器那个圈号作为 provenance 单独留一列 `race_lap`。
+- **背景列在每一圈上重复。** 刻意的冗余：要把先验经验当协变量放进回归，不该先让分析者去 join 第二个文件。
+
+`damage_total` 也一并给了，phase 级的行没有这一列。
+
+### 10.6 这批真实数据说了什么
+
+先说清楚：**每臂 n=1，什么都证明不了。** 下面只是"管子通了，数字长这样"。
+
+| 参与者 | 臂 | phase | mean_lap_s | best_lap_s | 出界秒数 | 损伤事件 |
+|---|---|---|---|---|---|---|
+| B0826 | 辅导 | baseline | 124.77 | 119.62 | 120.97 | 90 |
+| B0826 | 辅导 | **coached** | **132.16** | 126.12 | 178.82 | 143 |
+| C0826 | 对照 | baseline | 116.38 | 105.98 | 123.58 | 168 |
+| C0826 | 对照 | **control** | **118.08** | 114.19 | 94.71 | 98 |
+
+两个人的第二段都比第一段**慢**：辅导那位慢 7.4 s，对照那位慢 1.7 s。
+
+但逐圈文件立刻给出一件汇总行看不到的事：
+
+- B0826 的 **coached 三圈是 138.44 → 131.92 → 126.12**，三圈之内快了 12.3 s，是全部 15 圈里最陡的一段下降；
+- 而他的 **baseline 三圈是 119.62 → 128.14 → 126.56** —— 第一圈就是他整场最快，之后反而在退。
+
+也就是说"coached 比 baseline 慢"这个汇总数，很可能主要是被 coached 第一圈那个 138.44 拉出来的。这正是 §4.3 讲的那件事：**phase 级的一行没有斜率**，而斜率才是把练习和辅导分开的东西。现在这个文件有了 —— 而它给出的第一条读数，就是汇总行会把人引向反方向。
+
+（另记一笔，方便解释数据：这批 lap 的 `off_track_events` 每圈 19–30 次、`off_track_seconds` 每圈 24–69 s，数字大得可疑，所以回原始通道查过 —— 不是指标算错：一圈里 `|track_pos| > 1` 的采样占 **20.5%**，最远到 ±2.6。Aalborg 窄、参与者是新手，车确实有五分之一的时间在赛道边界外面。这对研究是好消息：安全性指标有足够的区分度，不是一片 0。）
+
+### 10.7 验证
+
+- 全套 **668 passed / 17 skipped**（比上一版多 12 条），`ruff check src tests` 干净。
+- 两组新测试做过**改动前的红**：6.1 的导出断言（上面那一行），以及示例 session 的排除（把 `list_study_sessions()` 临时改回 `list_sessions()`，两条都失败）。
+- `register` 相关：入库、问卷收编到**另一台机器的 workspace**、重复 collect 不重复计数、没有 manifest 也照样入库、空导出被跳过；以及一条端到端 —— **`collect` 之后 `study-summary` 和 `study-laps` 都返回 0 并写出文件**，锁的正是 10.1 那个断掉的承诺。
+- 真实数据上：5 个包 → 15 圈 → 5 行 summary、15 行 laps，背景列非空。
+- Study Results 离屏跑过真实 workspace：phase 下拉框给出 `baseline / coached / control`；默认 baseline vs coached 配上 B0826；切到 control 配上 C0826；分母是 3（0823 只有一个 phase），这是 §9.2 说的正常读数。
+
+### 10.8 数据现在在哪
+
+| 东西 | 位置 |
+|---|---|
+| 原始 handover（校验过的解包） | `C:\Users\hh25303\Apex\captures\handovers\` |
+| 可分析的单圈 | `C:\Users\hh25303\Apex\sessions\<参与者>-<phase>-<时间戳>\` |
+| 问卷 | `C:\Users\hh25303\Apex\participants\<id>.json` |
+| `summary.csv` / `laps.csv` | `D:\apex-analysis\`（D: 是会话主机本地盘，重连不跟人走；要留就自己拷进 profile） |
+
+### 10.9 一件需要你决定的事：参与者数据进了 git
+
+`win_collect_data/0823-baseline-20260823-175257.zip` **已经被提交并推到了 `origin/main`**（commit `8d2f0f3`）。那个 zip 里有一个 61 MB 的 `session.mp4` —— 一位参与者整场的屏幕录像。`.gitignore` 里本来就有 `*.mp4` 和 `/captures/`，意图是清楚的，只是一个 zip 把录像装在里面绕过去了。
+
+我做了的：把 `/win_collect_data/` 加进 `.gitignore`，这样这次新增的 4 个包（含 3 段录像）不会重蹈覆辙。**已经在历史里的那一个我没有动** —— 改写已推送的历史是不可逆而且对外的操作，得你决定。可选的做法，从轻到重：
+
+1. 确认仓库是 private，并接受它留在历史里；
+2. `git rm --cached` 那个文件再提交 —— 之后的克隆不再检出它，但**历史里还在**，GitHub 上也还能通过旧 commit 拿到；
+3. 用 `git filter-repo` 或 BFG 从历史里彻底抹掉再 force-push，并且请 GitHub 支持清理引用 —— 这是唯一真正删掉的办法，代价是所有克隆都要重来。
+
+如果这份研究有伦理审批，第 3 条大概不是可选项而是必须。
+
+### 10.10 下一步
+
+6.1 和 6.4 做完了，`racecoach study-laps` 已经能吐出学习曲线要的那个文件。剩下的按原顺序：**6.5**（辅导曝光量，拿剂量-反应）和 **6.6**（随机分配名单）。
+
+在写代码之前，真实数据先提了一个更便宜的问题：**每个 phase 只有 3 圈，而 B0826 的 coached 三圈还在陡降** —— 也就是说三圈可能根本没跑完他的学习曲线，测到的是"还在适应"而不是"辅导之后的水平"。§4.6 早就说过 `best_lap_s` 在 3 圈上方差大且有偏。要不要把每段加到 5 圈，是比任何一行代码都更能提高功效的改动，而且要在收第二个参与者之前定。

@@ -56,6 +56,10 @@ telemetry/raw/
 *.dmg
 *.mp4
 
+# Participant handovers. A study package holds a participant's telemetry and
+# a screen recording of their session; it travels by memory stick, not by git.
+/win_collect_data/
+
 # Existing archives, damaged placeholders, and shared team material
 /apex.zip
 /torcs-*.tar.*

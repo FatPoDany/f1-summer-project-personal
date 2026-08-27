@@ -174,6 +174,47 @@ def summarise(driver: str, phase: str, laps: list[Lap]) -> PhaseSummary | None:
     )
 
 
+@dataclass(frozen=True)
+class LapRow:
+    """One lap of one participant: the row a within-phase model consumes.
+
+    The phase summary answers "was this participant quicker afterwards". It
+    cannot answer "were they still getting quicker anyway", and that question is
+    the one that separates coaching from practice: three laps of a baseline
+    already carry a slope, and an improvement that merely continues it is not
+    evidence of anything the coaching did.
+    """
+
+    driver: str
+    phase: str
+    lap: int  # order within the phase -- the axis a learning curve is drawn on
+    race_lap: int | None  # what the simulator called it, kept as provenance
+    lap_time_s: float
+    off_track_events: int | None
+    off_track_seconds: float | None
+    damage_events: int | None
+    damage_total: float | None
+    source: str
+
+    def to_row(self) -> dict:
+        return {
+            "driver": self.driver,
+            "phase": self.phase,
+            "lap": self.lap,
+            "race_lap": _blank(self.race_lap),
+            "lap_time_s": round(self.lap_time_s, 3),
+            "off_track_events": _blank(self.off_track_events),
+            "off_track_seconds": _blank(
+                None if self.off_track_seconds is None else round(self.off_track_seconds, 2)
+            ),
+            "damage_events": _blank(self.damage_events),
+            "damage_total": _blank(
+                None if self.damage_total is None else round(self.damage_total, 2)
+            ),
+            "source": self.source,
+        }
+
+
 def summarise_all(laps: list[Lap]) -> list[PhaseSummary]:
     """Group laps by participant and phase, in a stable order.
 
@@ -235,6 +276,88 @@ def summary_csv(summaries: list[PhaseSummary], *, backgrounds: dict | None = Non
     for summary in summaries:
         row = summary.to_row()
         found = (backgrounds or {}).get(summary.driver)
+        row.update(background_columns(found))
+        lines.append(",".join(_csv_cell(row.get(column, "")) for column in columns))
+    return "\n".join(lines) + "\n"
+
+
+def lap_rows(laps: list[Lap]) -> list[LapRow]:
+    """Every identified lap, numbered within its own phase, in the order driven.
+
+    Ordered by file name rather than by the simulator's lap counter. The counter
+    restarts at 1 in every run, so a phase that took two runs to record would
+    otherwise interleave them; the exporter's names carry the run's start time
+    and a zero-padded lap, which puts them in the order somebody actually drove.
+    """
+    groups: dict[tuple[str, str], list[Lap]] = {}
+    for lap in laps:
+        driver = lap.identity.driver
+        phase = lap.identity.phase
+        if not driver or not phase:
+            continue
+        groups.setdefault((driver, phase), []).append(lap)
+
+    rows: list[LapRow] = []
+    for (driver, phase), group in sorted(groups.items()):
+        for index, lap in enumerate(sorted(group, key=lambda lap: lap.source.name), start=1):
+            metrics = lap_metrics(lap)
+            rows.append(
+                LapRow(
+                    driver=driver,
+                    phase=phase,
+                    lap=index,
+                    race_lap=lap.lap_number,
+                    lap_time_s=metrics.lap_time_s,
+                    off_track_events=metrics.off_track_events,
+                    off_track_seconds=metrics.off_track_seconds,
+                    damage_events=metrics.damage_events,
+                    damage_total=metrics.damage_total,
+                    source=lap.source.name,
+                )
+            )
+    return rows
+
+
+LAP_COLUMNS = (
+    "driver",
+    "phase",
+    "lap",
+    "race_lap",
+    "lap_time_s",
+    "off_track_events",
+    "off_track_seconds",
+    "damage_events",
+    "damage_total",
+    "source",
+)
+
+
+def lap_columns(with_background: bool = True) -> tuple[str, ...]:
+    if not with_background:
+        return LAP_COLUMNS
+    background: list[str] = []
+    for name in BACKGROUND_COLUMNS:
+        background += [name, f"{name}_rank"]
+    return LAP_COLUMNS + tuple(background)
+
+
+def lap_csv(laps: list[Lap], *, backgrounds: dict | None = None) -> str:
+    """One row per lap, for the models a per-phase row cannot support.
+
+    Three laps to a phase is a small sample summarised into one number and a
+    smaller one still. The same laps as rows keep every observation: a mixed
+    model with laps nested in participants uses all of them, and the lap index
+    is what lets practice be estimated instead of assumed away.
+
+    Prior experience repeats on every one of a participant's rows. It is
+    redundant and deliberately so -- a regression that adjusts for it should not
+    require the analyst to join a second file first.
+    """
+    columns = lap_columns()
+    lines = [",".join(columns)]
+    for entry in lap_rows(laps):
+        row = entry.to_row()
+        found = (backgrounds or {}).get(entry.driver)
         row.update(background_columns(found))
         lines.append(",".join(_csv_cell(row.get(column, "")) for column in columns))
     return "\n".join(lines) + "\n"

@@ -6,9 +6,13 @@ import numpy as np
 import pandas as pd
 
 from f1coach_core.lap import Lap, StudyIdentity
+from f1coach_core.participant import Background
 from f1coach_core.study import (
     MIN_EXCURSION_SAMPLES,
+    lap_columns,
+    lap_csv,
     lap_metrics,
+    lap_rows,
     summarise,
     summarise_all,
     summary_csv,
@@ -23,6 +27,8 @@ def make_lap(
     driver: str | None = "A001",
     phase: str | None = "baseline",
     n: int = 100,
+    source: str = "lap.csv",
+    lap_number: int | None = None,
 ) -> Lap:
     t = np.linspace(0.0, seconds, n)
     data = {
@@ -40,9 +46,10 @@ def make_lap(
         data["damage"] = damage
     return Lap(
         pd.DataFrame(data),
-        Path("lap.csv"),
+        Path(source),
         schema_version=1,
         dist_derived=False,
+        lap_number=lap_number,
         identity=StudyIdentity(driver=driver, phase=phase, setup="apex-study-v1"),
     )
 
@@ -176,3 +183,82 @@ def _excursions(count: int) -> np.ndarray:
         start = 10 + index * 25
         pos[start : start + 10] = 1.5
     return pos
+
+
+def test_every_lap_is_its_own_row_so_a_learning_curve_can_be_drawn():
+    """A phase summarised to one number carries no slope; its laps do.
+
+    Whether a coached participant improved more than practice alone explains is
+    a question about the trend inside each phase, and a mean cannot be asked it.
+    """
+    laps = [
+        make_lap(driver="A001", phase="baseline", seconds=22.0, source="run-lap01.csv"),
+        make_lap(driver="A001", phase="baseline", seconds=21.0, source="run-lap02.csv"),
+        make_lap(driver="A001", phase="baseline", seconds=20.0, source="run-lap03.csv"),
+    ]
+
+    rows = lap_rows(laps)
+
+    assert [row.lap for row in rows] == [1, 2, 3]
+    assert [round(row.lap_time_s) for row in rows] == [22, 21, 20]
+
+
+def test_the_lap_index_follows_the_order_driven_not_the_simulators_counter():
+    """The counter restarts at 1 every run; a phase can take two runs to record."""
+    laps = [
+        make_lap(driver="A001", phase="baseline", seconds=21.0,
+                 source="human-1-1787740000-1-lap02.csv", lap_number=2),
+        make_lap(driver="A001", phase="baseline", seconds=19.0,
+                 source="human-1-1787750000-1-lap01.csv", lap_number=1),
+        make_lap(driver="A001", phase="baseline", seconds=22.0,
+                 source="human-1-1787740000-1-lap01.csv", lap_number=1),
+    ]
+
+    rows = lap_rows(laps)
+
+    assert [row.lap for row in rows] == [1, 2, 3]
+    # Both of the first run's laps precede the second run's, and the counter
+    # they carry is kept beside the index rather than used as it.
+    assert [row.race_lap for row in rows] == [1, 2, 1]
+    assert [round(row.lap_time_s) for row in rows] == [22, 21, 19]
+
+
+def test_an_unattributed_lap_cannot_join_either_side_of_the_comparison():
+    laps = [
+        make_lap(driver="A001", phase="baseline"),
+        make_lap(driver=None, phase=None, source="loose.csv"),
+    ]
+
+    assert [row.driver for row in lap_rows(laps)] == ["A001"]
+
+
+def test_prior_experience_rides_on_every_lap_row(tmp_path, monkeypatch):
+    """A regression adjusting for experience must not need a second file joined in."""
+    monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path))
+    background = Background(participant_id="A001", racing_games="weekly", age_band="25-34")
+
+    text = lap_csv(
+        [
+            make_lap(driver="A001", phase="baseline", source="run-lap01.csv"),
+            make_lap(driver="A001", phase="baseline", source="run-lap02.csv"),
+        ],
+        backgrounds={"A001": background},
+    )
+    lines = text.strip().splitlines()
+
+    assert lines[0] == ",".join(lap_columns())
+    assert len(lines) == 3
+    for line in lines[1:]:
+        assert line.endswith("weekly,3,,,,,25-34,1")
+
+
+def test_a_channel_the_recording_lacks_stays_blank_per_lap_too():
+    """Per-lap rows keep the rule the per-phase rows keep: missing is not zero."""
+    text = lap_csv([make_lap(driver="A001", phase="baseline", source="run-lap01.csv")])
+    header, row = text.strip().splitlines()
+    cells = dict(zip(header.split(","), row.split(","), strict=True))
+
+    assert cells["off_track_events"] == ""
+    assert cells["damage_events"] == ""
+    assert cells["lap"] == "1"
+    assert cells["source"] == "run-lap01.csv"

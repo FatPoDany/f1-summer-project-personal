@@ -90,6 +90,12 @@ def split_torcs_run(path: str | Path) -> list[TorcsLap]:
         )
 
     dist = pd.to_numeric(df["dist_from_start_m"], errors="coerce").to_numpy(dtype=float)
+    if dist.size == 0:
+        # A header and nothing else: the recorder opened a file for a race the
+        # participant left before the car moved. It happens beside a real run in
+        # the same capture folder, so this has to read as an empty export rather
+        # than as numpy failing to take the maximum of nothing.
+        raise TelemetrySchemaError(f"{path.name} holds no sample rows.")
     track_length = float(np.nanmax(dist))
     if not np.isfinite(track_length) or track_length <= 0:
         raise TelemetrySchemaError(f"{path.name}: dist_from_start_m carries no usable values.")
