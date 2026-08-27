@@ -114,11 +114,18 @@ def test_the_export_is_the_file_a_statistical_test_consumes(qtbot, paired, tmp_p
 
     Asserting only the first few fields let the background columns export empty
     for as long as they did: the screen showed a background the file did not
-    carry, and the export exists precisely so that an outcome test and a
-    comparability check read one file rather than a join of two.
+    carry, and the export exists precisely so that an outcome test, a
+    comparability check and a dose-response check read one file rather than a
+    join of three.
     """
+    from f1coach_core.exposure import CORNER_VIEW, ReviewView, append_view
+
     monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "ws"))
     save_background(Background(participant_id="A001", racing_games="weekly", age_band="25-34"))
+    append_view(
+        ReviewView(driver="A001", phase="baseline", kind=CORNER_VIEW, seconds=52.0,
+                   corner="T3", advice=True, id="view-1")
+    )
     view = StudyView()
     qtbot.addWidget(view)
     view.reload(paired)
@@ -137,6 +144,11 @@ def test_the_export_is_the_file_a_statistical_test_consumes(qtbot, paired, tmp_p
     assert lines[2].startswith("A001,coached")
     for line in lines[1:]:
         assert line.endswith("weekly,3,,,,,25-34,1")
+    cells = [dict(zip(lines[0].split(","), line.split(","), strict=True))
+             for line in lines[1:]]
+    assert (cells[0]["review_seconds"], cells[0]["advice_seconds"]) == ("52.0", "52.0")
+    # The phase they went on to drive is the response, not a second dose.
+    assert cells[1]["review_seconds"] == "0"
 
 
 def test_the_view_reports_measurements_and_leaves_significance_to_the_analyst(

@@ -11,6 +11,7 @@ import pytest
 from f1coach_core.participant import Background, load_background, save_background
 from racecoach.telemetry.handover import (
     HandoverError,
+    adopt_background,
     collect,
     package,
     register,
@@ -281,3 +282,111 @@ def test_collect_then_summarise_is_a_path_that_runs_end_to_end(driven, tmp_path,
     # The comparability columns travelled with the laps and are on the row.
     assert rows[1].endswith("weekly,3,,,,,,")
     assert len(laps.read_text("utf-8").strip().splitlines()) == 4
+
+
+def test_what_a_participant_read_travels_with_what_they_drove(capture, tmp_path):
+    """Whether coaching changed their driving is unanswerable if the only
+    machine that knew whether they read it is the one being packaged."""
+    from f1coach_core.exposure import CORNER_VIEW, ReviewView, append_view
+
+    append_view(
+        ReviewView(driver="A001", phase="baseline", kind=CORNER_VIEW, seconds=31.0,
+                   corner="T3", advice=True, id="view-1")
+    )
+
+    result = package(capture, tmp_path / "A001.zip")
+
+    with zipfile.ZipFile(result.path) as archive:
+        assert "exposure.jsonl" in archive.namelist()
+        assert b"T3" in archive.read("exposure.jsonl")
+
+
+def test_a_participant_who_read_nothing_hands_over_a_log_saying_so(capture, tmp_path):
+    """Recorded and looked at nothing is a measurement. No log at all is not,
+    and the analysis must be able to tell those two apart."""
+    result = package(capture, tmp_path / "A001.zip")
+
+    with zipfile.ZipFile(result.path) as archive:
+        assert archive.read("exposure.jsonl") == b""
+
+
+def test_collecting_adopts_the_viewing_log_into_the_analysts_workspace(
+    capture, tmp_path, monkeypatch
+):
+    """A log that stays where it unpacked is a dose column that exports blank."""
+    from f1coach_core.exposure import CORNER_VIEW, ReviewView, append_view, load_exposure
+
+    append_view(
+        ReviewView(driver="A001", phase="baseline", kind=CORNER_VIEW, seconds=31.0,
+                   corner="T3", advice=True, id="view-1")
+    )
+    archive = package(capture, tmp_path / "A001.zip").path
+
+    # A different machine, which is the only case that matters: the researcher
+    # who collects has never seen this participant's viewing before.
+    monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "analyst-ws"))
+    (handover,) = collect([archive], tmp_path / "pool")
+    registered = register(handover)
+
+    assert registered.views == 1
+    assert [v.corner for v in load_exposure()["A001"]] == ["T3"]
+
+
+def test_the_same_participants_second_package_does_not_double_their_dose(
+    capture, tmp_path, monkeypatch
+):
+    """Every package carries the whole log to date, not that phase's share."""
+    from f1coach_core.exposure import CORNER_VIEW, ReviewView, append_view, load_exposure
+
+    append_view(
+        ReviewView(driver="A001", phase="baseline", kind=CORNER_VIEW, seconds=31.0,
+                   corner="T3", id="view-1")
+    )
+    first = package(capture, tmp_path / "A001-baseline.zip").path
+    second = package(capture, tmp_path / "A001-coached.zip").path
+
+    monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "analyst-ws"))
+    register(unpack(first, tmp_path / "pool-1"))
+    register(unpack(second, tmp_path / "pool-2"))
+
+    assert len(load_exposure()["A001"]) == 1
+
+
+def test_a_folder_that_already_holds_one_cannot_send_two_of_it(capture, tmp_path):
+    """Digests are checked by name, so a duplicate name is a check that is not made.
+
+    A handover somebody unpacked and packaged again is the way this happens:
+    the folder now holds the participant.json and exposure.jsonl the first
+    package put there, and both names are filled from the workspace.
+    """
+    save_background(Background(participant_id="A001", racing_games="weekly"))
+    (capture / "participant.json").write_text('{"participant_id": "IMPOSTOR"}', "utf-8")
+    (capture / "exposure.jsonl").write_text("stale\n", encoding="utf-8")
+
+    result = package(capture, tmp_path / "A001.zip")
+
+    with zipfile.ZipFile(result.path) as archive:
+        names = archive.namelist()
+        assert len(names) == len(set(names))
+        assert json.loads(archive.read("participant.json"))["participant_id"] == "A001"
+        assert archive.read("exposure.jsonl") == b""
+
+
+def test_a_byte_order_mark_does_not_make_a_handover_nobodys(tmp_path, monkeypatch):
+    """A manifest read as plain utf-8 with three bytes in front names no driver,
+    and the laps then import as an unattributed session no comparison can use."""
+    monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "ws"))
+    from racecoach.telemetry.handover import handover_identity
+
+    folder = tmp_path / "arrived"
+    folder.mkdir()
+    body = json.dumps({"participant_id": "P007", "phase": "baseline"})
+    (folder / "manifest.json").write_bytes(b"\xef\xbb\xbf" + body.encode("utf-8"))
+    background = json.dumps({"participant_id": "P007", "racing_games": "weekly"})
+    (folder / "participant.json").write_bytes(b"\xef\xbb\xbf" + background.encode("utf-8"))
+
+    identity, _recording = handover_identity(folder)
+
+    assert (identity.driver, identity.phase) == ("P007", "baseline")
+    assert adopt_background(folder) == "P007"
+    assert load_background("P007").racing_games == "weekly"

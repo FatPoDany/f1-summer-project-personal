@@ -1,4 +1,4 @@
-# 便携研究版打包记录（2026-08-26）
+# 便携研究版打包记录（2026-08-26 首次；2026-08-27 因辅导曝光量重打，见第 3 节）
 
 ## 1. 一句话
 
@@ -40,18 +40,41 @@
 
 | 路径 | 是什么 | 大小 |
 |---|---|---|
-| `D:\apex-dist\Apex-Study\` | 解开的目录，可以直接拷 U 盘 | 1002 MB / 3882 个文件 |
-| `D:\apex-dist\Apex-Study-2026-08-26.zip` | 打好的 zip | **574.1 MB** |
-| `C:\Users\hh25303\Apex-Study-2026-08-26.zip` | **同一个 zip 的副本，放在 profile 里** | 574.1 MB |
+| `D:\apex-dist\Apex-Study\` | 解开的目录，可以直接拷 U 盘 | 1002 MB |
+| `D:\apex-dist\Apex-Study-2026-08-27.zip` | 打好的 zip | **576.7 MB** |
+| `C:\Users\hh25303\Apex-Study-2026-08-27.zip` | **同一个 zip 的副本，放在 profile 里** | 576.7 MB |
 | 两处各有一个 `.zip.sha256` | 拷贝之后核对用 |  |
 
-    SHA-256  835B684B3EC88223A3045C7BD2110F7789B3D06BCF02A5F035A4D4B56B9D6FAC
+    SHA-256  BD12E197847286BFA44F65324AA34F40AADF264DCB0CADB296B5598BEC388379
 
 到了另一台机器上核对：
 
-    certutil -hashfile Apex-Study-2026-08-26.zip SHA256
+    certutil -hashfile Apex-Study-2026-08-27.zip SHA256
 
-解压后是一个 `Apex-Study\` 目录（不会把 3882 个文件散到当前目录里）。
+> **2026-08-27 重打了一次，08-26 那个 zip 已经删掉。**这一版必须换：辅导曝光量
+> （`docs/STUDY_CAN_WE_SHOW_IMPROVEMENT.md` §11）是**在参与者那台机器上记录的** ——
+> review 窗口开了哪个弯、停留多久，随 `exposure.jsonl` 一起进交回来的包。旧 zip
+> 不记这些，用它采回来的数据剂量列会是空白。上一次（§10）改的全在研究者这一侧，
+> 所以当时没重打；这一次不一样。
+>
+> 顺带补上了两个 08-26 早上那版漏掉的文件：`_internal\libcrypto-3-x64.dll` 和
+> `libssl-3-x64.dll`（1072 → 1074 个文件）。少了它们，需要 HTTPS 的路径（例如让 app
+> 自己下载 Granite 权重）会失败。
+>
+> **同一天打了两次，文件名没变，上面的 SHA-256 是第二次的。**第一次（约 09:55，
+> `A9C5FA5C…40FB`）已经被覆盖。第二次多了三样：研究者写的 advice adherence（`racecoach
+> study-adherence` + summary 里五列）、`utf-8-sig` 那个修正（见下），以及一次完整的
+> 启动检查。**如果你在 09:55 到 11:00 之间已经把 zip 拷到过 U 盘，那份是旧的** ——
+> 用 `certutil -hashfile` 对一下上面的哈希，或者看解压出来的 `apex-study-build.txt`，
+> 第二次那份第一行写的是 "second swap of the day"。
+>
+> **`utf-8-sig`**：从别人机器上过来的文件（`manifest.json` / `participant.json` /
+> `exposure.jsonl`）以前是按 utf-8 读的。Windows 上任何东西重写过这些文件都可能在开头
+> 留下三个字节的 BOM，按 utf-8 读就会**静悄悄地丢掉第一行** —— 对 manifest 来说，那等于
+> 整个 handover 变成"没有身份的圈"。这是**跑打好的 exe 时才发现的**：写了 3 条 view，
+> 收进去只有 2 条。
+
+解压后是一个 `Apex-Study\` 目录（不会把 3884 个文件散到当前目录里）。
 
 **为什么要放两份**：`D:` 是这台会话主机的本地盘。这是 AVD 主机池，重连有可能落到另一台机器
 上，那台的 `D:` 里没有你的东西 —— 不是被清理，是根本不在那儿。只有 profile
@@ -198,14 +221,19 @@ ZIP 规范（APPNOTE 4.4.17.1）要求条目名用正斜杠。.NET Framework 4.x
 
 改用 Windows 自带的 `tar.exe`（其实是 bsdtar / libarchive）重打：
 
-    tar -a -c -f Apex-Study-2026-08-26.zip -C D:\apex-dist Apex-Study
+    tar -a -c -f Apex-Study-2026-08-27.zip -C D:\apex-dist Apex-Study
 
-条目名是正斜杠，单一根目录 `Apex-Study/`，4230 个条目。
+条目名是正斜杠，单一根目录 `Apex-Study/`。
 
-然后**真的解开验了一遍**，而不是只看条目名：解压出来 3882 个文件、总字节数与源目录完全相同，
-`Apex.exe` / `racecoach.exe` / `wtorcs.exe` / `base_library.zip` 逐个 SHA-256 一致，并且从
-**解压出来的那份**跑 `racecoach.exe --help` 退出码 0、启动 `Apex.exe` 拿到窗口标题 "Apex"
-后干净退出。
+然后**真的解开验了一遍**，而不是只看条目名。2026-08-27 第二次这一版：解压出来
+**3884 个文件、1,058,463,897 字节**，与源目录逐项相同；`Apex.exe` / `racecoach.exe` /
+`wtorcs.exe` / `base_library.zip` 四个逐个 SHA-256 一致；从**解压出来的那份**跑
+`racecoach.exe --help`、`study-exposure --help`、`study-adherence --help` 全部退出码 0；
+并且**启动了解压出来的 `Apex.exe`**，4.8 秒拿到窗口标题 "Apex"，干净退出，退出码 0。
+
+> 第一次（09:55）跳过了启动检查 —— 当时研究者自己的 Apex 正开着、llama-server 也在跑，
+> 在活动会话上再起一个实例不值得。11:00 这次他关掉之后补上了，装好的那份
+> `C:\Users\hh25303\repos\Apex\Apex.exe` 也单独跑了一次（3.7 秒，标题 "Apex"，退出码 0）。
 
 ---
 

@@ -18,6 +18,18 @@ from statistics import mean, pstdev
 
 import numpy as np
 
+from f1coach_core.adherence import (
+    ADHERENCE_COLUMNS,
+    ADHERENCE_ROW_COLUMNS,
+    AdherenceReport,
+    adherence_columns,
+)
+from f1coach_core.exposure import (
+    EXPOSURE_COLUMNS,
+    VIEW_COLUMNS,
+    ReviewView,
+    exposure_columns,
+)
 from f1coach_core.lap import Lap
 from f1coach_core.participant import BACKGROUND_COLUMNS, background_columns
 
@@ -252,24 +264,60 @@ PERFORMANCE_COLUMNS = (
 
 
 def summary_columns(with_background: bool = True) -> tuple[str, ...]:
+    """What was driven, what was taken in, what was done about it, then who they are.
+
+    Exposure and adherence sit beside the outcomes rather than out with the
+    background columns because both are measurements of this row's phase, not
+    standing facts about the participant: they change between a person's
+    baseline row and their second row, and the background columns deliberately
+    do not.
+
+    The three are one argument read left to right -- how much coaching they
+    looked at, whether the corners it named then moved, and what the lap times
+    did. Split across files, an analyst has to join them before that argument
+    can be made at all.
+    """
     if not with_background:
         return PERFORMANCE_COLUMNS
     background: list[str] = []
     for name in BACKGROUND_COLUMNS:
         background += [name, f"{name}_rank"]
-    return PERFORMANCE_COLUMNS + tuple(background)
+    return PERFORMANCE_COLUMNS + EXPOSURE_COLUMNS + ADHERENCE_COLUMNS + tuple(background)
 
 
 SUMMARY_COLUMNS = summary_columns()
 
 
-def summary_csv(summaries: list[PhaseSummary], *, backgrounds: dict | None = None) -> str:
+def summary_csv(
+    summaries: list[PhaseSummary],
+    *,
+    backgrounds: dict | None = None,
+    exposure: dict | None = None,
+    adherence: dict | None = None,
+) -> str:
     """One row per participant per phase, ready for a paired test.
 
     Prior experience rides along on the same rows. Whether the groups were
     comparable to begin with is not a separate question from whether they
     differed afterwards -- it is the question that decides what the difference
     means -- so an analyst should not have to join two files to ask it.
+
+    So does how much coaching they looked at. The between-arm test needs both
+    arms to be alike; the dose-response test needs neither, and it is the one a
+    study this small can actually carry. It asks a different question of the
+    same rows, so it belongs on the same rows.
+
+    So does what they then did about it. Seconds in front of a screen is a dose
+    and a lap time is an outcome, and on their own the two are a correlation
+    with nothing in between; whether the corners the advice named actually moved
+    is the term that makes it a chain. It is also the only thing that separates
+    advice that did not work from advice nobody acted on, which otherwise leave
+    identical lap times behind.
+
+    ``exposure`` maps a participant to every view recorded of them. ``adherence``
+    maps (participant, phase) to that run's comparison with their baseline.
+    Left None, either set of columns is blank throughout -- the honest reading
+    for a caller that did not look, and not the same claim as zero.
     """
     columns = summary_columns()
     lines = [",".join(columns)]
@@ -277,6 +325,19 @@ def summary_csv(summaries: list[PhaseSummary], *, backgrounds: dict | None = Non
         row = summary.to_row()
         found = (backgrounds or {}).get(summary.driver)
         row.update(background_columns(found))
+        row.update(
+            exposure_columns(
+                None if exposure is None else exposure.get(summary.driver),
+                phase=summary.phase,
+            )
+        )
+        row.update(
+            adherence_columns(
+                None
+                if adherence is None
+                else adherence.get((summary.driver, summary.phase))
+            )
+        )
         lines.append(",".join(_csv_cell(row.get(column, "")) for column in columns))
     return "\n".join(lines) + "\n"
 
@@ -338,10 +399,15 @@ def lap_columns(with_background: bool = True) -> tuple[str, ...]:
     background: list[str] = []
     for name in BACKGROUND_COLUMNS:
         background += [name, f"{name}_rank"]
-    return LAP_COLUMNS + tuple(background)
+    return LAP_COLUMNS + EXPOSURE_COLUMNS + tuple(background)
 
 
-def lap_csv(laps: list[Lap], *, backgrounds: dict | None = None) -> str:
+def lap_csv(
+    laps: list[Lap],
+    *,
+    backgrounds: dict | None = None,
+    exposure: dict | None = None,
+) -> str:
     """One row per lap, for the models a per-phase row cannot support.
 
     Three laps to a phase is a small sample summarised into one number and a
@@ -359,7 +425,90 @@ def lap_csv(laps: list[Lap], *, backgrounds: dict | None = None) -> str:
         row = entry.to_row()
         found = (backgrounds or {}).get(entry.driver)
         row.update(background_columns(found))
+        # Per phase, so it repeats down a participant's laps exactly as their
+        # background does: the dose was taken before the phase, not lap by lap,
+        # and spreading it over the laps would invent a within-phase predictor.
+        row.update(
+            exposure_columns(
+                None if exposure is None else exposure.get(entry.driver),
+                phase=entry.phase,
+            )
+        )
         lines.append(",".join(_csv_cell(row.get(column, "")) for column in columns))
+    return "\n".join(lines) + "\n"
+
+
+def exposure_csv(logs: dict[str, list[ReviewView]]) -> str:
+    """One row per view: what each participant looked at, and for how long.
+
+    The summary columns give a dose per phase, which is what a regression takes.
+    This is what lets somebody defend that number. A dose is only a dose if the
+    window was genuinely being read, and the aggregate cannot show a review left
+    open through a coffee break, a corner opened forty times in a minute, or a
+    participant who read every corner but one. Those are the checks an analyst
+    has to be able to make before a dose-response claim means anything, and the
+    same argument that put every lap in its own row puts every view in one.
+
+    Ordered by participant and then by when the view ended, so a session reads
+    down the file the way it happened.
+    """
+    lines = [",".join(VIEW_COLUMNS)]
+    for driver in sorted(logs):
+        for view in sorted(logs[driver], key=lambda v: (v.at, v.corner)):
+            row = view.to_dict()
+            row["advice"] = 1 if view.advice else 0
+            row["findings"] = _blank(view.findings)
+            lines.append(",".join(_csv_cell(row.get(name, "")) for name in VIEW_COLUMNS))
+    return "\n".join(lines) + "\n"
+
+
+def adherence_csv(reports: dict[tuple[str, str], AdherenceReport]) -> str:
+    """One row per thing a participant was told, and what became of it.
+
+    The summary columns give a rate per run, which is what a regression takes.
+    This is what lets somebody defend that number. A rate out of three or four
+    hides everything that matters about it: whether the corners it counted were
+    the ones the advice cared about, whether a participant who scored zero moved
+    everything a little or nothing at all, and how much of the bar each ask had
+    to clear -- which is not a constant, because it is the participant's own
+    lap-to-lap spread whenever that is the larger of the two.
+
+    Ordered by participant, then by the run being judged, then by the order the
+    debrief raised each point.
+    """
+    lines = [",".join(ADHERENCE_ROW_COLUMNS)]
+    for driver, phase in sorted(reports):
+        report = reports[(driver, phase)]
+        for shift in report.shifts:
+            ask = shift.prescription
+            row = {
+                "driver": report.driver or driver,
+                "before_phase": report.before_phase,
+                "after_phase": report.after_phase or phase,
+                "corner": ask.corner,
+                "apex_m": round(ask.apex_m, 1),
+                "metric": ask.metric,
+                "category": ask.category,
+                "said": ask.said,
+                "said_in": ask.said_in,
+                "direction": ask.direction,
+                "gap": ask.gap,
+                "before_mean": _blank(shift.before_mean),
+                "before_sd": _blank(shift.before_sd),
+                "before_n": shift.before_n,
+                "after_mean": _blank(shift.after_mean),
+                "after_n": shift.after_n,
+                "shift": _blank(shift.shift),
+                "toward": _blank(shift.toward),
+                "required": round(shift.required, 3),
+                "shift_sd": _blank(shift.shift_sd),
+                # Blank and not 0 when nothing measured it: a row nobody could
+                # check is not a row where somebody ignored the advice.
+                "followed": "" if shift.followed is None else int(shift.followed),
+            }
+            lines.append(
+                ",".join(_csv_cell(row.get(name, "")) for name in ADHERENCE_ROW_COLUMNS)
+            )
     return "\n".join(lines) + "\n"
 
 

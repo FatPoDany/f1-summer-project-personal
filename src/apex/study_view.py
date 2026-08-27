@@ -39,6 +39,8 @@ from PySide6.QtWidgets import (
 )
 
 from apex import theme
+from f1coach_core.adherence import adherence_all
+from f1coach_core.exposure import load_exposure
 from f1coach_core.lap import Lap
 from f1coach_core.participant import background_summary, load_background
 from f1coach_core.study import PhaseSummary, summarise_all, summary_csv
@@ -374,11 +376,20 @@ class StudyView(QWidget):
         if not target:
             return
         try:
-            # With the background columns: the export exists so a comparability
-            # check and an outcome test read the same file, and without them it
-            # sends the analyst back to join the questionnaire in by hand.
+            # With the background, exposure and adherence columns: the export
+            # exists so a comparability check, a dose-response check, a
+            # manipulation check and an outcome test read the same file, and
+            # without them it sends the analyst back to join three more files
+            # in by hand. Every one of these has been left off this call at
+            # some point and shipped a screen full of columns backed by an
+            # empty CSV; the export test asserts each of them is populated.
             Path(target).write_text(
-                summary_csv(self._summaries, backgrounds=self._backgrounds()),
+                summary_csv(
+                    self._summaries,
+                    backgrounds=self._backgrounds(),
+                    exposure=load_exposure(),
+                    adherence=adherence_all(self._laps),
+                ),
                 encoding="utf-8",
             )
         except OSError as exc:

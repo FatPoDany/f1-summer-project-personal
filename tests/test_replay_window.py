@@ -887,3 +887,95 @@ def test_a_picture_written_off_is_given_another_chance_next_time_round(qtbot):
         window._replay.driftCheckDue.emit()
 
     assert len(seeks) == 1
+
+
+def _study_lap(seconds=20.0, driver="P007", phase="baseline"):
+    """A lap that says whose it is, which is what makes a view a dose."""
+    from dataclasses import replace
+
+    from f1coach_core.lap import StudyIdentity
+
+    return replace(
+        _positioned_lap(seconds),
+        identity=StudyIdentity(driver=driver, phase=phase, setup="apex-study-v1"),
+    )
+
+
+def _named_point(corner):
+    from f1coach_core.debrief import DebriefPoint
+
+    return DebriefPoint(
+        corner=corner, apex_m=400.0, span_m=(300.0, 500.0), time_lost_s=0.4,
+        difference="braked 12 m earlier", detail="you 118 m, best 130 m",
+        category="braking",
+    )
+
+
+def _timed_window(qtbot):
+    """A review window whose clock a test can move, and whose views it can read."""
+    from apex.widgets.replay_window import ReplayWindow
+    from f1coach_core.exposure import ExposureLog
+    from test_exposure import FakeClock
+
+    clock, written = FakeClock(), []
+    window = ReplayWindow(exposure=ExposureLog(clock=clock, sink=written.append))
+    qtbot.addWidget(window)
+    return window, clock, written
+
+
+def test_which_corner_a_participant_opened_and_for_how_long_is_recorded(qtbot):
+    """Whether coaching worked is unanswerable without knowing it was read."""
+    window, clock, written = _timed_window(qtbot)
+
+    window.show_stretch(_study_lap(), _named_point("T3"))
+    clock.tick(31.0)
+    window.close()
+
+    assert [(v.driver, v.phase, v.corner, v.seconds) for v in written] == [
+        ("P007", "baseline", "T3", 31.0)
+    ]
+    assert written[0].kind == "corner"
+
+
+def test_moving_to_the_next_corner_files_the_one_before_it(qtbot):
+    """Nothing else closes a view when somebody simply reads on."""
+    window, clock, written = _timed_window(qtbot)
+    points = [_named_point("T1"), _named_point("T4")]
+
+    window.show_stretch(_study_lap(), points[0], points=points)
+    clock.tick(8.0)
+    window._chooser.setCurrentRow(1)
+    clock.tick(20.0)
+    window.close()
+
+    assert [(v.corner, v.seconds) for v in written] == [("T1", 8.0), ("T4", 20.0)]
+
+
+def test_a_lap_that_is_nobodys_study_data_records_no_dose(qtbot):
+    """The sample session and a loose CSV are not a participant."""
+    window, clock, written = _timed_window(qtbot)
+
+    window.show_stretch(_positioned_lap(20.0), _named_point("T3"))
+    clock.tick(60.0)
+    window.close()
+
+    assert written == []
+
+
+def test_advice_that_lands_while_the_corner_is_open_still_counts_as_read(qtbot):
+    """Coaching finishes in the background, so corners open before it arrives."""
+    from types import SimpleNamespace
+
+    window, clock, written = _timed_window(qtbot)
+    window.show_stretch(_study_lap(), _named_point("T3"))
+    clock.tick(5.0)
+
+    window.update_advice(
+        {0: SimpleNamespace(narration="you braked early", advice="brake 10 m later")},
+        complete=True,
+    )
+    clock.tick(15.0)
+    window.close()
+
+    assert written[0].advice is True
+    assert written[0].seconds == 20.0

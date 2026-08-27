@@ -403,3 +403,85 @@ def test_single_lap_review_keeps_every_corner_and_claims_no_time_lost(qtbot):
     assert view._replay_window is not None
     # No reference, so nothing claims a loss that was never measured.
     assert "s lost" not in view._replay_window._headline.text()
+
+
+def _study_view(qtbot, tmp_path):
+    """A view on a lap that is somebody's study data rather than the demo."""
+    from dataclasses import replace
+
+    from f1coach_core.lap import StudyIdentity
+
+    session = load_sample_session()
+    lap = replace(
+        slow_lap(session),
+        source=tmp_path / "P007-baseline-20260827" / "run-lap02.csv",
+        identity=StudyIdentity(driver="P007", phase="baseline", setup="apex-study-v1"),
+    )
+    view = AnalysisView()
+    qtbot.addWidget(view)
+    view.show()
+    view.set_context(lap, session)
+    return view
+
+
+def _timed(view):
+    """Replace the report clock with one a test can move and read."""
+    from f1coach_core.exposure import ExposureLog
+    from test_exposure import FakeClock
+
+    clock, written = FakeClock(), []
+    view._report_exposure = ExposureLog(clock=clock, sink=written.append)
+    return clock, written
+
+
+def test_how_long_the_findings_stayed_on_screen_is_recorded(qtbot, tmp_path):
+    """A generated report is not a read one, and only one of those is a dose."""
+    view = _study_view(qtbot, tmp_path)
+    clock, written = _timed(view)
+    report = get_provider("mock").generate(
+        build_evidence_summary(view._lap, view._ref_combo.currentData())
+    )
+
+    view._panel.reportReady.emit(report)
+    clock.tick(45.0)
+    view.coach_shutdown()  # closing Apex is how a reading usually ends
+
+    assert [(v.kind, v.seconds) for v in written] == [("report", 45.0)]
+    assert written[0].findings == len(report.findings)
+    assert (written[0].driver, written[0].phase) == ("P007", "baseline")
+
+
+def test_the_report_clock_stops_while_the_review_window_is_in_front(qtbot, tmp_path):
+    """Two measures that overlap cannot be added, and an analyst will add them."""
+    view = _study_view(qtbot, tmp_path)
+    clock, written = _timed(view)
+    view._panel.reportReady.emit(
+        get_provider("mock").generate(
+            build_evidence_summary(view._lap, view._ref_combo.currentData())
+        )
+    )
+
+    clock.tick(10.0)
+    view._review_corner(min(view._advice))  # opens the review window on a corner
+    clock.tick(300.0)
+    view._replay_window.close()
+    clock.tick(5.0)
+    view.coach_shutdown()
+
+    assert written[0].seconds == 15.0
+
+
+def test_reading_the_demonstration_is_not_recorded_against_its_participant(qtbot):
+    """The sample's laps are real and still carry a real participant's identity."""
+    view, _session = make_view(qtbot)
+    clock, written = _timed(view)
+
+    view._panel.reportReady.emit(
+        get_provider("mock").generate(
+            build_evidence_summary(view._lap, view._ref_combo.currentData())
+        )
+    )
+    clock.tick(120.0)  # long enough that only the guard can keep it out
+    view.coach_shutdown()
+
+    assert written == []

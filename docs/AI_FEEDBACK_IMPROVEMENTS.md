@@ -88,15 +88,23 @@ finding["issue"], finding["cause"], finding["action"] = guidance[selected["metri
 
 ### C. 没有"上一条建议有没有落地"
 
-整个研究在测提升，但比较永远是 lap vs session best
-（`coaching_queue.py:173-185`），从来不是 lap N vs lap N−1。参与者永远不会被告知
-"上一圈说你 T3 刹早 12 m，这一圈是 4 m"。
+> **这一条原先的写法是错的，2026-08-27 改正。** 原文说的是"参与者永远不会被告知
+> '上一圈说你 T3 刹早 12 m，这一圈是 4 m'"，并把它当成给参与者的反馈来提。但本研究
+> 的流程是 baseline 三圈 → 读 debrief → 第二段三圈（`capture_pages.py:62-65`），
+> **圈与圈之间从来没有给过任何建议**。同一段里 lap N 到 lap N−1 的变化是对赛道的
+> 熟悉，不是依从；把它当成"你改过来了"给参与者看是错误归因。而真正的依从度到达时
+> 已经没有下一段可开了，所以**它对参与者本次的驾驶提升为零**。
 
-这一条同时是**研究数据** —— 建议依从度（adherence），正是
-[STUDY_CAN_WE_SHOW_IMPROVEMENT.md](STUDY_CAN_WE_SHOW_IMPROVEMENT.md) §4.5 那条
-剂量-反应缺的另一半。原料 `_corner_facts` 全都有。
+价值全在测量侧，而且不小。`exposure.py` 已经把"剂量"量得很细（看了多久、看了几个弯、
+其中多少秒屏幕上有 AI 建议），结果端量的是圈速，**中间缺一环**：如果 coached 组没比
+control 组快，现在没有任何办法区分"建议本身没用"和"建议没问题但没人照做"——论文里
+这是完全不同的两段结论。依从度就是那个 manipulation check，也把
+[STUDY_CAN_WE_SHOW_IMPROVEMENT.md](STUDY_CAN_WE_SHOW_IMPROVEMENT.md) §4.5 的剂量-反应
+从两点相关升级成中介链：**看了多久 → 被点名的弯真的动了 → 圈速**。
 
-> 成本：一天。
+所以正确的做法是**跨 session**（baseline 建议 → 第二段行为），不是跨圈。
+
+> 成本：一天。**已完成，见 §6。**
 
 ### D. confidence 是假的
 
@@ -156,10 +164,9 @@ throttle 次数 / pedal overlap），完全没有弯速相关的建议。
 审计文件（`audit.py:write_coaching_audit`）记了 provider / model / prompt / 原始
 回答 / 验证过的报告，但它记的是 **lap 文件名**，不记 participant / phase，也没有
 任何"参与者实际看了什么"的记录。这是
-[STUDY_CAN_WE_SHOW_IMPROVEMENT.md](STUDY_CAN_WE_SHOW_IMPROVEMENT.md) §4.5 提的，
-至今没做。
+[STUDY_CAN_WE_SHOW_IMPROVEMENT.md](STUDY_CAN_WE_SHOW_IMPROVEMENT.md) §4.5 提的。
 
-> 成本：1–2 天。
+> 成本：1–2 天。**已完成（2026-08-27），见 §7；详细记录在姊妹文档 §11。**
 
 ### I. 延迟与资源
 
@@ -169,12 +176,16 @@ throttle 次数 / pedal overlap），完全没有弯速相关的建议。
 
 > 会话级 debrief 已经改成复用主窗口那台常驻 server（见 §5.3），不再自己起停。
 
-### 另：一个仍未修的 bug
+### 另：一个已经修掉、但反复重演的 bug
 
-`study_view.py:365` 仍然是 `summary_csv(self._summaries)`，没传 `backgrounds=`
+~~`study_view.py:365` 仍然是 `summary_csv(self._summaries)`，没传 `backgrounds=`~~
 —— 界面上看得见 Background 那一列，导出的 CSV 里那八列全是空的。这是
-[STUDY_CAN_WE_SHOW_IMPROVEMENT.md](STUDY_CAN_WE_SHOW_IMPROVEMENT.md) §4.4 / §6.1，
-一行修复，至今没修。
+[STUDY_CAN_WE_SHOW_IMPROVEMENT.md](STUDY_CAN_WE_SHOW_IMPROVEMENT.md) §4.4 / §6.1。
+
+> **早已修好**（姊妹文档 §10.4）。但这个**形状**后来又出现了两次——剂量列一次、
+> 依从度列一次——每次都是同一个函数调用少传一个可选参数，而表头看起来完全正常。
+> 现在那个调用是四个参数齐全的 `backgrounds` / `exposure` / `adherence`，并且有
+> 一条断言"每一行里这几列都非空"的守卫测试。见 §7.3。
 
 ---
 
@@ -233,7 +244,7 @@ throttle 次数 / pedal overlap），完全没有弯速相关的建议。
 | 顺序 | 做什么 | 为什么是这个顺序 |
 |---|---|---|
 | 1 | **A** 会话级 debrief 接到 GUI | 研究的干预本来就该是这个东西，代码已写好，缺的只是入口 |
-| 2 | **C** 跨圈依从度 | 同时是给参与者的反馈和给研究的数据 |
+| 2 | ~~**C** 跨圈依从度~~ **C** 跨 session 依从度 | 不是给参与者的反馈（见 §C 上方的更正），是研究缺的那个 manipulation check |
 | 3 | **G** 中文模板 | 改 15 个字符串，零风险 |
 | 4 | **D** 修掉假 confidence | 它现在是一个没有依据的可靠性断言 |
 | 5 | **B / F** 模式聚合与合成参考圈 | 反馈质量的天花板在这里 |
@@ -328,3 +339,188 @@ FSLogix 配置卷上，而 `Get-PSDrive`、`fsutil volume diskfree <路径>` 和
 毫无道理。唯一说实话的是 `Get-Volume`，按 `FileSystemLabel` 找 `Profile-*`。这次是
 清掉 pip 缓存和 `build\` 之后腾出的空间，并把构建产物改到 AVD 的临时盘：
 `pyinstaller apex.spec --workpath D:\apex-build\work --distpath D:\apex-build\dist`。
+
+---
+
+## 6. 进展：C 已完成（2026-08-27）
+
+**"参与者有没有照着建议做"现在是一个可以导出的量。** 新模块
+`f1coach_core/adherence.py` 把一段 baseline 的 debrief 拆成若干条结构化的"要求"
+（哪个弯、哪个指标、要往哪个方向动、动多少才算数），再拿参与者第二段的实际驾驶去对。
+结果同时出现在 `racecoach study-summary` 的每行末尾，和新命令
+`racecoach study-adherence` 的逐条明细里。
+
+### 6.1 改了什么
+
+| 文件 | 改动 |
+|---|---|
+| `src/f1coach_core/adherence.py`（新，约 380 行） | `Prescription` / `Shift` / `AdherenceReport`，`prescriptions` / `run_prescriptions` / `adherence` / `run_adherence` / `session_adherence` / `adherence_all`，两组导出列 |
+| `src/f1coach_core/debrief.py` | `_candidates` 改成 `_Gap` NamedTuple，多带指标名和有符号差值；`DebriefPoint` 新增 `metric` / `gap`（都有默认值，纯增量） |
+| `src/f1coach_core/study.py` | `summary_columns` 加 `ADHERENCE_COLUMNS`；`summary_csv` 加可选 `adherence=`；新增 `adherence_csv` |
+| `src/racecoach/cli.py` | 新命令 `study-adherence`；`study-summary` 自动带上依从度 |
+| `tests/test_adherence.py`（新） | 31 条测试 |
+
+### 6.2 为什么不是"上一圈 vs 这一圈"
+
+这是这次唯一真正重要的设计判断，理由写在 §C 上方的更正里，不重复。落到代码上只有
+一句话：**每一次比较都跨越两段 run，因为那是建议唯一被送到过参与者手上的地方。**
+模块 docstring 里把这句话写成了硬性约束，免得以后有人"顺手"加一个同段内的比较。
+
+同段内的圈间变化并没有被丢掉——它变成了**噪声底**，见 6.3 第三条。
+
+### 6.3 三个让比较站得住的决定
+
+**一、跨 session 不能按弯角名字匹配。** `detect_corners` 是按检测到的 apex 顺序
+编号 `T1..Tn` 的（`features.py:99`）：在两条不同的圈上各跑一次检测，只要多出或漏掉
+一个 dip，后面每一个名字都会错位——baseline 的 T3 会悄悄变成第二段的 T4。所以两段的
+**每一圈都在同一条锚定圈的弯角网格上测量**，而这条锚定圈就是 debrief 本身所对的
+参考圈（`report.py:81` 和 `coaching_queue.py:172` 都取 session 最快圈）。弯角同一性
+因此是**按构造成立**的，不是靠运气。传错锚定圈会抛 `AdherenceError` 而不是默默算出
+一堆没人看得出错在哪的数。
+
+**二、跟踪绝对值，不是 gap。** debrief 说的是差值（"刹车早了 12 m"），而差值的参照系
+在第二段换成了另一条圈。参与者实际把刹车踩在哪里是他自己的行为，同一条赛道上跨段可比。
+
+**三、拿参与者自己的散布当尺子。**"刹车点动了 16 m"单独没有意义：对一个在那个弯
+圈间飘 20 m 的人这是噪声，对一个能重复到 3 m 以内的人这是决定。所以每一条都同时报
+baseline 三圈在同一弯同一指标上的 `pstdev`，以及 `shift_sd = 位移 / 散布`。
+
+### 6.4 真实数据当场推翻了我原来的判罚规则
+
+模块写完时，二值 `followed` 只用固定阈值（`NOTABLE_*`），docstring 里我还给了理由：
+三圈估出来的 sd 自带约一半的误差，让二值依赖一个噪声很大的分母，不如用一个钝一点的
+固定值。
+
+**拿 B0826 真实数据一跑就塌了：**
+
+```
+T6  min_speed_kmh   toward 3.3   in own sd 0.3   followed True
+```
+
+`NOTABLE_MIN_SPEED_KMH` 是 3.0 km/h，而这位参与者在 T6 的圈间散布是 **11 km/h**。
+动了 0.3 个 sd 被判成"照做了"。固定阈值在这里不是"钝"，是**尺度就是错的**，于是
+自信地判错。
+
+改成 `required = max(固定阈值, 该参与者自己的 sd)`。关键是这个方向的不对称性：
+**散布只可能把门槛抬高**，所以三圈 sd 的误差永远不可能凭空造出一个"照做了"的参与者，
+最坏只是漏掉一个真的。对 manipulation check 来说这正是想要的方向——一个错误相信
+自己的建议被采纳了的研究，后面每一句话都没法解释。改完 T6 正确判为 False。
+
+这也顺手把清单里的 **E**（阈值从没跟个人散布比过）做掉了一半：至少在依从度这条路上，
+阈值现在是"常量与个人散布取大"。
+
+### 6.5 在你已经采到的数据上的第一个结果
+
+把 `win_collect_data` 里的 handover 导进一个隔离的 `APEX_WORKSPACE`（没有碰
+`~\Apex` 里参与者的任何东西）之后：
+
+| driver | phase | best_lap_s | prescribed | measured | followed | rate | mean shift_sd |
+|---|---|---|---|---|---|---|---|
+| B0826 | baseline | 119.616 | | | | | |
+| B0826 | coached | 126.120 | 4 | 4 | 1 | 0.25 | 0.67 |
+| C0826 | baseline | 105.980 | | | | | |
+| C0826 | control | 114.186 | 4 | 4 | 0 | 0.0 | −0.65 |
+
+（baseline 行按设计留空：那时候还没有人对他们说过任何话，这跟"他们没照做"不是一回事。）
+
+两件事值得单独说：
+
+1. **两位参与者第二段都变慢了**（+6.5 s / +8.2 s）。n=2 的先导数据，不宜多解释，
+   但它正好说明为什么需要这个量：如果只看圈速，你分不清是建议有害、还是别的原因。
+2. **B0826 唯一照做的那一条（T1 弯中最低速 +19.1 km/h，3.83 个自身 sd）幅度很大，
+   而他整体还是慢了。** 这是那种"没有依从度就完全看不见"的结构。
+
+### 6.6 验证
+
+- `731 passed / 17 skipped`（接手时基线是 `700 / 17`，我加了 31 条），`ruff check
+  src tests` 干净。
+- 端到端在真实 handover 上跑通：`racecoach study-adherence` 和
+  `racecoach study-summary` 都输出了上面的表。
+- `debrief.py` 的改动是纯增量的（两个带默认值的字段），122 条涉及 `DebriefPoint`
+  的既有测试全绿。
+- 弯角错位这个最危险的失败模式有专门的测试守着：传一条不含被建议弯角的锚定圈会抛
+  `AdherenceError`。
+
+### 6.7 还没做的
+
+- **没有做参与者可见的界面。** 按 §C 的结论，在两段式流程里它对驾驶提升为零，
+  所以先不做；真要做，也应该说清楚它是"闭环告知"而不是干预。
+- `adherence_all` 里的 `BASELINE_PHASE = "baseline"` 是写死的。目前研究只有这一个
+  参照相，改协议的话这里要跟着改。
+- 依从度只进了 `summary_csv`，没进 `lap_csv`：它是 run 级的量，逐圈没有意义。
+
+---
+
+## 7. 进展：H 已完成（2026-08-27，另一个会话做的）
+
+**完整记录在姊妹文档
+[STUDY_CAN_WE_SHOW_IMPROVEMENT.md](STUDY_CAN_WE_SHOW_IMPROVEMENT.md) §11**
+（那边它叫 6.5），写得很细，这里不重复。这一节只补这份文档自己关心的四件事。
+
+### 7.1 §2.H 那两条都补上了
+
+- **"审计记录只记 lap 文件名"** → `audit.py:write_coaching_audit` 多了 `driver` /
+  `phase` / `setup` 三个字段，从 `lap.identity` 取。
+- **"没有任何参与者实际看了什么的记录"** → 新模块 `f1coach_core/exposure.py`
+  （369 行，Qt-free）。两种 view：`corner`（review 窗口开在某个弯上）和 `report`
+  （分析页右侧 findings 面板）——分开记，因为"把面板读完了但一个弯都没点开"是真实
+  存在的一类人，合并成一个数就把这类人藏了。五个剂量列进了
+  `study-summary` / `study-laps`，外加新命令 `study-exposure` 出逐条原始记录。
+
+### 7.2 H 和 C 现在合成一条完整的链
+
+**这一句两份文档都还没写**，因为 C 是在 §11 落笔之后才做的：
+
+```
+看了多久（H）→ 被点名的弯真的动了（C）→ 圈速（原有）
+```
+
+单独看，H 是"剂量 vs 结果"的两点相关，C 是"建议 vs 行为"孤立的一环。合起来才是
+中介链，而这正是 n 很小的时候唯一还站得住的因果论证形状。
+
+导出里两者是相邻的列，`summary_columns()` 的顺序就是这条链本身：
+
+```
+PERFORMANCE → EXPOSURE → ADHERENCE → BACKGROUND
+```
+
+一个分析的人从左往右读一行，读到的就是完整的论证。
+
+### 7.3 顺手修了一个我自己刚制造出来的同类 bug
+
+§11.6 明确警告过"§4.4 那个 bug 不能以新的形式重演一遍"——**而我做 C 的时候正好
+重演了它**：CLI 那条路接上了 `adherence=`，GUI 的 `Export CSV…` 没接，于是界面上
+多了五列、导出的文件里那五列全是空的。
+
+已修（`study_view.py:_export_csv`），并按 §11.7 的做法红过再绿：把
+`adherence=adherence_all(self._laps)` 那一行删掉，新加的守卫测试报
+
+```
+ValueError: invalid literal for int() with base 10: ''
+```
+
+这个 bug 形状出现三次了（背景列、剂量列、依从度列），每次都是**同一个函数调用少传
+一个可选参数**。守卫测试现在断言的是"这几列在每一行里都非空"，不是"表头里有这几列"。
+
+### 7.4 §2 里还有两处话已经过时
+
+- **§2.H 的"至今没做"** —— 已在本节标注。
+- **"另：一个仍未修的 bug"** 里说 `study_view.py:365` 不传 `backgrounds=` ——
+  那条更早就修好了（姊妹文档 §10.4）。现在那个调用四个参数齐全：
+  `backgrounds` / `exposure` / `adherence`。
+
+### 7.5 验证
+
+- `734 passed / 17 skipped`，`ruff check src tests` 干净。
+  （分段读：H 之前 698 → H 之后 700 → C 之后 731 → 加上 7.3 的守卫 734。）
+- 参与者包已由另一个会话在 2026-08-27 10:57 重新打包换上，我按老办法验过：
+  新 `Apex.exe` 里 A / C / H 三组标记**全在**（7+6+3），被替换的
+  `Apex.exe.bak-20260827-0955` **有 H 没有 C**——这正好证明 10:57 那次构建就是
+  把 C 装进去的那次。`racecoach.exe` 缺 `SessionDebriefView` 和 `_open_debrief`
+  是对的，CLI 本来就不含 Qt 视图。
+- 冻结的 exe 上跑通：`racecoach.exe study-adherence --help` 退出码 0；
+  `Apex.exe` 在隔离 workspace 下启动出窗口（标题 `Apex`）并被干净结束。
+  `_internal` 1074 个文件 / 195 MB。
+
+> **注意 7.5 最后这条的分量**：姊妹文档 §11.8 那个 BOM 缺陷就是**跑冻结的 exe 才
+> 抓到的**，读代码读不出来。"源码测试全绿"和"参与者手上那个包是对的"是两件事。

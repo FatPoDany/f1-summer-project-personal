@@ -534,3 +534,43 @@ def test_a_lap_exports_as_the_recorded_file_not_a_re_rendering(
 
     source = view._session.laps[0].source
     assert target.read_bytes() == source.read_bytes()
+
+
+def test_importing_a_handover_in_the_app_keeps_what_they_read(qtbot, tmp_path, monkeypatch):
+    """The GUI and `racecoach collect` are two doors into the same study.
+
+    A researcher who imports a package through the Garage rather than the
+    command line must not end up with a dose column that exports blank -- the
+    two paths were already capable of losing the questionnaire that way, and a
+    viewing log left where it unpacked is lost the same way.
+    """
+    from f1coach_core.exposure import (
+        CORNER_VIEW,
+        ReviewView,
+        append_view,
+        exposure_path,
+        load_exposure,
+    )
+    from racecoach.telemetry.handover import package
+    from test_torcs import make_human_run
+
+    capture = tmp_path / "P007-baseline-20260819-104237"
+    capture.mkdir()
+    make_human_run(capture / "human-1.csv", laps=2)
+    (capture / "manifest.json").write_text(
+        json.dumps({"participant_id": "P007", "phase": "baseline"}), encoding="utf-8"
+    )
+    append_view(
+        ReviewView(driver="P007", phase="baseline", kind=CORNER_VIEW, seconds=44.0,
+                   corner="T3", advice=True, id="view-1")
+    )
+    archive = package(capture, tmp_path / "P007.zip").path
+    exposure_path("P007").unlink()  # the analyst has never heard of them
+
+    view = GarageView()
+    qtbot.addWidget(view)
+    monkeypatch.setattr(QFileDialog, "getOpenFileNames", lambda *a, **k: ([str(archive)], ""))
+
+    view._import_files()
+
+    assert [(v.corner, v.seconds) for v in load_exposure()["P007"]] == [("T3", 44.0)]

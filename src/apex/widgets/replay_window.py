@@ -31,6 +31,7 @@ from apex.captions import lap_caption
 from apex.widgets.footage_pane import FootagePane
 from apex.widgets.track_replay import TrackReplay
 from f1coach_core import DebriefPoint, Lap
+from f1coach_core.exposure import CORNER_VIEW, ExposureLog
 from f1coach_core.footage import Window, windows_for
 from racecoach.telemetry.screen_capture import Recording
 
@@ -117,9 +118,20 @@ class ReplayWindow(QDialog):
 
     cursorMoved = Signal(float)
     stretchChanged = Signal(int)  # index into the debrief points
+    reviewClosed = Signal()  # the corner list is no longer in front of anybody
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        exposure: ExposureLog | None = None,
+    ) -> None:
         super().__init__(parent)
+        # Which corners a participant actually looked at, and for how long. The
+        # window reports what is on screen and when it stops being; the seconds
+        # are counted in the core, because how much coaching somebody took in is
+        # a study measurement and those do not live in widgets.
+        self._exposure = exposure if exposure is not None else ExposureLog()
         self.setWindowTitle("Review")
         self.setModal(False)
         self.setWindowFlag(Qt.WindowType.Window, True)
@@ -348,6 +360,44 @@ class ReplayWindow(QDialog):
             )
         self._ref_caption.setText(_caption_text(theme.BLUE, text))
 
+    def _has_advice(self, index: int) -> bool:
+        """Whether this corner has an instruction to read, not just a measurement."""
+        spoken = self._advice_by_index.get(index)
+        return bool(spoken is not None and getattr(spoken, "advice", ""))
+
+    def _record_view(self, index: int, point) -> None:
+        """Start timing this corner, which closes and files the one before it.
+
+        A lap with no study identity records nothing: the sample session and any
+        loose CSV somebody opened are not a participant, and a dose belongs to
+        one or to nobody.
+        """
+        identity = self._lap.identity if self._lap is not None else None
+        self._exposure.opened(
+            driver=identity.driver if identity else None,
+            phase=identity.phase if identity else None,
+            kind=CORNER_VIEW,
+            lap_source=self._lap.source if self._lap is not None else None,
+            corner=point.corner,
+            advice=self._has_advice(index),
+        )
+
+    def hideEvent(self, event) -> None:
+        """Off the screen is the end of the view, however it got there.
+
+        Closed rather than paused: whether they come back to the same corner is
+        a new look at it, and a window that went away while a corner was open
+        would otherwise keep accruing seconds nobody spent.
+        """
+        self._exposure.closed()
+        self.reviewClosed.emit()
+        super().hideEvent(event)
+
+    def closeEvent(self, event) -> None:
+        self._exposure.closed()
+        self.reviewClosed.emit()
+        super().closeEvent(event)
+
     def _panes(self) -> tuple[FootagePane, ...]:
         """The footage the transport drives: one, or two in a comparison."""
         return (self._footage, self._ref_footage) if self._ref_showing else (self._footage,)
@@ -447,6 +497,12 @@ class ReplayWindow(QDialog):
         index = self._chooser.currentRow()
         if 0 <= index < len(self._points):
             self._describe(index, self._points[index], self._notes.get(index, ""))
+            if self._has_advice(index):
+                # Coaching finishes in the background, so a corner is routinely
+                # opened before there is anything in it to read. What the view
+                # is worth as a dose is whether advice was ever on screen, not
+                # whether it arrived first.
+                self._exposure.advice_arrived()
 
     def _chosen(self, index: int) -> None:
         if 0 <= index < len(self._points):
@@ -498,6 +554,7 @@ class ReplayWindow(QDialog):
             title += f"  —  {point.difference}"
         note = self._notes.get(index) or fallback_note or point.detail
         self._describe(index, point, note)
+        self._record_view(index, point)
         self._replay.set_stretch(
             self._lap,
             point.span_m[0],

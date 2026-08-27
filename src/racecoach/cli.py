@@ -11,6 +11,8 @@
     racecoach install-model <f>   adopt a Granite weights file you already have
     racecoach study-summary       per-participant, per-phase rows for statistics
     racecoach study-laps          one row per lap, for learning curves
+    racecoach study-exposure      one row per coaching view, for dose-response
+    racecoach study-adherence     one row per thing advised, and whether it moved
     racecoach package <dir>       bundle one capture into a file to hand over
     racecoach collect <zips>      verify and pool handovers from participants
     racecoach capture-synthetic    run pinned unattended robot reference sessions
@@ -164,6 +166,29 @@ def main(argv: list[str] | None = None) -> int:
         "--out", type=Path, default=None, help="write CSV here instead of stdout"
     )
 
+    exposure_cmd = commands.add_parser(
+        "study-exposure",
+        help="one row per coaching view: what each participant looked at, how long",
+    )
+    exposure_cmd.add_argument(
+        "--out", type=Path, default=None, help="write CSV here instead of stdout"
+    )
+
+    adherence_cmd = commands.add_parser(
+        "study-adherence",
+        help="one row per thing the baseline debrief asked for, and what became of it",
+    )
+    adherence_cmd.add_argument(
+        "roots",
+        nargs="*",
+        type=Path,
+        default=None,
+        help="session folders, or folders of them; defaults to the whole workspace",
+    )
+    adherence_cmd.add_argument(
+        "--out", type=Path, default=None, help="write CSV here instead of stdout"
+    )
+
     install_model_cmd = commands.add_parser(
         "install-model",
         help="adopt a Granite weights file supplied by other means",
@@ -310,6 +335,19 @@ def _backgrounds_for(rows: list) -> dict:
     return {row.driver: load_background(row.driver) for row in rows}
 
 
+def _exposure() -> dict:
+    """Every viewing log this workspace holds, by participant.
+
+    Passed whole rather than filtered to the rows being exported, because the
+    difference between a participant with an empty log and one with no log is
+    the difference between zero and unknown, and filtering by hand would lose
+    it: a driver missing from this mapping gets blanks, which is right.
+    """
+    from f1coach_core.exposure import load_exposure
+
+    return load_exposure()
+
+
 def _dispatch(args: argparse.Namespace) -> int:
     if args.command == "import":
         run_dir = import_run(args.csv)
@@ -447,15 +485,20 @@ def _dispatch(args: argparse.Namespace) -> int:
             total += registered.laps
             kept = "background kept" if registered.background else "no background travelled"
             print(f"  {registered.laps} lap(s) in session {registered.session} ({kept})")
+            print(f"  {registered.views} coaching view(s) adopted")
             for note in registered.skipped:
                 print(f"  skipped {note}")
         print(
             f"{len(results)} handover(s) verified into {args.into}; "
             f"{total} lap(s) registered in {sessions_root()}"
         )
-        print("Next: racecoach study-summary --out summary.csv (or study-laps for one row per lap)")
+        print(
+            "Next: racecoach study-summary --out summary.csv "
+            "(study-laps for one row per lap, study-exposure for what was read)"
+        )
         return 0
     if args.command == "study-summary":
+        from f1coach_core.adherence import adherence_all
         from f1coach_core.study import summarise_all, summary_csv
 
         laps = _study_laps(args.roots)
@@ -465,7 +508,12 @@ def _dispatch(args: argparse.Namespace) -> int:
                 f"{len(laps)} laps found, but none carry both a driver and a phase, "
                 "so they cannot be assigned to a group."
             )
-        text = summary_csv(summaries, backgrounds=_backgrounds_for(summaries))
+        text = summary_csv(
+            summaries,
+            backgrounds=_backgrounds_for(summaries),
+            exposure=_exposure(),
+            adherence=adherence_all(laps),
+        )
         if args.out:
             args.out.write_text(text, encoding="utf-8")
             print(f"{len(summaries)} rows from {len(laps)} laps -> {args.out}")
@@ -482,12 +530,57 @@ def _dispatch(args: argparse.Namespace) -> int:
                 f"{len(laps)} laps found, but none carry both a driver and a phase, "
                 "so they cannot be assigned to a group."
             )
-        text = lap_csv(laps, backgrounds=_backgrounds_for(rows))
+        text = lap_csv(laps, backgrounds=_backgrounds_for(rows), exposure=_exposure())
         if args.out:
             args.out.write_text(text, encoding="utf-8")
             print(f"{len(rows)} rows from {len(laps)} laps -> {args.out}")
         else:
             print(text, end="")
+        return 0
+    if args.command == "study-adherence":
+        from f1coach_core.adherence import adherence_all
+        from f1coach_core.study import adherence_csv
+
+        laps = _study_laps(args.roots)
+        reports = adherence_all(laps)
+        if not reports:
+            # Not an error: a study with only baselines collected so far is a
+            # study in progress, and so is one whose second runs were told
+            # nothing a measurement could explain.
+            raise RunImportError(
+                f"{len(laps)} laps found, but no participant has both a baseline "
+                "that asked for something measurable and a later run to judge."
+            )
+        text = adherence_csv(reports)
+        asks = sum(report.prescribed for report in reports.values())
+        if args.out:
+            args.out.write_text(text, encoding="utf-8")
+            print(f"{asks} ask(s) across {len(reports)} run(s) -> {args.out}")
+        else:
+            print(text, end="")
+        return 0
+    if args.command == "study-exposure":
+        from f1coach_core.study import exposure_csv
+
+        logs = _exposure()
+        text = exposure_csv(logs)
+        views = sum(len(entries) for entries in logs.values())
+        if args.out:
+            args.out.write_text(text, encoding="utf-8")
+            print(f"{views} view(s) from {len(logs)} participant(s) -> {args.out}")
+        else:
+            print(text, end="")
+        if not logs:
+            # Not an error. A pool of handovers cut before this build measured
+            # exposure has nothing to say here, and so does a study where
+            # nobody opened a review; saying which is not something the file
+            # can do, so say plainly that there was nothing rather than imply
+            # the participants read nothing.
+            print(
+                "No viewing logs in this workspace. Nothing was recorded, "
+                "which is not the same as nobody having looked.",
+                file=sys.stderr,
+            )
         return 0
     if args.command == "install-model":
         from racecoach.granite import model as granite_model

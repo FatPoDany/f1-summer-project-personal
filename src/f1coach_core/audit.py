@@ -6,6 +6,11 @@ what the model was asked (evidence summary + exact prompt), what it answered
 readable error it refused with). Records land next to the lap's session
 (…/<session>/coaching/) so the audit travels with the data; laps opened from
 outside the workspace fall back to <workspace>/coaching/.
+
+Each record also carries the lap's study identity, because the trail doubles as
+the record of what advice a participant was given: a comparison of what the
+coached arm was told against how they then drove has to start from whose run it
+was, and a lap file name does not say.
 """
 
 import json
@@ -21,7 +26,7 @@ from f1coach_core.coach import (
     coaching_report_from_dict,
 )
 from f1coach_core.features import build_evidence_summary
-from f1coach_core.lap import Lap
+from f1coach_core.lap import NO_IDENTITY, Lap, StudyIdentity
 from f1coach_core.llm import build_coach_prompt
 from f1coach_core.workspace import _unique_dest, sessions_root, workspace_root
 
@@ -86,6 +91,7 @@ def run_audited_coaching(
             lap_source=lap.source,
             provider=provider_name,
             lap_name=lap.source.stem,
+            identity=lap.identity,
             reference_name=reference.source.stem if reference is not None else None,
             evidence_summary=summary,
             prompt=prompt,
@@ -118,6 +124,7 @@ def write_coaching_audit(
     provider: str,
     lap_name: str,
     reference_name: str | None,
+    identity: StudyIdentity = NO_IDENTITY,
     evidence_summary: dict | None,
     prompt: str | None,
     raw_response: str,
@@ -134,6 +141,13 @@ def write_coaching_audit(
         "error": error,
         "lap": lap_name,
         "reference": reference_name,
+        # Who this run coached, not just which file. The audit trail is also the
+        # only record of what advice a participant was actually given, and a
+        # file name is not a participant: laps are renamed on import, pooled
+        # across machines, and read months later by somebody who was not there.
+        "driver": identity.driver,
+        "phase": identity.phase,
+        "setup": identity.setup,
         "model": report.model if report else None,
         "prompt_version": report.prompt_version if report else None,
         "evidence_summary": evidence_summary,

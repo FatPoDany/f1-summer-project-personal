@@ -163,7 +163,7 @@ text = summary_csv(summaries, backgrounds=backgrounds)
 
 **这条直接影响 4.1 出路 A**：组间比较的可比性论证就靠这几列。修复是一行 + 一条断言（见第 6 节）。
 
-### 4.5 "辅导曝光量"完全没有进数据
+### 4.5 "辅导曝光量"完全没有进数据（**2026-08-27 已修，见 §11**）
 
 审计文件（`<session>/coaching/*.json`，`audit.py:130-148`）记了 provider、model、prompt、原始回答、验证过的报告 —— 这套 provenance 做得很好，但它记的是 **lap 文件名**，不记 participant / phase，也**没有任何"参与者实际看了什么"的记录**：看了几条建议、停留多久、有没有打开 review 窗口逐弯角看、看了哪几个弯。全库搜不到任何曝光/停留时长的字段。
 
@@ -196,6 +196,7 @@ text = summary_csv(summaries, backgrounds=backgrounds)
 racecoach collect <participant-archives...> --into pooled/
 racecoach study-summary --out summary.csv           # collect 已经把圈入库了
 racecoach study-laps    --out laps.csv              # 一行一圈，做学习曲线用
+racecoach study-exposure --out exposure.csv         # 一行一次 view，查 dose 是否可信
 ```
 
 > **2026-08-26 更正**：原来这里写的是 `racecoach study-summary pooled/`，那条命令当时跑不出任何东西 —— pooled 目录里是整场原始导出，不是单圈。现在 `collect` 会把圈注册进 workspace，所以第二条不带参数即可。见 §10.1。
@@ -207,6 +208,7 @@ racecoach study-laps    --out laps.csv              # 一行一圈，做学习�
 | 辅导组自己前后有没有变化 | Wilcoxon signed-rank（n < 20 或不正态）/ paired t | 主指标 `mean_lap_s`；同时报效应量（Cohen's dz 或 rank-biserial），别只报 p |
 | **改善是不是辅导带来的** | 组 × 时间交互：mixed ANOVA，或对 Δ = post − pre 做**两独立样本**检验 | **这一条才是研究问题**，见 4.1 |
 | 两组一开始是否可比 | 对四个 `*_rank` 列 + baseline 的 `mean_lap_s` 做组间比较 | 背景列两条路都非空了（§10.1、§10.4） |
+| **看得多的人是不是改善得更多** | 在辅导组内部，把 Δ 对 `review_seconds` / `advice_seconds` 做回归（或 Spearman） | 这条比较发生在组内，**不受"两组人本来就不一样"影响**，是 n 小时唯一拿得出手的因果证据。dose 落在 baseline 行（§11.3） |
 | 安全性/一致性有没有变 | 同样的检验跑在 `off_track_events`、`damage_events`、`sd_lap_s` 上 | 记得多重比较校正，并预先声明哪个是主指标 |
 
 **空白单元格**必须当成 missing 读进统计软件（`na.strings=""`），不能当 0 —— 这是 `_blank` 那条设计的全部意义。
@@ -221,7 +223,7 @@ racecoach study-laps    --out laps.csv              # 一行一圈，做学习�
 | ~~**6.2**~~ **已完成** | 采集页下拉框加 control 一项 | — | 对照组能走防呆的引导页，不必让 facilitator 敲命令行。**见 §8** |
 | ~~**6.3**~~ **已完成** | `StudyView` 的配对改成"任选两个 phase 比较"，不再硬编码 baseline/coached | — | 修掉 4.2；对照组、多次干预、任何三臂设计都能在界面上看。**见 §9** |
 | ~~**6.4**~~ **已完成** | 新增 `racecoach study-laps --out laps.csv`：一行一圈（driver, phase, lap 序号, race_lap, lap_time, off_track, damage + 背景列） | — | 修掉 4.3 —— 学习曲线、混合效应模型、把练习效应剥出来，全靠这个文件。**见 §10.5** |
-| **6.5** | 审计记录里加 participant / phase 字段；review 窗口记录"打开了哪个弯角、停留多久" | 1–2 天 | 修掉 4.5，拿到剂量-反应这条独立证据链 |
+| ~~**6.5**~~ **已完成** | 审计记录里加 participant / phase 字段；review 窗口记录"打开了哪个弯角、停留多久" | — | 修掉 4.5，拿到剂量-反应这条独立证据链。**见 §11** |
 | **6.6** | 随机分配名单：Apex 里生成并锁定 participant → condition 的映射 | 半天 | 现在靠人工名单，容易出错，也没有留痕 |
 
 ~~**下一件：6.1**，然后 **6.4**。~~ **两件都在 2026-08-26 做完了（§10）。**对照组采得了（§8）、看得见了（§9）、逐圈那个文件也有了（§10.5）—— 剩下的门槛不在代码里，是人数，以及每段跑几圈（见 §10.10）。
@@ -472,6 +474,129 @@ driver,phase,lap,race_lap,lap_time_s,off_track_events,off_track_seconds,damage_e
 
 ### 10.10 下一步
 
-6.1 和 6.4 做完了，`racecoach study-laps` 已经能吐出学习曲线要的那个文件。剩下的按原顺序：**6.5**（辅导曝光量，拿剂量-反应）和 **6.6**（随机分配名单）。
+6.1 和 6.4 做完了，`racecoach study-laps` 已经能吐出学习曲线要的那个文件。剩下的按原顺序：**6.5**（辅导曝光量，拿剂量-反应，**已于 2026-08-27 完成，见 §11**）和 **6.6**（随机分配名单）。
 
-在写代码之前，真实数据先提了一个更便宜的问题：**每个 phase 只有 3 圈，而 B0826 的 coached 三圈还在陡降** —— 也就是说三圈可能根本没跑完他的学习曲线，测到的是"还在适应"而不是"辅导之后的水平"。§4.6 早就说过 `best_lap_s` 在 3 圈上方差大且有偏。要不要把每段加到 5 圈，是比任何一行代码都更能提高功效的改动，而且要在收第二个参与者之前定。
+在写代码之前，真实数据先提了一个更便宜的问题：**每个 phase 只有 3 圈，而 B0826 的 coached 三圈还在陡降** —— 也就是说三圈可能根本没跑完他的学习曲线，测到的是"还在适应"而不是"辅导之后的水平"。§4.6 早就说过 `best_lap_s` 在 3 圈上方差大且有偏。要不要把每段加到 5 圈，是比任何一行代码都更能提高功效的改动。
+
+> **2026-08-27 决定（你定的）**：**先不动。**等软件这一轮改完、测试通过之后再调 —— 现在改会让每次软件测试都多跑两圈，采集时间成本落在开发迭代上，不值得。所以 `default_study_preset` 的 `laps=3` 保持原样，**这条留在 6.6 之后再执行**。另外你确认了 §10.6 里那批出界数字是真的：这个模拟器在 Aalborg 上确实容易出界，指标没算错。
+
+---
+
+## 11. 6.5 完成：辅导曝光量现在是被测量的（2026-08-27）
+
+§4.5 那条堵住的不是一个功能，是**这个规模的研究唯一拿得出手的因果证据**。两臂各 1 个人，组间比较在设计上就没有功效；而"看得多的人是不是改善得更多"这个比较发生在**接受辅导的人内部**，不受"两组人本来就不一样"的影响。它的前提只有一个：知道每个人到底看了多少。以前一个字都没记。
+
+### 11.1 审计记录现在说得清是谁
+
+`write_coaching_audit`（`src/f1coach_core/audit.py:116-160`）多了三个字段：`driver` / `phase` / `setup`，从 `lap.identity` 来。
+
+以前它只记 lap **文件名**。文件名不是参与者：导入时会改名、会跟别人的池子混在一起、几个月后读它的人当时不在场。而这套审计文件同时也是**"这个参与者到底被告知了什么"的唯一记录** —— 要把"辅导组被告知了什么"和"他们后来怎么开"对起来，起点必须是这一趟是谁的。
+
+### 11.2 新增 `src/f1coach_core/exposure.py`：曝光量这件事本身
+
+一个 Qt-free 的模块，369 行。核心是三件事：
+
+**一、`ReviewView`** —— 一次"某个东西在某人面前待了多久"：`driver / phase / kind / corner / lap / seconds / advice / findings / at / id`。`kind` 只有两种：
+
+| kind | 是什么 | 为什么分开 |
+|---|---|---|
+| `corner` | review 窗口开在某一个弯角上 | |
+| `report` | 分析页右侧 AI Race Engineer 面板上有一份 findings | **有人把面板读完了但一个弯角都没点开，这是真实存在的一类人。**合并成一个数就把这类人藏了 |
+
+**二、`ExposureLog`** —— 开始 / 暂停 / 继续 / 结束的一台钟。时钟是注入的（`clock=time.monotonic`），所以秒数可以被断言而不用等；用 monotonic 而不是墙上时钟，笔记本中途跳表也算不出负数。
+
+**三、聚合与列**：`phase_exposure(views, phase)` → 五列
+
+```
+review_seconds        弯角 review 的总秒数
+review_corners        看了几次弯角（次数）
+review_corners_seen   看了几个不同的弯角（广度，不是深度）
+advice_seconds        其中"屏幕上确实有一条 AI 指令"的秒数
+report_seconds        findings 面板本身在面前的秒数
+```
+
+### 11.3 三条被刻意划出来的线
+
+**一、`phase` 是"他在看哪一段的圈"，不是"他接下来跑哪一段"。**
+参与者看的是自己 baseline 的圈，然后去跑第二段。所以 dose 落在 **baseline 那一行**，response 是 coached 那一行的成绩。如果他跑完第二段之后又回头看了第二段的圈，那份曝光**来得太晚，不可能是任何东西的原因** —— 它落在 coached 行上，跟前一份分得干干净净，而不是加在一起。
+
+**二、空白 ≠ 0，而且这一次分界线在"有没有日志"上。**
+- **没有日志文件** → 五列全空。含义是"没人记录过他看了什么"：旧版本打的包、这个功能之前采的数据、或者对照组参与者两次跑之间根本没打开过 app。统计软件按 missing 读，是对的。
+- **有日志但里面没有 view** → 五列全 0。含义是"记录了，他什么都没看"。**这是一个测量结果。**
+
+把前者读成后者，等于把"最不投入"的读数发给恰好没人记录的那批人 —— 这跟 `_blank` 那条规则是同一条规则。为此 `package()` 现在**总是**塞一个 `exposure.jsonl` 进包里，哪怕是空的：这个版本会记录，所以它有资格说"这个人什么都没看"。
+
+**三、两台钟不重叠，所以可以相加。**
+review 窗口弹出来的时候，findings 面板其实还在它后面。但**没有人隔着一个窗口读下面的面板**，而两个会重叠的量，分析的人一定会去加。所以 `AnalysisView._open_review` 里显式把 report 那台钟**暂停**，review 窗口一关（`reviewClosed`）再**继续**。真实数据上跑出来：report 2.45 s + 弯角 2.6 s ≈ 脚本里总共等的 5.0 s。
+
+### 11.4 记什么、不记什么
+
+- **不记的**：低于 `MIN_VIEW_SECONDS = 1.0` 的 view 一律不写。用方向键划过弯角列表是按键，不是注意力，把按键算成注意力会**恰好虚高剂量-反应所依赖的那个数**。理由和 `MIN_EXCURSION_SAMPLES = 5` 是同一条。
+- **不记的**：软件自带的 sample session。它是 5 圈**真实**的圈，头部带着**真实**参与者 `0822` 的身份 —— 也就是 §10.2 那个坑。研究者点开 demo 看两眼，就会被记成"0822 在读他自己的辅导"。`is_recordable()` 按 session 文件夹名把它挡掉（`sample-session` 和包内的 `sample_session` 两个名字都挡）。
+- **不记的**：没有身份的圈。dose 要么属于某个参与者，要么不属于任何人。
+- **诚实的边界**（写在模块 docstring 里）：这测的是**屏幕上有什么**，不是**读进去了什么**。后者没人测得了，把前者叫做"注意力"，和把缺失通道当 0 是同一种越界。
+
+### 11.5 它得跟着优盘走，不然不算研究数据
+
+日志在参与者的 workspace 里（`~/Apex/exposure/<id>.jsonl`），不在采集文件夹里 —— 跟问卷一模一样的处境，所以走的是跟问卷一模一样的路：
+
+1. `package()` 把它作为 `exposure.jsonl` 塞进包（问卷是 `participant.json`）；
+2. `adopt_exposure()` 在研究者这边把它收编进 workspace，`register()`（CLI）和 `GarageView.import_handover()`（GUI）**两条路都调**；
+3. **按 view 的 `id` 取并集**去重。这一条是必须的：每个包带的是**到打包那一刻为止的整份日志**，不是"这一段的份额"，所以同一个人的第二个包会把第一个包里的每一条都再带一遍。直接 append 就会**恰好给参与阶段最多的那些人重复计数**。
+
+> **顺带修了一个既有缺陷**：`package()` 原来用 `rglob("*")` 收所有文件，再单独追加 workspace 里的 `participant.json`。如果被打包的文件夹里**已经**有一个 `participant.json`（一个被解包后又重新打包的 handover 就是这样），归档里会出现两个同名成员；而 `unpack` 是**按名字**建 digest 表的，两个里只有一个静悄悄地生效 —— digest 本来要抓的"文件损坏"正好被这个盖住。现在 `RESERVED_NAMES` 把 `handover.json` / `participant.json` / `exposure.jsonl` 三个名字从 rglob 里排除掉。这个缺陷是**跑真实数据时才冒出来的**（`UserWarning: Duplicate name`），不是想出来的。
+
+### 11.6 分析者手上多了什么
+
+```bash
+racecoach study-summary  --out summary.csv    # 多了 5 个 dose 列
+racecoach study-laps     --out laps.csv       # 同样 5 列，随参与者重复
+racecoach study-exposure --out exposure.csv   # 新命令：一行一次 view
+```
+
+GUI 的 `Export CSV…` 也一并带上了（`study_view.py`）—— 这正是 §4.4 那个 bug 的形状，不能让它以新的形式重演一遍，所以测试里加了断言。
+
+**为什么还要 `study-exposure` 这个原始文件**：跟 6.4 要 `study-laps` 是同一个理由。聚合出来的 dose 只有在"窗口当时确实在被读"的前提下才是 dose，而聚合本身看不见**一次开着过了一顿午饭的 review**、**一分钟内被点开四十次的同一个弯**、或者**每个弯都看了就是漏了一个**。这些是剂量-反应结论能不能站住之前必须做的检查，而只有一行一次 view 的文件做得了。
+
+### 11.7 验证
+
+- **`698 → 700 passed, 17 skipped`**，ruff 干净。新增 12 条 exposure 测试，加上 replay window 4 条、analysis view 3 条、handover 5 条、garage 1 条、study 3 条、audit 2 条。
+- **红过再绿**（不是声称，是真跑了）：拆掉 `_open_review` 里那次 `paused()` → 报告那条从 15.0 s 变成 315.0 s；拆掉 `adopt_exposure` → GUI 导入那条 `KeyError: 'P007'`；拆掉 `study_view` 的 `exposure=` → 导出那条 `'' != '52.0'`；拆掉 sample 守卫 → 两条 demo 测试都真的记下了 `driver='0822'`。
+  - 中途发现**我自己写的两条 sample 守卫测试原本是假绿的** —— 时钟一秒没走，view 被 1.0 s 的下限丢掉了，跟守卫在不在无关。补上 `clock.tick(120.0)` 之后才真的在测那个守卫。
+- **真实数据上跑通了整条链**（`B0826-baseline`，真telemetry）：分析页出 findings → 点开 T1 → 读到 T2 → 关掉 review → 关掉 app，得到
+
+```
+driver,phase,kind,corner,lap,seconds,advice,findings,at
+B0826,baseline,corner,T1,human-1-...-lap01.csv,1.4,1,,2026-08-27T08:46:26+00:00
+B0826,baseline,corner,T2,human-1-...-lap01.csv,1.2,1,,2026-08-27T08:46:27+00:00
+B0826,baseline,report,,human-1-...-lap01.csv,2.45,1,3,2026-08-27T08:46:28+00:00
+```
+
+  再打包 → 换一个从没见过这个人的 workspace → `collect` + `register`：`3 lap(s), background=True, 3 view(s)`，dose 正确落在 baseline 行；**第二次 collect 同一个包，仍然是 3 view(s)**。
+- **对现有五个参与者的行**：五列全部**空白**。正确 —— 那五个包是这个功能之前采的，没人记录过他们看了什么。`racecoach study-exposure` 直接说出来："Nothing was recorded, which is not the same as nobody having looked."
+
+### 11.8 跑打好的 exe 时又抓到一个（2026-08-27 下午）
+
+把**冻结的 `racecoach.exe`** 拉过一遍完整链路（打包 → collect → register → 导出），
+结果对不上：写进日志的是 **3 条 view，收进去只有 2 条**，而且丢的恰好是第一条。
+
+原因是我自己的测试脚本用 PowerShell 5.1 的 `Set-Content -Encoding utf8` 写的日志 ——
+它会写 BOM（`EF BB BF`）。`json.loads` 吃不下带 BOM 的那一行，`read_views` 就把它当
+成一条坏行跳过了。跳过坏行是**故意的**；**因为一个编码标记而跳过一条完好的记录不是**，
+而且它没有任何东西可以指出来。
+
+产品侧确实有问题，而且比曝光量这一处严重得多：**所有从别人机器上过来的文件**都是按
+plain `utf-8` 读的 —— `manifest.json`、`participant.json`、`exposure.jsonl`。Windows 上
+任何重写过这些文件的东西（记事本另存、同步客户端、某些杀软）都可能留下 BOM。对
+`manifest.json` 来说，后果是 `handover_identity()` 返回 `(None, None)` ——
+**整个 handover 变成一堆没有身份的圈，任何比较都用不了它**，而且没有一句报错。
+
+改成 `utf-8-sig`（就是 utf-8 加上"开头有 BOM 就丢掉"），四处读取点全改。两条新测试
+都**红过再绿**：不改的话，exposure 那条丢第一条 view，handover 那条直接
+`assert (None, None) == ('P007', 'baseline')`。
+
+这条是**跑冻结的 exe 跑出来的，不是读代码读出来的** —— 和 §10.1 是同一个教训。
+
+### 11.9 这不改变的事
+
+n 还是每臂 1 个人。剂量-反应需要的是**辅导组内部有足够的曝光量差异**，一个人给不出任何差异。这一节做的是**从下一个参与者开始，这条证据链有数据可用**；已经采的那五个包补不回来。

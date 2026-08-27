@@ -11,6 +11,7 @@ show that. A model may later narrate these points, but they stand without one.
 """
 
 from dataclasses import dataclass
+from typing import NamedTuple
 
 from f1coach_core.features import _corner_facts
 from f1coach_core.lap import Lap
@@ -44,6 +45,12 @@ class DebriefPoint:
     # about a stretch of graph. Empty when no measurement moved far enough to
     # say -- an unexplained loss must not be given a category it did not earn.
     category: str = ""
+    # Which fact key the difference was measured on, and by how much. The strings
+    # above are what a participant read; these two are what a later session can
+    # be held against, and they are recorded here rather than recomputed so that
+    # adherence is measured against the advice actually given.
+    metric: str = ""
+    gap: float | None = None  # mine - reference, signed, in the metric's own unit
 
     @property
     def headline(self) -> str:
@@ -68,9 +75,27 @@ CATEGORY_FOCUS = {
 }
 
 
-def _candidates(fact: dict) -> list[tuple[float, str, str, str]]:
-    """(how far past its threshold, difference, detail, category) per measured gap."""
-    out: list[tuple[float, str, str, str]] = []
+class _Gap(NamedTuple):
+    """One measured difference at a corner, ready to rank, render or track.
+
+    ``metric`` and ``delta`` are what make a point comparable with a later run.
+    The two rendered strings say what the participant read; these say which
+    channel it was about and which way it would have to move. Advice here is
+    always "move toward the reference lap", so the direction a participant was
+    asked for is ``-sign(delta)`` and never needs storing separately.
+    """
+
+    score: float  # how far past its own threshold, so different units compare
+    difference: str
+    detail: str
+    category: str
+    metric: str
+    delta: float
+
+
+def _candidates(fact: dict) -> list[_Gap]:
+    """Every measured gap at one corner that ran past its reporting threshold."""
+    out: list[_Gap] = []
 
     def gap(key: str) -> float | None:
         mine, ref = fact.get(key), fact.get(f"ref_{key}")
@@ -81,45 +106,69 @@ def _candidates(fact: dict) -> list[tuple[float, str, str, str]]:
     brake = gap("brake_point_m")
     if brake is not None and abs(brake) >= NOTABLE_BRAKE_POINT_M:
         word = "earlier" if brake < 0 else "later"
-        out.append((
+        out.append(_Gap(
             abs(brake) / NOTABLE_BRAKE_POINT_M,
             f"Braked {abs(brake):.0f} m {word}",
             f"brake point {fact['brake_point_m']:.0f} m vs {fact['ref_brake_point_m']:.0f} m",
             BRAKING,
+            "brake_point_m",
+            brake,
         ))
 
     speed = gap("min_speed_kmh")
     if speed is not None and abs(speed) >= NOTABLE_MIN_SPEED_KMH:
         word = "slower" if speed < 0 else "faster"
-        out.append((
+        out.append(_Gap(
             abs(speed) / NOTABLE_MIN_SPEED_KMH,
             f"{abs(speed):.0f} km/h {word} at the slowest point",
             f"minimum {fact['min_speed_kmh']:.0f} km/h vs {fact['ref_min_speed_kmh']:.0f} km/h",
             CORNER_SPEED,
+            "min_speed_kmh",
+            speed,
         ))
 
     throttle = gap("throttle_reapply_m")
     if throttle is not None and abs(throttle) >= NOTABLE_THROTTLE_POINT_M:
         word = "later" if throttle > 0 else "earlier"
-        out.append((
+        out.append(_Gap(
             abs(throttle) / NOTABLE_THROTTLE_POINT_M,
             f"Back on throttle {abs(throttle):.0f} m {word}",
             f"throttle at {fact['throttle_reapply_m']:.0f} m "
             f"vs {fact['ref_throttle_reapply_m']:.0f} m",
             THROTTLE,
+            "throttle_reapply_m",
+            throttle,
         ))
 
     coast = gap("coast_distance_m")
     if coast is not None and abs(coast) >= NOTABLE_COAST_M:
         word = "more" if coast > 0 else "less"
-        out.append((
+        out.append(_Gap(
             abs(coast) / NOTABLE_COAST_M,
             f"Coasted {abs(coast):.0f} m {word}",
             f"coasting {fact['coast_distance_m']:.0f} m "
             f"vs {fact['ref_coast_distance_m']:.0f} m",
             COASTING,
+            "coast_distance_m",
+            coast,
         ))
     return out
+
+
+def _point(fact: dict, best: _Gap | None, lost: float | None) -> DebriefPoint:
+    """One corner's DebriefPoint, however the caller decided what to say of it."""
+    span = fact["span_m"]
+    return DebriefPoint(
+        corner=str(fact["corner"]),
+        apex_m=float(fact["apex_m"]),
+        span_m=(float(span[0]), float(span[1])),
+        time_lost_s=None if lost is None else round(float(lost), 3),
+        difference="" if best is None else best.difference,
+        detail="" if best is None else best.detail,
+        category="" if best is None else best.category,
+        metric="" if best is None else best.metric,
+        gap=None if best is None else round(best.delta, 3),
+    )
 
 
 def lap_debrief(
@@ -143,19 +192,8 @@ def lap_debrief(
         # Rank by how far each gap ran past its own reporting threshold, so
         # measurements in different units stay comparable. Ties keep the order
         # above, which runs in the order a corner is driven.
-        best = max(candidates, key=lambda item: item[0], default=None)
-        span = fact["span_m"]
-        points.append(
-            DebriefPoint(
-                corner=str(fact["corner"]),
-                apex_m=float(fact["apex_m"]),
-                span_m=(float(span[0]), float(span[1])),
-                time_lost_s=round(float(lost), 3),
-                difference="" if best is None else best[1],
-                detail="" if best is None else best[2],
-                category="" if best is None else best[3],
-            )
-        )
+        best = max(candidates, key=lambda item: item.score, default=None)
+        points.append(_point(fact, best, lost))
     points.sort(key=lambda point: point.time_lost_s, reverse=True)
     return points[:limit]
 
@@ -178,19 +216,8 @@ def corner_review_points(lap: Lap, reference: Lap | None = None) -> list[Debrief
         lost = None
         if reference is not None:
             lost = fact.get("time_lost_s")
-            best = max(_candidates(fact), key=lambda item: item[0], default=None)
-        span = fact["span_m"]
-        points.append(
-            DebriefPoint(
-                corner=str(fact["corner"]),
-                apex_m=float(fact["apex_m"]),
-                span_m=(float(span[0]), float(span[1])),
-                time_lost_s=None if lost is None else round(float(lost), 3),
-                difference="" if best is None else best[1],
-                detail="" if best is None else best[2],
-                category="" if best is None else best[3],
-            )
-        )
+            best = max(_candidates(fact), key=lambda item: item.score, default=None)
+        points.append(_point(fact, best, lost))
     return points
 
 

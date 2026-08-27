@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from f1coach_core.exposure import adopt_views, ensure_log
 from f1coach_core.lap import NO_IDENTITY, StudyIdentity
 from f1coach_core.loader import TelemetrySchemaError
 from f1coach_core.participant import (
@@ -29,7 +30,25 @@ from f1coach_core.participant import (
 from f1coach_core.workspace import import_telemetry, sessions_root, workspace_root
 
 MANIFEST_NAME = "handover.json"
+BACKGROUND_NAME = "participant.json"
+EXPOSURE_NAME = "exposure.jsonl"
 SCHEMA_VERSION = "apex-handover-v1"
+
+# Names the package fills from the participant's workspace rather than from the
+# capture folder. A folder that already holds one -- a handover somebody
+# unpacked and packaged again -- would otherwise contribute a second member
+# under the same name, and since `unpack` checks digests by name one of the two
+# silently wins. A damaged file that a digest is meant to catch is exactly what
+# that hides.
+RESERVED_NAMES = frozenset({MANIFEST_NAME, BACKGROUND_NAME, EXPOSURE_NAME})
+
+# How text that arrived from somebody else's machine is read: utf-8, plus "drop
+# a byte-order mark if one is there". Everything Apex writes is plain utf-8, but
+# these files travel, and on Windows a BOM is the commonest thing to survive a
+# round trip through anything that rewrites them. Read as plain utf-8, a manifest
+# with three extra bytes in front reports no participant at all, and the laps
+# import as nobody's.
+ARRIVING_ENCODING = "utf-8-sig"
 
 
 def handovers_root() -> Path:
@@ -61,6 +80,7 @@ class Registered:
     session: str
     laps: int
     background: bool
+    views: int = 0  # coaching views adopted from this participant's log
     skipped: tuple[str, ...] = ()
 
 
@@ -81,7 +101,14 @@ def package(
     """Bundle one capture folder into a single verifiable file to hand over.
 
     The participant's background travels with it when there is one, because a
-    comparability check months later cannot go back and ask them.
+    comparability check months later cannot go back and ask them. So does the
+    record of what coaching they looked at, for the same reason: how much of it
+    they read is not recoverable from the telemetry, and the only machine that
+    ever knew is the one being packaged.
+
+    Both live in the participant's workspace rather than in the capture folder,
+    so both are added by hand here. Neither is a lap, and a capture folder is a
+    record of one run; these are records of a person.
     """
     source = Path(source)
     if not source.is_dir():
@@ -89,7 +116,7 @@ def package(
 
     members: list[tuple[Path, str]] = []
     for path in sorted(source.rglob("*")):
-        if path.is_file() and path.name != MANIFEST_NAME:
+        if path.is_file() and path.name not in RESERVED_NAMES:
             members.append((path, str(path.relative_to(source))))
     if not members:
         raise HandoverError(f"{source} holds no files to hand over.")
@@ -98,7 +125,13 @@ def package(
         participant_id = _participant_from(source)
     background = load_background(participant_id) if participant_id else None
     if background is not None:
-        members.append((background_path(participant_id), "participant.json"))
+        members.append((background_path(participant_id), BACKGROUND_NAME))
+    if participant_id:
+        # Included even when empty. A build that records exposure can say "they
+        # looked at nothing" and mean it; a package with no exposure member came
+        # from a build that never measured, which is a different answer and has
+        # to stay one. See exposure.ensure_log.
+        members.append((ensure_log(participant_id), EXPOSURE_NAME))
 
     manifest = {
         "schema_version": SCHEMA_VERSION,
@@ -129,7 +162,7 @@ def package(
 def _participant_from(source: Path) -> str | None:
     """Read the id out of the capture's own manifest rather than the folder name."""
     try:
-        data = json.loads((source / "manifest.json").read_text("utf-8"))
+        data = json.loads((source / "manifest.json").read_text(ARRIVING_ENCODING))
     except (OSError, ValueError):
         return None
     value = data.get("participant_id")
@@ -210,7 +243,9 @@ def handover_identity(folder: str | Path) -> tuple[StudyIdentity, dict | None]:
     """
     folder = Path(folder)
     try:
-        manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+        manifest = json.loads(
+            (folder / "manifest.json").read_text(encoding=ARRIVING_ENCODING)
+        )
     except (OSError, ValueError):
         return NO_IDENTITY, None
     if not isinstance(manifest, dict):
@@ -244,7 +279,7 @@ def adopt_background(folder: str | Path) -> str | None:
     """
     folder = Path(folder)
     try:
-        data = json.loads((folder / "participant.json").read_text(encoding="utf-8"))
+        data = json.loads((folder / BACKGROUND_NAME).read_text(encoding=ARRIVING_ENCODING))
     except (OSError, ValueError):
         return None
     if not isinstance(data, dict):
@@ -257,6 +292,26 @@ def adopt_background(folder: str | Path) -> str | None:
         return None
     save_background(background)
     return background.participant_id
+
+
+def adopt_exposure(folder: str | Path, driver: str | None) -> int:
+    """Keep the record of what this participant looked at; return how many are new.
+
+    The same argument as the questionnaire, one step further. Whether coaching
+    changed how somebody drove is only answerable if we know they read it, and
+    nothing in a telemetry file records that. It also has to be adopted into
+    this workspace rather than left where it landed, because the export reads a
+    participant's viewing by id -- a log that arrived and stayed put is a dose
+    column that exports blank, which the analysis would correctly read as
+    "nobody knows" and quietly drop from the one test this study can carry.
+
+    Merging is by view id, so a participant whose second package repeats every
+    view the first one carried is not counted twice.
+    """
+    source = Path(folder) / EXPOSURE_NAME
+    if not driver or not source.is_file():
+        return 0
+    return adopt_views(source, driver)
 
 
 def session_name(handover: Handover) -> str:
@@ -288,6 +343,7 @@ def register(handover: Handover) -> Registered:
     """
     identity, recording = handover_identity(handover.path)
     background = adopt_background(handover.path)
+    views = adopt_exposure(handover.path, identity.driver or background)
     name = session_name(handover)
     skipped: list[str] = []
     for run in sorted(handover.path.glob("*.csv")):
@@ -305,5 +361,6 @@ def register(handover: Handover) -> Registered:
         session=name,
         laps=laps,
         background=background is not None,
+        views=views,
         skipped=tuple(skipped),
     )

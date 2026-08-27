@@ -262,3 +262,69 @@ def test_a_channel_the_recording_lacks_stays_blank_per_lap_too():
     assert cells["damage_events"] == ""
     assert cells["lap"] == "1"
     assert cells["source"] == "run-lap01.csv"
+
+
+def test_the_dose_rides_on_the_row_of_the_phase_that_was_reviewed():
+    """A dose-response test must not need a third file joined in either."""
+    from f1coach_core.exposure import CORNER_VIEW, REPORT_VIEW, ReviewView
+
+    logs = {
+        "A001": [
+            ReviewView(driver="A001", phase="baseline", kind=CORNER_VIEW,
+                       seconds=40.0, corner="T3", advice=True),
+            ReviewView(driver="A001", phase="baseline", kind=REPORT_VIEW, seconds=25.0),
+        ]
+    }
+    text = summary_csv(
+        [
+            summarise("A001", "baseline", [make_lap(driver="A001", phase="baseline")]),
+            summarise("A001", "coached", [make_lap(driver="A001", phase="coached")]),
+        ],
+        exposure=logs,
+    )
+    header, *rows = text.strip().splitlines()
+    cells = [dict(zip(header.split(","), row.split(","), strict=True)) for row in rows]
+
+    assert cells[0]["phase"] == "baseline"
+    assert cells[0]["review_seconds"] == "40.0"
+    assert cells[0]["advice_seconds"] == "40.0"
+    assert cells[0]["report_seconds"] == "25.0"
+    # The second run is the response, not another dose: what they read after it
+    # cannot have caused it, and this row must not borrow the first row's.
+    assert cells[1]["phase"] == "coached"
+    assert cells[1]["review_seconds"] == "0"
+
+
+def test_a_participant_nobody_recorded_gets_blanks_not_zeros():
+    """Zero is a claim about them; blank is a claim about the record."""
+    summaries = [summarise("A001", "baseline", [make_lap(driver="A001")])]
+
+    unknown = summary_csv(summaries)
+    watched = summary_csv(summaries, exposure={"A001": []})
+
+    assert unknown.strip().splitlines()[1].split(",")[9:14] == [""] * 5
+    assert watched.strip().splitlines()[1].split(",")[9:14] == ["0", "0", "0", "0", "0"]
+
+
+def test_every_view_gets_its_own_row_so_an_implausible_one_can_be_seen():
+    """A dose is only a dose if the window was being read, and only the raw
+    rows can show a review left open through a coffee break."""
+    from f1coach_core.exposure import CORNER_VIEW, ReviewView
+    from f1coach_core.study import exposure_csv
+
+    text = exposure_csv({
+        "A001": [
+            ReviewView(driver="A001", phase="baseline", kind=CORNER_VIEW,
+                       seconds=12.0, corner="T3", lap="run-lap01.csv", advice=True,
+                       at="2026-08-27T10:00:00+00:00"),
+            ReviewView(driver="A001", phase="baseline", kind=CORNER_VIEW,
+                       seconds=4210.0, corner="T1", lap="run-lap01.csv",
+                       at="2026-08-27T11:20:00+00:00"),
+        ]
+    })
+    header, *rows = text.strip().splitlines()
+
+    assert header.startswith("driver,phase,kind,corner,lap,seconds,advice")
+    assert len(rows) == 2
+    assert rows[0].startswith("A001,baseline,corner,T3,run-lap01.csv,12.0,1")
+    assert ",4210.0,0," in rows[1]

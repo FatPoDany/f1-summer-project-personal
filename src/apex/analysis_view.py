@@ -35,6 +35,7 @@ from f1coach_core import (
     sector_times,
     single_lap_corner_table,
 )
+from f1coach_core.exposure import REPORT_VIEW, ExposureLog
 from f1coach_core.workspace import session_recording
 from racecoach.granite.narrate import NarratedPoint
 from racecoach.granite.server import GraniteServer
@@ -172,6 +173,10 @@ class AnalysisView(QWidget):
         self._advice_complete = False
         self._reference: Lap | None = None
         self._replay_window: ReplayWindow | None = None
+        # How long the coach's findings were the thing in front of the
+        # participant. Paused while the review window is up, so this and the
+        # corner views add up instead of counting the same minute twice.
+        self._report_exposure = ExposureLog()
 
         self._panel = CoachPanel(self, pool=coach_pool, server=coach_server)
         self._panel.setMinimumWidth(300)
@@ -217,6 +222,7 @@ class AnalysisView(QWidget):
         return self._lap
 
     def set_context(self, lap: Lap, session: Session | None) -> None:
+        self._report_exposure.closed()  # a different lap is a different reading
         self._lap, self._session = lap, session
         title = f"{lap.source.stem} — {lap.lap_time:.3f} s"
         if session is not None:
@@ -231,6 +237,7 @@ class AnalysisView(QWidget):
 
     def clear_context(self) -> None:
         """Invalidate lap data after its managed session has been deleted."""
+        self._report_exposure.closed()
         self._lap = None
         self._session = None
         self._corner_rows = []
@@ -380,10 +387,45 @@ class AnalysisView(QWidget):
             self._advice[index] = narrated
             self._narration[index] = narrated.full_text
         self._advice_complete = True
+        self._start_report_view(findings)
         if self._replay_window is not None:
             self._replay_window.update_advice(self._advice, complete=True)
 
+    def _start_report_view(self, findings) -> None:
+        """The findings are now on screen; start counting how long they stay.
+
+        Started here rather than when the analysis was requested, because a
+        request that is still running is not something anybody can read.
+        """
+        identity = self._lap.identity if self._lap is not None else None
+        count = len(findings) if findings is not None else 0
+        self._report_exposure.opened(
+            driver=identity.driver if identity else None,
+            phase=identity.phase if identity else None,
+            kind=REPORT_VIEW,
+            lap_source=self._lap.source if self._lap is not None else None,
+            advice=count > 0,
+            findings=count,
+        )
+
+    def hideEvent(self, event) -> None:
+        """Another screen is in front; hold the reading rather than end it.
+
+        Paused, not closed: a participant who steps out to the Garage and comes
+        straight back is still reading the same report, and splitting that into
+        two views would make the dose look like engagement it was not.
+        """
+        self._report_exposure.paused()
+        super().hideEvent(event)
+
+    def showEvent(self, event) -> None:
+        self._report_exposure.resumed()
+        super().showEvent(event)
+
     def coach_shutdown(self) -> None:
+        # Filed before the app goes: a reading that was never closed is a
+        # reading that never happened, and closing Apex is how one usually ends.
+        self._report_exposure.closed()
         self._panel.shutdown()
 
     def _session_dir(self) -> Path | None:
@@ -428,6 +470,11 @@ class AnalysisView(QWidget):
         self._show_evidence(*point.span_m)
         if self._replay_window is None:
             self._replay_window = ReplayWindow(self)
+            self._replay_window.reviewClosed.connect(self._report_exposure.resumed)
+        # One of the two clocks at a time. The report is still on the screen
+        # behind the review window, but nobody reads a panel through a window
+        # sitting on top of it, and two measures that overlap cannot be added.
+        self._report_exposure.paused()
         self._replay_window.show_stretch(
             self._lap,
             point,

@@ -42,6 +42,7 @@ from f1coach_core.workspace import RECORDING_POINTER, session_recording
 from racecoach.telemetry.handover import (
     HandoverError,
     adopt_background,
+    adopt_exposure,
     handover_identity,
     handovers_root,
     session_name,
@@ -518,6 +519,10 @@ class GarageView(QWidget):
             return None
         identity, recording = handover_identity(handover.path)
         adopt_background(handover.path)
+        # Both records that travel beside the laps, adopted the same way the
+        # CLI's `register` adopts them: a questionnaire or a viewing log left in
+        # the folder it unpacked into is a column that exports blank.
+        adopt_exposure(handover.path, identity.driver)
         runs = sorted(handover.path.glob("*.csv"))
         if not runs:
             QMessageBox.critical(
