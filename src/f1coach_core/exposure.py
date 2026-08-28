@@ -27,7 +27,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
-from f1coach_core.workspace import SAMPLE_SESSION_NAME, workspace_root
+from f1coach_core.workspace import SAMPLE_SESSION_NAME, is_arrived, workspace_root
 
 SCHEMA_VERSION = "apex-exposure-v1"
 EXPOSURE_DIR_NAME = "exposure"
@@ -54,10 +54,20 @@ SAMPLE_LAP_FOLDERS = frozenset({SAMPLE_SESSION_NAME, "sample_session"})
 
 
 def is_recordable(lap_source: str | Path | None) -> bool:
-    """Whether looking at this lap is somebody's dose or nobody's."""
+    """Whether looking at this lap is somebody's dose or nobody's.
+
+    Two ways it is nobody's. The demonstration that ships with Apex carries a
+    real participant's identity, so reading it would be recorded against them.
+    And a session collected from a handover was driven on another machine: on
+    the researcher's workspace every session is imported study data, and the
+    researcher opening one to check what the model said is analysis. Recording
+    that as the participant's dose measures the wrong person, and it happens on
+    the machine where the dose is finally exported from.
+    """
     if lap_source is None:
         return False
-    return Path(lap_source).parent.name not in SAMPLE_LAP_FOLDERS
+    parent = Path(lap_source).parent
+    return parent.name not in SAMPLE_LAP_FOLDERS and not is_arrived(parent)
 
 
 @dataclass(frozen=True)

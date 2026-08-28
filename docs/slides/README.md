@@ -1,35 +1,60 @@
-# Apex feature review deck
+# Apex slide decks
 
-`apex-features.tex` is a Beamer deck (16:9, pdflatex) covering every screen of
-the current build. Every figure in `figures/` is a real screenshot of the app,
-rendered headless.
+Two Beamer decks (16:9, pdflatex). Neither is checked in as a PDF you should
+trust without rebuilding — the figures come from the app, and the app moves.
 
-## Rebuild the PDF
+| deck | for | figures |
+|---|---|---|
+| `apex-features.tex` | a tour of every screen in the build | `figures/*.png` |
+| `apex-progress.tex` | **study progress, for a supervision meeting** — what the instrument measures, what the first three participants showed, what is still missing | `figures/progress/*.png` |
 
-```bash
-pdflatex apex-features.tex && pdflatex apex-features.tex
-```
-
-Needs only stock LaTeX: beamer, graphicx, xcolor, booktabs, array, tikz,
-helvet, caption, microtype.
-
-## Regenerate the screenshots
-
-`make-screenshots.py` drives the real application through every screen and
-saves one PNG per feature. It uses the local IBM Granite 4.1 server for the
-coaching screens, so start that first; without it the script still runs and the
-live advice panel stays in its honest offline state.
+## Build a PDF
 
 ```bash
-QT_QPA_PLATFORM=offscreen \
-APEX_WORKSPACE=/tmp/apex-shots-ws \
-APEX_RESEARCH_MODE=1 \
-python docs/slides/make-screenshots.py docs/slides/figures
+cd docs/slides
+pdflatex apex-progress.tex && pdflatex apex-progress.tex
 ```
 
-`APEX_RESEARCH_MODE=1` is what exposes the facilitator-only Robot Pilot screen.
+Twice, so the frame numbers settle. Needs only stock LaTeX: beamer, graphicx,
+xcolor, booktabs, array, tikz, helvet, microtype. There is no TeX installation
+on the AVD session host and MSI installs are policy-blocked there, so this is
+normally built on Overleaf: upload `apex-progress.tex` together with the
+`figures/` folder and it compiles unchanged.
 
-The Collect Data and Robot Pilot screens are shown in their completed states:
-capturing them live would need a running TORCS session and a full synthetic
-batch. Every other screen is captured from real data, and the coaching content
-is a genuine model response, not a mock. Slide 20 of the deck records this.
+## Regenerate the progress figures
+
+```bash
+python docs/slides/make-progress-screenshots.py docs/slides/figures/progress
+```
+
+It copies the real study sessions into a throwaway workspace
+(`~/apex-deck-ws` by default, given as the optional second argument) so nothing
+it does can touch the collected data, then drives the real application through
+each screen.
+
+Deliberately **not** run under `QT_QPA_PLATFORM=offscreen`: that plugin ships no
+font engine on Windows, so every label renders as an empty box. The real
+platform plugin is used and each window gets `WA_DontShowOnScreen`, which lays it
+out and paints it into a pixmap without ever mapping it to the desktop — so it
+neither steals focus nor flashes on screen.
+
+The script borrows three things from the installed package at `~/repos/Apex`,
+because a source checkout has none of them and the honest "not available" states
+they produce would misrepresent the build being presented:
+
+- `APEX_FFMPEG` — otherwise the review window cannot cut its clip
+- `TORCS_PREFIX` — otherwise Collect Data reports the simulator missing
+- `LLAMA_SERVER_BIN` + `GRANITE_MODEL_PATH` — otherwise the Garage shows
+  `AI UNAVAILABLE` instead of the real `ANALYSED` state
+
+The coaching shown is a genuine IBM Granite 4.1 report, **restored from the audit
+record it wrote at the time** rather than regenerated for the deck, so the slide
+shows what a participant was actually told.
+
+Two figures are cropped, and the deck says so on the slide:
+
+- `04-review.png` stops before the video pane. The clip is cut and loaded, but a
+  video surface is composited by the graphics stack rather than painted into the
+  widget, so `QWidget.grab()` returns black for it on a window that was never
+  mapped. A black rectangle reads as a broken feature.
+- `02-garage.png` is cropped to the populated rows.

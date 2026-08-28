@@ -27,7 +27,12 @@ from f1coach_core.participant import (
     load_background,
     save_background,
 )
-from f1coach_core.workspace import import_telemetry, sessions_root, workspace_root
+from f1coach_core.workspace import (
+    ARRIVED_NAME,
+    import_telemetry,
+    sessions_root,
+    workspace_root,
+)
 
 MANIFEST_NAME = "handover.json"
 BACKGROUND_NAME = "participant.json"
@@ -328,6 +333,33 @@ def session_name(handover: Handover) -> str:
     return name
 
 
+def mark_arrived(session_name: str, handover: Handover) -> Path | None:
+    """Say, in the session itself, that these laps were driven somewhere else.
+
+    Both doors into the study -- `register` here and the Garage's import --
+    write it, because both create sessions on a machine that did not drive
+    them. The alternative was for the exposure measure to guess from the
+    workspace's shape, and a guess that is wrong once has already recorded a
+    researcher's reading as a participant's dose.
+    """
+    directory = sessions_root() / session_name
+    if not directory.is_dir():
+        return None
+    marker = directory / ARRIVED_NAME
+    marker.write_text(
+        json.dumps(
+            {
+                "participant_id": handover.participant_id,
+                "collected_from": handover.path.name,
+                "collected_at": datetime.now(UTC).isoformat(timespec="seconds"),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return marker
+
+
 def register(handover: Handover) -> Registered:
     """Turn a verified handover into laps this workspace can actually read.
 
@@ -356,6 +388,7 @@ def register(handover: Handover) -> Registered:
             # tidy it up; say which file and carry on with the rest.
             skipped.append(f"{run.name}: {exc}")
     session = sessions_root() / name
+    mark_arrived(name, handover)
     laps = len(list(session.glob("*.csv"))) if session.is_dir() else 0
     return Registered(
         session=name,

@@ -45,6 +45,7 @@ from racecoach.telemetry.handover import (
     adopt_exposure,
     handover_identity,
     handovers_root,
+    mark_arrived,
     session_name,
     unpack,
 )
@@ -542,6 +543,10 @@ class GarageView(QWidget):
                 QMessageBox.critical(self, "Can't import handover", str(exc))
                 return None
             self._fresh.add(run.stem)
+        # These laps were driven on the participant's machine, not this one.
+        # Said in the session itself so the exposure measure can tell the
+        # researcher reading them apart from the participant who was coached.
+        mark_arrived(name, handover)
         who = identity.driver or "an unnamed driver"
         self.status.emit(f"Imported {archive.name} from {who} — " + " · ".join(summaries))
         return name

@@ -45,7 +45,7 @@
 | `C:\Users\hh25303\Apex-Study-2026-08-27.zip` | **同一个 zip 的副本，放在 profile 里** | 576.7 MB |
 | 两处各有一个 `.zip.sha256` | 拷贝之后核对用 |  |
 
-    SHA-256  BD12E197847286BFA44F65324AA34F40AADF264DCB0CADB296B5598BEC388379
+    SHA-256  03943F7A3CCFC85F6A98A1628729E4DC1B9A55517FBFA3D2FAE51BE374A570E3
 
 到了另一台机器上核对：
 
@@ -67,6 +67,14 @@
 > 启动检查。**如果你在 09:55 到 11:00 之间已经把 zip 拷到过 U 盘，那份是旧的** ——
 > 用 `certutil -hashfile` 对一下上面的哈希，或者看解压出来的 `apex-study-build.txt`，
 > 第二次那份第一行写的是 "second swap of the day"。
+>
+> **2026-08-27 12:15 又打了第三次**（上面的哈希是第三次的）。这次换的是
+> **arrived 标记**：从 handover 收进来的 session 现在带一个 `arrived.json`，这种
+> session 的浏览**永远不记成剂量**。没有它的话，研究者在分析机上点参与者的圈，会被记
+> 成"参与者在读自己的辅导" —— 这件事**已经发生过**，真实 workspace 里查出 16 条假记录
+> （见 `STUDY_CAN_WE_SHOW_IMPROVEMENT.md` §11.10）。同一天三次打包的区别：09:55 只有
+> 曝光量；11:00 加 adherence + `utf-8-sig`；12:15 加 arrived 标记。**认哈希，或者看
+> 解压出来的 `apex-study-build.txt` 第一行写的是第几次。**
 >
 > **`utf-8-sig`**：从别人机器上过来的文件（`manifest.json` / `participant.json` /
 > `exposure.jsonl`）以前是按 utf-8 读的。Windows 上任何东西重写过这些文件都可能在开头

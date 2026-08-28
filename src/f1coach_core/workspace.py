@@ -13,6 +13,14 @@ from f1coach_core.lap import NO_IDENTITY, StudyIdentity
 
 SAMPLE_SESSION_NAME = "sample-session"
 
+# Dropped into a session whose laps were driven on somebody else's machine and
+# collected here. What it separates is the researcher's workspace from a
+# participant's: on this machine every session is imported study data, and a
+# researcher opening one to check the coaching is doing analysis, not taking a
+# dose of it. Without the distinction that reading is recorded against the
+# participant, which is a measurement of the wrong person.
+ARRIVED_NAME = "arrived.json"
+
 
 def workspace_root() -> Path:
     return Path(os.environ.get("APEX_WORKSPACE", str(Path.home() / "Apex")))
@@ -41,6 +49,11 @@ def list_study_sessions() -> list[Path]:
     still reads it -- explicit is explicit.
     """
     return [p for p in list_sessions() if p.name != SAMPLE_SESSION_NAME]
+
+
+def is_arrived(session_dir: str | Path) -> bool:
+    """Whether this session's laps were driven elsewhere and collected here."""
+    return (Path(session_dir) / ARRIVED_NAME).is_file()
 
 
 def _validate_session_name(name: str) -> str:

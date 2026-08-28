@@ -390,3 +390,17 @@ def test_a_byte_order_mark_does_not_make_a_handover_nobodys(tmp_path, monkeypatc
     assert (identity.driver, identity.phase) == ("P007", "baseline")
     assert adopt_background(folder) == "P007"
     assert load_background("P007").racing_games == "weekly"
+
+
+def test_collecting_says_in_the_session_that_it_was_driven_elsewhere(capture, tmp_path):
+    """Otherwise the researcher opening it is recorded as the participant."""
+    from f1coach_core.exposure import is_recordable
+    from f1coach_core.workspace import ARRIVED_NAME, sessions_root
+
+    archive = package(capture, tmp_path / "A001.zip").path
+    registered = register(unpack(archive, tmp_path / "pool"))
+
+    session = sessions_root() / registered.session
+    marker = json.loads((session / ARRIVED_NAME).read_text("utf-8"))
+    assert marker["participant_id"] == "A001"
+    assert not is_recordable(session / "whatever-lap01.csv")

@@ -257,3 +257,38 @@ def test_a_byte_order_mark_does_not_cost_the_first_view(tmp_path):
 
     assert [v.corner for v in read_views(path)] == ["T1", "T2", "T3"]
     assert adopt_views(path, "P001") == 3
+
+
+def test_the_researcher_reading_a_collected_session_is_not_the_participants_dose(tmp_path):
+    """Found by looking at the real workspace: fifteen views recorded against
+    two participants, all of them the researcher clicking through their laps
+    on the analysis machine. Every session there arrived in a handover."""
+    from f1coach_core.workspace import ARRIVED_NAME
+
+    clock = FakeClock()
+    log, written = _log(clock)
+    session = tmp_path / "B0826-baseline-20260826-091209"
+    session.mkdir()
+    (session / ARRIVED_NAME).write_text('{"participant_id": "B0826"}', encoding="utf-8")
+
+    log.opened(driver="B0826", phase="baseline", kind=REPORT_VIEW,
+               lap_source=session / "run-lap01.csv")
+    clock.tick(300.0)
+    log.closed()
+
+    assert written == []
+
+
+def test_a_participant_reading_on_their_own_machine_still_counts(tmp_path):
+    """The guard must not switch the measure off everywhere it matters."""
+    clock = FakeClock()
+    log, written = _log(clock)
+    session = tmp_path / "B0826-baseline-20260826-091209"
+    session.mkdir()  # driven here: no arrived marker
+
+    log.opened(driver="B0826", phase="baseline", kind=REPORT_VIEW,
+               lap_source=session / "run-lap01.csv")
+    clock.tick(30.0)
+    log.closed()
+
+    assert [(v.kind, v.seconds) for v in written] == [("report", 30.0)]
