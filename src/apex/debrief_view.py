@@ -232,14 +232,19 @@ class SessionDebriefView(QWidget):
 
         Returning to a session already on screen leaves it alone: re-measuring
         would throw away prose that took minutes to produce, to arrive at
-        exactly the same numbers.
+        exactly the same numbers. One still being produced counts as on screen.
+        Starting the bundled server can take minutes, and until that counted,
+        every trip back to the Garage and in again dropped the running debrief
+        and queued a second whole narration behind it — on the single-thread
+        pool the per-lap coach shares, so the clicks stacked up and the coach
+        waited behind them.
         """
         if (
             session is not None
             and self._session is not None
-            and self._report is not None
             and self._session.path == session.path
             and len(self._session.laps) == len(session.laps)
+            and (self._report is not None or self._task is not None)
         ):
             return
         self._session = session
@@ -389,10 +394,14 @@ class SessionDebriefView(QWidget):
     # -- rendering -----------------------------------------------------------
 
     def _clear_cards(self) -> None:
-        for i in reversed(range(self._cards.count())):
-            widget = self._cards.itemAt(i).widget()
+        """Empty the card column, the trailing stretch included.
+
+        ``_render`` runs again for every lap the model speaks for, so a stretch
+        left behind here would be one more layout item each time it spoke.
+        """
+        while (item := self._cards.takeAt(0)) is not None:
+            widget = item.widget()
             if widget is not None:
-                self._cards.takeAt(i)
                 widget.hide()  # stop painting now — deleteLater waits for the loop
                 widget.deleteLater()
 

@@ -245,7 +245,45 @@ ZIP 规范（APPNOTE 4.4.17.1）要求条目名用正斜杠。.NET Framework 4.x
 
 ---
 
-## 12. 交叉引用
+## 12. 2026-08-28 的这一版
+
+换掉的是 Session Debrief 的一个 bug：在一份 debrief 还没算完的时候再点一次
+"Session debrief"，会把在跑的那个丢掉、再排一个新的进去 —— 每点一次多一份，而且
+排的是 Lap Analysis 共用的那个**单线程**池。原因、测试为什么没抓到、以及一处**没有**
+在这一版里修的同类问题，都写在 `docs/STUDY_CAN_WE_SHOW_IMPROVEMENT.md` §12。
+
+    Apex.exe        9942BD69C546E76C1BDB1D1CD93102D82924B14CAF11857520D471A8B8D118C5
+    racecoach.exe   1EEA2499E25B5238FA89DBA7BC0D57EE729736094E65C898463E895FD1B733C6
+    Apex-Study-2026-08-28.zip
+                    E6E4A1CFBF0EAB67990358889EF57CEFE6EED822CFBE34DF6B79E673F386DC9E
+                    604,743,428 字节
+
+源码状态是 commit `f301231` **加上两个文件**（`src/apex/debrief_view.py`、
+`tests/test_debrief_view.py`），除此之外工作区是干净的 —— 比 08-27 那三次
+（9 个未提交文件）好查得多。
+
+被换下来的存成 `Apex.exe.bak-20260827-1203` / `racecoach.exe.bak-20260827-1203`。
+注意换的时候研究者的 Apex 正开着（PID 6612），所以是**改名**而不是覆盖 —— 已经映射
+进进程的镜像可以改名，不能覆盖；那个进程仍然跑在改名后的那份上，要**重启**才会用到
+新的。
+
+这一版是"读出来确认"而不是"按时间戳相信"的：把新 `Apex.exe` 里的 zlib 流全部解开
+（1688 段），找到两段这次新增的 docstring；同样的检查跑在被替换掉的 exe 上，两段都
+不在。装好的那份 `Apex.exe` 也真的启动过一次，拿到窗口标题 "Apex"，干净退出。
+
+**这一版里没有什么，也要写清楚。** 打完包之后（08-28 中午）工作区里又多了一批改动，
+其中 `racecoach/granite/report.py` 改了**参与者读到的内容**：最快的那一圈原本只拿到
+一句"This was your quickest lap of the session."和零条发现，现在改成拿它自己每个弯
+被开得最好的那次当参照，于是也会有发现、也会被叙述。**那批改动不在上面这两个哈希里。**
+要不要把它发给参与者、以及能不能在已经采了三个包之后中途换，是研究设计上的决定，
+不是打包决定 —— 见 `docs/STUDY_CAN_WE_SHOW_IMPROVEMENT.md` §12.8。
+
+> 08-27 那两个 zip（`A9C5FA5C…`、`BD12E197…`、`03943F7A…`）都作废了。文件名带日期，
+> 但认哈希更稳，或者解开看 `apex-study-build.txt` 第一行写的是哪天。旧的 zip 没有删。
+
+---
+
+## 13. 交叉引用
 
 - 采集协议全文：包里的 `docs\HUMAN_TELEMETRY_CAPTURE.md`（也在仓库 `docs/` 下）
 - 通道清单：`docs\DATA_AVAILABILITY.md`

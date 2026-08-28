@@ -15,7 +15,7 @@ offer is the session's best. That is a fact about choosing a reference rather
 than about the lap itself, so it goes after the name instead of into it.
 """
 
-from f1coach_core import Lap
+from f1coach_core import CompositeReference, Lap
 
 
 def lap_caption(lap: Lap) -> str:
@@ -37,3 +37,15 @@ def reference_caption(lap: Lap, best: Lap | None) -> str:
     """
     caption = lap_caption(lap)
     return f"{caption} (session best)" if lap is best else caption
+
+
+def composite_caption(composite: CompositeReference) -> str:
+    """The per-corner reference in the picker, named for what it is.
+
+    Deliberately not shaped like a lap caption. It has no file name, because it
+    came from several, and no lap time, because it never ran -- and a caption
+    with those two slots filled in would be read as a lap, which is the one
+    thing a driver must not conclude about it.
+    """
+    laps = len(composite.sources)
+    return f"Best at each corner ({laps} lap{'' if laps == 1 else 's'})"

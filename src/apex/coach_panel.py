@@ -37,10 +37,15 @@ from f1coach_core import (
     GraniteCoach,
     Lap,
     SavedCoachingReport,
+    corner_patterns,
+    evidence_for,
     get_provider,
     latest_coaching_report,
+    reference_name,
     run_audited_coaching,
 )
+from f1coach_core.features import BRAKING, COASTING, CORNER_SPEED, THROTTLE
+from f1coach_core.reference import CompositeReference
 from racecoach.granite import host as gh
 from racecoach.granite import model as gm
 from racecoach.granite import server as gs
@@ -58,6 +63,10 @@ FOCUS_CHIPS = {
     "cornering": ("Cornering", theme.BLUE),
     "throttle": ("Throttle", theme.GREEN),
 }
+# Two habits is what a driver can take away and go and try. Every one that
+# qualified is still in the measurement; this is how many are put on screen
+# above the findings before they stop being the thing being read.
+MAX_PATTERNS_SHOWN = 2
 
 
 class _CoachSignals(QObject):
@@ -74,7 +83,9 @@ class _RestoreSignals(QObject):
 class _RestoreTask(QRunnable):
     """Load and revalidate a saved report without blocking the Qt GUI thread."""
 
-    def __init__(self, lap: Lap, reference: Lap | None, provider: str) -> None:
+    def __init__(
+        self, lap: Lap, reference: Lap | CompositeReference | None, provider: str
+    ) -> None:
         super().__init__()
         self.signals = _RestoreSignals()
         self._lap, self._reference, self._provider = lap, reference, provider
@@ -205,6 +216,62 @@ class _CoachTask(QRunnable):
             self.signals.finished.emit(attempt.report)
 
 
+class PatternBanner(QFrame):
+    """One thing the driver does at most corners, not at one of them.
+
+    The findings below are ranked by time lost and cut to three, so a driver who
+    brakes early everywhere gets three cards that each say it about one corner,
+    and the sentence worth most -- that it is how they brake -- is the one
+    nobody says. This is that sentence.
+
+    It is deliberately not a finding and does not look like one. A finding is a
+    claim about a stretch of road with a zoom button that goes there; this is a
+    claim about a habit, and there is nowhere for it to zoom to. Dressing it as
+    a fourth card would make a driver look for the corner it is about.
+
+    Nothing here comes from a model. The count, the share and the median are
+    arithmetic over the same corner facts the cards are cited from.
+    """
+
+    COLOURS = {
+        BRAKING: theme.RED,
+        CORNER_SPEED: theme.BLUE,
+        THROTTLE: theme.GREEN,
+        COASTING: theme.YELLOW,
+    }
+
+    def __init__(self, pattern: dict, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("patternBanner")
+        colour = self.COLOURS.get(pattern.get("category", ""), theme.TEXT_DIM)
+        self.setStyleSheet(
+            "QFrame#patternBanner { background: #1a1a1a;"
+            f" border: 1px solid #393939; border-left: 3px solid {colour};"
+            " border-radius: 6px; }"
+        )
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(3)
+
+        scope = QLabel("ACROSS CORNERS")
+        scope.setStyleSheet(
+            f"color: {colour}; font-size: 10px; font-weight: 600; letter-spacing: 1px;"
+        )
+        layout.addWidget(scope)
+
+        headline = QLabel(pattern["headline"])
+        headline.setWordWrap(True)
+        headline.setStyleSheet("font-weight: 600;")
+        layout.addWidget(headline)
+
+        # The corners are named because the claim is about which ones, and a
+        # driver who recognises three of them will believe the other two.
+        detail = QLabel(f"{pattern['detail']} · {', '.join(pattern['corners'])}")
+        detail.setWordWrap(True)
+        detail.setStyleSheet(f"color: {theme.TEXT_DIM}; font-size: 11px;")
+        layout.addWidget(detail)
+
+
 class FindingCard(QFrame):
     showRequested = Signal(float, float)  # evidence span to zoom/highlight
 
@@ -252,7 +319,7 @@ class FindingCard(QFrame):
             show.setStyleSheet(f"color: {theme.BLUE}; border: none; padding: 0 4px;")
             span = item.span
             show.clicked.connect(lambda _=False, s=span: self.showRequested.emit(s[0], s[1]))
-            comparison = "vs" if reference_label == "reference" else "·"
+            comparison = "·" if reference_label == "review guide" else "vs"
             text = QLabel(
                 f"{item.corner} {item.metric.replace('_', ' ')}:"
                 f" {item.value:g} {item.unit} {comparison} {reference_label}"
@@ -336,7 +403,7 @@ class CoachPanel(QWidget):
         self._restore_pool = QThreadPool(self)
         self._restore_pool.setMaxThreadCount(1)
         self._lap: Lap | None = None
-        self._reference: Lap | None = None
+        self._reference: Lap | CompositeReference | None = None
         self._task: _CoachTask | None = None
         self._prepare: _PrepareTask | None = None
         self._restore_after_prepare = False
@@ -432,7 +499,9 @@ class CoachPanel(QWidget):
     def provider_name(self) -> str:
         return "granite"
 
-    def set_context(self, lap: Lap | None, reference: Lap | None) -> None:
+    def set_context(
+        self, lap: Lap | None, reference: Lap | CompositeReference | None
+    ) -> None:
         """Show this exact context, restoring its last validated Granite run."""
         self._task = None  # an older worker may finish, but cannot mutate this context
         self._restore_task = None
@@ -448,7 +517,8 @@ class CoachPanel(QWidget):
         self._refresh_button()
         if lap is not None and reference is not None:
             self._placeholder.setText(
-                f"Ready — Granite will compare {lap.source.stem} with {reference.source.stem}."
+                f"Ready — Granite will compare {lap.source.stem} "
+                f"with {reference_name(reference)}."
             )
         elif lap is not None:
             self._placeholder.setText(
@@ -479,10 +549,16 @@ class CoachPanel(QWidget):
         """What a run is *for*, so two of the same are never started."""
         if self._lap is None:
             return None
-        return (
-            str(self._lap.source),
-            "" if self._reference is None else str(self._reference.source),
-        )
+        reference = self._reference
+        if reference is None:
+            against = ""
+        elif isinstance(reference, CompositeReference):
+            # Named, not pathed: a composite is not a file. The name carries the
+            # number of laps it was drawn from, so gaining a lap is a new context.
+            against = reference.name
+        else:
+            against = str(reference.source)
+        return (str(self._lap.source), against)
 
     def _restore_finished(
         self,
@@ -831,25 +907,54 @@ class CoachPanel(QWidget):
         self._chip.setText(f"{report.model} · {report.prompt_version}")
         self._chip.show()
         self._clear_cards()
+        patterns = self._patterns()
+        for pattern in patterns[:MAX_PATTERNS_SHOWN]:
+            self._cards.insertWidget(self._cards.count() - 2, PatternBanner(pattern))
         if not report.findings:
-            if self._reference is None:
-                self._placeholder.setText(
-                    "No deterministic technique check crossed its review threshold."
-                )
-            else:
-                self._placeholder.setText("Nothing significant — this lap matches the reference.")
+            self._placeholder.setText(self._nothing_found(bool(patterns)))
         else:
             self._placeholder.setText("")
             for finding in report.findings:
-                card = FindingCard(
-                    finding,
-                    reference_label=(
-                        "reference" if self._reference is not None else "review guide"
-                    ),
-                )
+                card = FindingCard(finding, reference_label=self._reference_label())
                 card.showRequested.connect(self.evidenceRequested.emit)
                 self._cards.insertWidget(self._cards.count() - 2, card)
         self.reportReady.emit(report)
+
+    def _reference_label(self) -> str:
+        """What a citation's second number is, in two words, on every card."""
+        if self._reference is None:
+            return "review guide"
+        if isinstance(self._reference, CompositeReference):
+            return "best"
+        return "reference"
+
+    def _nothing_found(self, has_pattern: bool) -> str:
+        if has_pattern:
+            # A habit spread thinly over every corner costs time without any one
+            # corner crossing the bar. Saying "nothing significant" above a
+            # banner that just named five corners reads as a contradiction.
+            return "No single corner stood out — the pattern above is what there is to say."
+        if self._reference is None:
+            return "No deterministic technique check crossed its review threshold."
+        if isinstance(self._reference, CompositeReference):
+            return "Nothing significant — no corner of this lap was beaten by another."
+        return "Nothing significant — this lap matches the reference."
+
+    def _patterns(self) -> list[dict]:
+        """Habits across corners, measured here rather than asked of the model.
+
+        Recomputed from the lap on screen instead of stored with the report:
+        it is arithmetic over corner facts, so it cannot disagree with the
+        cards, and a report restored from an audit written before any of this
+        existed still gets one.
+        """
+        if self._lap is None:
+            return []
+        try:
+            summary = evidence_for(self._lap, self._reference)
+        except (ValueError, KeyError, OSError):  # laps too short to share a grid
+            return []
+        return corner_patterns(summary.get("corners", []))
 
     def _failed(self, message: str) -> None:
         self._task = None
@@ -887,7 +992,7 @@ class CoachPanel(QWidget):
     def _clear_cards(self) -> None:
         for i in reversed(range(self._cards.count())):
             widget = self._cards.itemAt(i).widget()
-            if isinstance(widget, FindingCard):
+            if isinstance(widget, (FindingCard, PatternBanner)):
                 self._cards.takeAt(i)
                 widget.hide()  # stop painting now — deleteLater waits for the loop
                 widget.deleteLater()

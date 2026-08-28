@@ -68,6 +68,7 @@ from f1coach_core.debrief import (
 )
 from f1coach_core.features import _corner_facts
 from f1coach_core.lap import Lap
+from f1coach_core.reference import composite_debrief, composite_reference
 from f1coach_core.session import Session
 
 # The reporting threshold behind each metric, so a shift is judged in the unit
@@ -163,19 +164,31 @@ def prescriptions(points: list[DebriefPoint]) -> list[Prescription]:
 def run_prescriptions(laps: list[Lap], *, limit: int = 3) -> list[Prescription]:
     """What a whole run's debrief asked of the participant.
 
-    Mirrors ``measure_report``: every lap against the run's fastest, the fastest
-    lap having nothing to lose to itself. Recomputed rather than read back out
-    of an audit file so this works on any run, including runs driven before the
-    audit trail recorded whose they were.
+    Mirrors ``measure_report``, and has to keep mirroring it: this is the list
+    of things somebody was told, so a card on their screen that is missing here
+    is advice the manipulation check will not notice them following. Recomputed
+    rather than read back out of an audit file so this works on any run,
+    including runs driven before the audit trail recorded whose they were.
+
+    The fastest lap used to have nothing to lose to itself and contributed
+    nothing. It is now read against the best each of its own corners was driven
+    (``f1coach_core.reference``), so it carries cards like any other lap and
+    they are counted here in the position the participant met them.
     """
     anchor = fastest(laps)
     if anchor is None:
         return []
+    composite = composite_reference(laps, anchor=anchor)
     points: list[DebriefPoint] = []
     for lap in laps:
-        if lap is anchor:
+        try:
+            if lap is anchor:
+                if composite is not None:
+                    points += composite_debrief(lap, composite, limit=limit)
+            else:
+                points += lap_debrief(lap, anchor, limit=limit)
+        except ValueError:  # laps too short to share a distance grid
             continue
-        points += lap_debrief(lap, anchor, limit=limit)
     return prescriptions(points)
 
 

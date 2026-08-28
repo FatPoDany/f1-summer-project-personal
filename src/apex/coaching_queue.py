@@ -17,6 +17,7 @@ from f1coach_core import (
     latest_coaching_report,
     run_audited_coaching,
 )
+from f1coach_core.reference import CompositeReference, composite_reference
 from racecoach.granite import host as gh
 from racecoach.granite.server import GraniteServer
 
@@ -56,7 +57,7 @@ class _CoachingJob(QRunnable):
     def __init__(
         self,
         lap: Lap,
-        reference: Lap | None,
+        reference: Lap | CompositeReference | None,
         *,
         provider_name: str,
         provider_factory: Callable[[], CoachProvider],
@@ -171,6 +172,14 @@ class GarageCoachingQueue(QObject):
             return
         blocked = self._availability()
         best = session.best_lap
+        # The quickest lap has no quicker lap to be read against, so it used to
+        # be queued as a single-lap technique review: four fixed guides, no
+        # corner speeds, nothing about where its time actually went. It is read
+        # against the best each of its own corners was driven instead. Every
+        # other lap keeps the session best, which is what the Analysis screen
+        # opens them against -- a different reference here would be a second
+        # context, and a second multi-minute run on the participant's CPU.
+        composite = self._composite(session)
         for lap in session.laps:
             source = lap.source.resolve(strict=False)
             # Ready work is complete and active work is already represented in
@@ -182,7 +191,7 @@ class GarageCoachingQueue(QObject):
                 stage, message = blocked
                 self.progress.emit(CoachingProgress(lap.source, stage, message=message))
                 continue
-            reference = None if lap is best else best
+            reference = (composite if lap is best else best)
             task = _CoachingJob(
                 lap,
                 reference,
@@ -197,6 +206,20 @@ class GarageCoachingQueue(QObject):
             # Interactive Analysis work uses the same one-thread pool at normal
             # priority, so it may go next without racing this background batch.
             self._pool.start(task, -1)
+
+    @staticmethod
+    def _composite(session: Session) -> CompositeReference | None:
+        """Per-corner bests for this session, or None if they cannot be built.
+
+        Building one reads every lap, on the thread the Garage is drawn from.
+        A session whose laps cannot be put on a common grid must still queue --
+        losing the coach entirely because the reference could not be improved
+        would be a worse failure than the reference it replaced.
+        """
+        try:
+            return composite_reference(list(session.laps), anchor=session.best_lap)
+        except (ValueError, IndexError, KeyError):
+            return None
 
     def _forward_progress(self, update: CoachingProgress) -> None:
         self._stages[update.lap_source.resolve(strict=False)] = update.stage

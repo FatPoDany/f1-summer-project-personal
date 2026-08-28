@@ -73,7 +73,11 @@ def test_every_lap_is_queued_and_reports_live_progress(qtbot):
     assert len(records) == len(session.laps)
     best = session.best_lap
     references = {record["lap"]: record["reference"] for record in records}
-    assert references[best.source.stem] is None
+    # The quickest lap has nothing quicker to read against, so it is read
+    # against the best each of its own corners was driven rather than being
+    # dropped to a single-lap technique review with no corner speeds in it.
+    composite = GarageCoachingQueue._composite(session)
+    assert references[best.source.stem] == f"best corners of {len(composite.sources)} laps"
     assert all(
         references[lap.source.stem] == best.source.stem
         for lap in session.laps

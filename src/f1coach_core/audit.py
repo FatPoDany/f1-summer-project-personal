@@ -25,9 +25,9 @@ from f1coach_core.coach import (
     CoachProvider,
     coaching_report_from_dict,
 )
-from f1coach_core.features import build_evidence_summary
 from f1coach_core.lap import NO_IDENTITY, Lap, StudyIdentity
 from f1coach_core.llm import build_coach_prompt
+from f1coach_core.reference import CompositeReference, evidence_for, reference_name
 from f1coach_core.workspace import _unique_dest, sessions_root, workspace_root
 
 AUDIT_DIR_NAME = "coaching"
@@ -53,7 +53,7 @@ class AuditedCoachingAttempt:
 
 def run_audited_coaching(
     lap: Lap,
-    reference: Lap | None,
+    reference: Lap | CompositeReference | None,
     *,
     provider_name: str,
     provider_factory: Callable[[], CoachProvider],
@@ -77,7 +77,7 @@ def run_audited_coaching(
     report: CoachingReport | None = None
     error: str | None = None
     try:
-        summary = build_evidence_summary(lap, reference)
+        summary = evidence_for(lap, reference)
         prompt = build_coach_prompt(summary)
         provider = provider_factory()
         report = provider.generate(summary, on_progress=progress)
@@ -92,7 +92,7 @@ def run_audited_coaching(
             provider=provider_name,
             lap_name=lap.source.stem,
             identity=lap.identity,
-            reference_name=reference.source.stem if reference is not None else None,
+            reference_name=reference_name(reference),
             evidence_summary=summary,
             prompt=prompt,
             raw_response=raw_text,
@@ -164,7 +164,7 @@ def write_coaching_audit(
 
 def latest_coaching_report(
     lap: Lap,
-    reference: Lap | None,
+    reference: Lap | CompositeReference | None,
     *,
     provider: str,
 ) -> SavedCoachingReport | None:
@@ -178,8 +178,8 @@ def latest_coaching_report(
     directory = coaching_audit_dir(lap.source)
     if not directory.is_dir():
         return None
-    summary = build_evidence_summary(lap, reference)
-    reference_name = reference.source.stem if reference is not None else None
+    summary = evidence_for(lap, reference)
+    against = reference_name(reference)
     for path in sorted(directory.glob("*.json"), reverse=True):
         try:
             record = json.loads(path.read_text(encoding="utf-8"))
@@ -193,7 +193,7 @@ def latest_coaching_report(
             and record.get("error") is None
             and record.get("provider") == provider
             and record.get("lap") == lap.source.stem
-            and record.get("reference") == reference_name
+            and record.get("reference") == against
             and record.get("evidence_summary") == summary
             and isinstance(report_data, dict)
             and record.get("model") == report_data.get("model")

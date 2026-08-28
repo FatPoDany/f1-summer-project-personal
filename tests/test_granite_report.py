@@ -5,9 +5,11 @@ import json
 import numpy as np
 import pytest
 
+from f1coach_core import load_sample_session
 from f1coach_core.lap import StudyIdentity
 from racecoach.granite import report as gr
 from racecoach.granite.client import GraniteError
+from racecoach.granite.report import measure_report
 
 
 def write_lap(directory, number, *, speed_scale=1.0, brake_shift_m=0.0, driver="A001"):
@@ -210,3 +212,43 @@ def test_an_empty_session_renders_something_honest(tmp_path):
     result = gr.build_report(gr.session_laps(tmp_path))
     assert result.laps == () and result.reference is None
     assert "No readable laps" in gr.render_markdown(result)
+
+
+def test_the_quickest_lap_is_read_against_the_best_of_its_own_corners():
+    """It used to get one sentence of congratulation and no findings at all.
+
+    Nothing quicker existed to compare it with, so the lap a driver most wants
+    explained was the one this report had least to say about.
+    """
+    session = load_sample_session()
+    report = measure_report(list(session.laps))
+    quickest = next(item for item in report.laps if item.lap is session.best_lap)
+
+    assert quickest.points
+    assert all(point.time_lost_s is not None for point in quickest.points)
+    assert "quickest lap of the session" not in quickest.summary
+    assert "corners" in quickest.summary
+
+
+def test_the_quickest_lap_keeps_its_mark_on_the_screen():
+    """It is no longer its own reference by identity, and is still the best one.
+
+    The debrief screen colours this lap purple from ``is_reference``. Marking a
+    different lap would tell a participant their session had a different best.
+    """
+    session = load_sample_session()
+    report = measure_report(list(session.laps))
+
+    marked = [item.lap for item in report.laps if item.is_reference]
+    assert marked == [session.best_lap]
+
+
+def test_a_session_with_one_lap_still_says_the_only_honest_thing():
+    """There is no composite to build, and nothing to say is then correct."""
+    session = load_sample_session()
+    report = measure_report([session.best_lap])
+    only_lap = report.laps[0]
+
+    assert only_lap.points == ()
+    assert only_lap.summary == "This was your quickest lap of the session."
+    assert only_lap.is_reference

@@ -34,6 +34,21 @@ class InlinePool:
         task.run()
 
 
+class QueuedPool:
+    """Takes the work and has not done it yet — the one state ``InlinePool`` hides.
+
+    The real pool has a worker thread and the endpoint it resolves can take
+    minutes to answer, so every re-entry to the screen lands while the debrief
+    is still in flight. That is the window the duplicate runs were queued in.
+    """
+
+    def __init__(self) -> None:
+        self.started: list = []
+
+    def start(self, task, priority: int = 0) -> None:
+        self.started.append(task)
+
+
 class FakeServer:
     """A model endpoint that is already up, or one that refuses to come up."""
 
@@ -206,6 +221,54 @@ def test_returning_to_the_same_session_keeps_the_prose(qtbot, session, monkeypat
 
     assert view.report is first
     assert server.starts == 1
+
+
+def test_asking_again_while_it_is_still_working_queues_nothing(
+    qtbot, session, monkeypatch
+):
+    """Each extra click used to be another whole narration on a one-thread pool.
+
+    A participant clicks Session debrief, sees "Reading your laps…", goes back
+    to the Garage and clicks it again — and again. Every one of those started a
+    fresh run behind the last, and the per-lap coach queued behind all of them.
+    """
+    ready(monkeypatch)
+    view = SessionDebriefView(server=FakeServer())
+    qtbot.addWidget(view)
+    view._pool = pool = QueuedPool()
+    view.set_session(session)
+
+    view.set_session(load_session(session.path))  # back to the Garage, clicked again
+    view.set_session(load_session(session.path))
+
+    assert len(pool.started) == 1
+
+
+def test_a_debrief_that_failed_can_be_asked_for_again(qtbot, session, monkeypatch):
+    """Refusing the retry would leave the screen empty with no way out of it."""
+    ready(monkeypatch)
+    view = SessionDebriefView(server=FakeServer())
+    qtbot.addWidget(view)
+    view._pool = pool = QueuedPool()
+    view.set_session(session)
+    pool.started[0].signals.failed.emit("the laps could not be read")
+
+    view.set_session(load_session(session.path))
+
+    assert len(pool.started) == 2
+
+
+def test_the_cards_do_not_pile_up_as_the_model_speaks(qtbot, session, monkeypatch):
+    """One rendering per narrated lap must leave one column, not a growing one."""
+    ready(monkeypatch)
+    monkeypatch.setattr(gr, "narrate_debrief", _narrator)
+    view = SessionDebriefView(server=FakeServer())
+    qtbot.addWidget(view)
+    open_on(view, session)
+
+    assert len(cards(view)) == len(session.laps)
+    # A stretch left behind by each render would outnumber the cards it spaced.
+    assert view._cards.count() == len(session.laps) + 1
 
 
 def test_the_saved_debrief_is_the_file_the_command_line_writes(

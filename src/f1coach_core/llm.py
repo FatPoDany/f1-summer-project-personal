@@ -38,6 +38,12 @@ Compare the driver's lap with the selected reference lap. The packet contains
 at most the six corner zones with meaningful positive time loss. The `ref`
 field is the exact value measured on that reference lap."""
 
+_COMPOSITE_CONTEXT = """Compare the driver's lap with a per-corner reference. Each corner's `ref`
+values were measured on whichever lap of this session went through that corner
+quickest, so different corners may come from different laps. Every `ref` is a
+real measurement. The reference is not a lap and has no lap time; do not refer
+to one."""
+
 _SINGLE_LAP_CONTEXT = """\
 Analyze this single lap without a reference lap. The packet contains only
 corner zones that crossed a deterministic technique review threshold. In this
@@ -97,17 +103,23 @@ def _prompt_summary(evidence_summary: dict) -> dict:
         "lap": evidence_summary.get("lap"),
         "reference": evidence_summary.get("reference"),
         "total_delta_s": evidence_summary.get("total_delta_s"),
+        # Only present in a composite comparison, where there is no lap-time
+        # delta to give. Dropped rather than sent as null in the other modes.
+        **(
+            {"corner_delta_s": evidence_summary["corner_delta_s"]}
+            if "corner_delta_s" in evidence_summary
+            else {}
+        ),
         "corners": coachable_corners(evidence_summary),
     }
 
 
 def build_coach_prompt(evidence_summary: dict) -> str:
     metrics = {name: _METRIC_HELP[name] for _, name in opportunity_catalog(evidence_summary)}
-    context = (
-        _SINGLE_LAP_CONTEXT
-        if evidence_summary.get("analysis_mode") == "single_lap"
-        else _COMPARISON_CONTEXT
-    )
+    context = {
+        "single_lap": _SINGLE_LAP_CONTEXT,
+        "composite": _COMPOSITE_CONTEXT,
+    }.get(evidence_summary.get("analysis_mode"), _COMPARISON_CONTEXT)
     return _INSTRUCTIONS.format(
         context=context,
         metric_help=json.dumps(metrics, indent=2),

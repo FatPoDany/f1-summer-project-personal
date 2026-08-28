@@ -363,8 +363,9 @@ def test_no_lap_is_called_the_session_best_while_the_driver_is_on_it(qtbot):
 
     texts = [view._ref_combo.itemText(i) for i in range(view._ref_combo.count())]
 
-    # Single-lap analysis, plus every lap but the one being read.
-    assert len(texts) == len(session.laps)
+    # Single-lap analysis and the per-corner best, plus every lap but the one
+    # being read.
+    assert len(texts) == len(session.laps) + 1
     assert not any("session best" in text for text in texts)
 
 

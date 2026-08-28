@@ -11,6 +11,7 @@ from f1coach_core.analysis import sector_times
 from f1coach_core.coach import CoachingReport
 from f1coach_core.features import corner_table, single_lap_corner_table, time_delta
 from f1coach_core.lap import Lap
+from f1coach_core.reference import CompositeReference
 
 BG, PANEL, TEXT, DIM = "#161616", "#1f1f1f", "#f4f4f4", "#c6c6c6"
 BLUE, PURPLE, GREEN, YELLOW = "#78a9ff", "#be95ff", "#42be65", "#f1c21b"
@@ -199,23 +200,39 @@ def _findings_section(coaching: CoachingReport | None, *, has_reference: bool) -
 
 def render_html_report(
     lap: Lap,
-    reference: Lap | None,
+    reference: Lap | CompositeReference | None,
     coaching: CoachingReport | None,
     session_name: str | None = None,
 ) -> str:
-    """One self-contained HTML document for the current analysis."""
+    """One self-contained HTML document for the current analysis.
+
+    A per-corner reference is a real comparison with no single trace to draw:
+    the charts and the sector table need one lap's channels and it has none, so
+    they are rendered as they are for a lap on its own, while the findings are
+    labelled as the comparison they are. Calling those citations review guides
+    because no trace could be drawn would misdescribe every number in them.
+    """
     generated = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
     subtitle = f"session {html.escape(session_name)} · " if session_name else ""
+    composite = reference if isinstance(reference, CompositeReference) else None
+    trace = None if composite is not None else reference
     stats = (
         f"<tr><th></th><th>{html.escape(lap.source.stem)}</th>"
-        + (f"<th>{html.escape(reference.source.stem)}</th>" if reference else "")
+        + (f"<th>{html.escape(trace.source.stem)}</th>" if trace else "")
         + "</tr>"
         f"<tr><td>lap time</td><td>{lap.lap_time:.3f} s</td>"
-        + (f"<td>{reference.lap_time:.3f} s</td>" if reference else "")
+        + (f"<td>{trace.lap_time:.3f} s</td>" if trace else "")
         + "</tr>"
         f"<tr><td>top speed</td><td>{lap.top_speed_kmh:.0f} km/h</td>"
-        + (f"<td>{reference.top_speed_kmh:.0f} km/h</td>" if reference else "")
+        + (f"<td>{trace.top_speed_kmh:.0f} km/h</td>" if trace else "")
         + "</tr>"
+        + (
+            f"<tr><td>compared with</td><td colspan='2'>"
+            f"{html.escape(composite.name)} "
+            f"({html.escape(', '.join(composite.sources))})</td></tr>"
+            if composite is not None
+            else ""
+        )
     )
     parts = [
         "<!doctype html><html><head><meta charset='utf-8'>",
@@ -224,12 +241,12 @@ def render_html_report(
         f"<h1>Apex — lap analysis: {html.escape(lap.source.stem)}</h1>",
         f'<div class="dim">{subtitle}generated {generated}</div>',
         f"<table>{stats}</table>",
-        _speed_chart(lap, reference),
+        _speed_chart(lap, trace),
     ]
-    if reference is not None:
-        parts.append(_delta_chart(lap, reference))
-    parts.append(_sector_table(lap, reference))
-    parts.append(_corner_section(lap, reference))
+    if trace is not None:
+        parts.append(_delta_chart(lap, trace))
+    parts.append(_sector_table(lap, trace))
+    parts.append(_corner_section(lap, trace))
     parts.append(_findings_section(coaching, has_reference=reference is not None))
     parts.append("</body></html>")
     return "".join(parts)

@@ -18,15 +18,20 @@ from PySide6.QtWidgets import (
 )
 
 from apex import theme
-from apex.captions import reference_caption
+from apex.captions import composite_caption, reference_caption
 from apex.coach_panel import CoachPanel
 from apex.widgets.replay_window import ReplayWindow
 from apex.widgets.strip_stack import StripStack
 from apex.widgets.track_replay import TrackMap, span_indices
 from f1coach_core import (
+    CompositeReference,
     DebriefPoint,
     Lap,
     Session,
+    composite_debrief,
+    composite_reference,
+    composite_review_points,
+    composite_summary,
     corner_review_points,
     corner_table,
     debrief_summary,
@@ -36,6 +41,7 @@ from f1coach_core import (
     single_lap_corner_table,
 )
 from f1coach_core.exposure import REPORT_VIEW, ExposureLog
+from f1coach_core.reference import composite_corner_facts, composite_corner_table
 from f1coach_core.workspace import session_recording
 from racecoach.granite.narrate import NarratedPoint
 from racecoach.granite.server import GraniteServer
@@ -171,7 +177,13 @@ class AnalysisView(QWidget):
         # was observed from what to do about it.
         self._advice: dict = {}
         self._advice_complete = False
+        # The lap whose channels are drawn behind this one, and whose footage
+        # the replay plays alongside it. A per-corner reference has neither, so
+        # it never lands here: it is what the comparison is measured against,
+        # which is a different question and kept in _compare.
         self._reference: Lap | None = None
+        self._compare: Lap | CompositeReference | None = None
+        self._composite: CompositeReference | None = None
         self._replay_window: ReplayWindow | None = None
         # How long the coach's findings were the thing in front of the
         # participant. Paused while the review window is up, so this and the
@@ -260,6 +272,9 @@ class AnalysisView(QWidget):
         self._ref_combo.blockSignals(True)
         self._ref_combo.clear()
         self._ref_combo.addItem("Single-lap analysis", None)
+        self._composite = self._build_composite()
+        if self._composite is not None:
+            self._ref_combo.addItem(composite_caption(self._composite), self._composite)
         default = 0
         if self._session is not None and self._lap is not None:
             best = self._session.best_lap
@@ -267,24 +282,46 @@ class AnalysisView(QWidget):
             for lap in others:
                 self._ref_combo.addItem(reference_caption(lap, best), lap)
             # Every non-best lap opens against the session best so its debrief is
-            # immediately useful. The best lap stays a single-lap technique review:
-            # comparing it to a slower lap would create a different context from
-            # the report the Garage has already generated and make Granite run twice.
+            # immediately useful. The best lap has no quicker lap to open against,
+            # so it opens against the best each of its own corners was driven --
+            # which is the context the Garage has already generated for it, so
+            # opening it here does not make Granite run a second time.
             if others and self._lap is not best:
                 default = self._ref_combo.findData(best)
+            elif self._composite is not None:
+                default = self._ref_combo.findData(self._composite)
         self._ref_combo.setCurrentIndex(max(default, 0))
         self._ref_combo.blockSignals(False)
+
+    def _build_composite(self) -> CompositeReference | None:
+        """Per-corner bests for the loaded session, or None if unbuildable."""
+        if self._session is None or len(self._session.laps) < 2:
+            return None
+        try:
+            return composite_reference(
+                list(self._session.laps), anchor=self._session.best_lap
+            )
+        except (ValueError, IndexError, KeyError):
+            return None
 
     def _apply_reference(self) -> None:
         if self._lap is None:
             return
-        reference = self._ref_combo.currentData()
-        self._stack.set_lap(self._lap, self._sector_colors(reference))
-        self._stack.set_reference(reference)
-        self._draw_track(reference)
-        self._panel.set_context(self._lap, reference)
-        self._populate_debrief(reference)
-        self._populate_corners(reference)
+        selected = self._ref_combo.currentData()
+        composite = selected if isinstance(selected, CompositeReference) else None
+        # Everything that draws a trace, colours a sector or plays footage needs
+        # one lap of channels; a per-corner reference has none, so those get None
+        # and the screen looks as it does for a lap read on its own. What is
+        # measured -- the coach, the debrief, the corner table -- gets the real
+        # comparison.
+        trace = None if composite is not None else selected
+        self._compare = selected
+        self._stack.set_lap(self._lap, self._sector_colors(trace))
+        self._stack.set_reference(trace)
+        self._draw_track(trace)
+        self._panel.set_context(self._lap, selected)
+        self._populate_debrief(trace, composite)
+        self._populate_corners(trace, composite)
 
     def _draw_track(self, reference: Lap | None) -> None:
         """The whole lap, with nothing picked out until something is cited."""
@@ -302,7 +339,9 @@ class AnalysisView(QWidget):
 
     # -- driver debrief ----------------------------------------------------
 
-    def _populate_debrief(self, reference: Lap | None) -> None:
+    def _populate_debrief(
+        self, reference: Lap | None, composite: CompositeReference | None = None
+    ) -> None:
         """Deterministic, and independent of whether a model ever runs."""
         if self._replay_window is not None:
             self._replay_window.close()
@@ -312,16 +351,28 @@ class AnalysisView(QWidget):
         self._narration = {}
         self._advice = {}
         self._advice_complete = False
-        if self._lap is None or reference is None or reference is self._lap:
+        if self._lap is None or (reference is None and composite is None):
             self._debrief_heading.hide()
             return
-        try:
-            points = lap_debrief(self._lap, reference)
-        except ValueError:  # laps too short to share a distance grid
-            points = []
-        self._debrief_heading.setText(debrief_summary(self._lap, reference, points))
+        if composite is not None:
+            try:
+                facts = composite_corner_facts(self._lap, composite)
+            except ValueError:  # too short to share a distance grid
+                facts = []
+            points = composite_debrief(self._lap, composite) if facts else []
+            heading = composite_summary(facts)
+        else:
+            if reference is self._lap:
+                self._debrief_heading.hide()
+                return
+            try:
+                points = lap_debrief(self._lap, reference)
+            except ValueError:  # laps too short to share a distance grid
+                points = []
+            heading = debrief_summary(self._lap, reference, points)
+        self._debrief_heading.setText(heading)
         self._debrief_heading.show()
-        self._debrief_points = points
+        self._debrief_points = list(points)
         self._panel.set_debrief(self._debrief_heading.text(), points)
 
     def _apply_narration(self, result: object) -> None:
@@ -496,20 +547,25 @@ class AnalysisView(QWidget):
 
     # -- corner table ------------------------------------------------------
 
-    def _populate_corners(self, reference: Lap | None) -> None:
+    def _populate_corners(
+        self, reference: Lap | None, composite: CompositeReference | None = None
+    ) -> None:
         self._corner_rows = []
         if self._lap is None:
             self._corners.hide()
             return
         try:
-            rows = (
-                corner_table(self._lap, reference)
-                if reference is not None
-                else single_lap_corner_table(self._lap)
-            )
-            # Built here, from the same call, so a row and its reviewable
-            # stretch cannot drift apart: both walk the corners in lap order.
-            self._review_points = corner_review_points(self._lap, reference)
+            # Rows and reviewable stretches are built from the same source, so
+            # they cannot drift apart: both walk the corners in lap order.
+            if composite is not None:
+                rows = composite_corner_table(self._lap, composite)
+                self._review_points = composite_review_points(self._lap, composite)
+            elif reference is not None:
+                rows = corner_table(self._lap, reference)
+                self._review_points = corner_review_points(self._lap, reference)
+            else:
+                rows = single_lap_corner_table(self._lap)
+                self._review_points = corner_review_points(self._lap, None)
         except ValueError:  # laps too short to share a distance grid
             rows = []
             self._review_points = []
@@ -517,7 +573,7 @@ class AnalysisView(QWidget):
             self._corners.hide()
             return
         self._corner_rows = rows
-        comparison = reference is not None
+        comparison = reference is not None or composite is not None
         headers = COMPARISON_HEADERS if comparison else SINGLE_LAP_HEADERS
         # The two modes differ by one column: a delta only exists against a
         # reference. Both now end on Technique review, which is the column worth
@@ -588,7 +644,7 @@ class AnalysisView(QWidget):
         assert self._lap is not None, "no lap on screen to export"
         document = render_html_report(
             self._lap,
-            self._ref_combo.currentData(),
+            self._compare,
             self._panel.report,
             session_name=self._session.name if self._session else None,
         )

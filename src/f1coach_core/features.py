@@ -6,6 +6,10 @@ computed on a common distance grid so the two laps are compared at the same
 points on the road, not the same points in time.
 """
 
+import math
+from statistics import median
+from typing import NamedTuple
+
 import numpy as np
 
 from f1coach_core.lap import Lap
@@ -26,6 +30,27 @@ BRAKE_RELEASE_THRESHOLD = 0.1
 THROTTLE_REAPPLY_THRESHOLD = 0.1
 FULL_THROTTLE_THRESHOLD = 0.95
 EXIT_OFFSET = 200.0  # metres past the apex where exit speed/throttle are read
+
+# How far a measured difference must move before it is worth reporting. Set to
+# sit above ordinary lap-to-lap scatter rather than at a level that means
+# anything on its own; they are reporting thresholds, not targets to drive to.
+#
+# They live here, beside the fact keys they are about, because three readers of
+# the same facts have to agree on them: the debrief a participant reads, the
+# adherence measure held against what they were told, and the cross-corner
+# patterns below. Two copies that drifted apart would have the same drive
+# reported as notable in one place and unremarkable in the next.
+NOTABLE_BRAKE_POINT_M = 10.0
+NOTABLE_MIN_SPEED_KMH = 3.0
+NOTABLE_THROTTLE_POINT_M = 10.0
+NOTABLE_COAST_M = 15.0
+
+# What a difference is about, in the terms a driver would use. Shared with the
+# debrief for the same reason as the thresholds.
+BRAKING = "braking"
+CORNER_SPEED = "corner speed"
+THROTTLE = "throttle"
+COASTING = "coasting"
 
 
 def _increasing(dist: np.ndarray, *channels: np.ndarray) -> tuple[np.ndarray, ...]:
@@ -311,6 +336,26 @@ def _channel_corner_facts(
     }
 
 
+def _zone_indices(grid: np.ndarray, zone: dict) -> tuple[int, int, int, int] | None:
+    """Grid indices for one corner zone: start, end, apex, and the exit sample.
+
+    ``None`` when the zone does not fit inside the grid on offer — a lap that
+    stopped early has no corner there to measure, and clamping the zone would
+    produce facts for a stretch of road it never drove.
+    """
+    d0, d1 = zone["span_m"]
+    i0 = min(int(np.searchsorted(grid, d0)), grid.size - 1)
+    i1 = min(int(np.searchsorted(grid, d1)), grid.size - 1)
+    apex = min(int(np.searchsorted(grid, zone["apex_m"])), grid.size - 1)
+    if i1 <= i0 or not i0 <= apex < i1:
+        return None
+    exit_i = min(
+        int(np.searchsorted(grid, zone["apex_m"] + EXIT_OFFSET)),
+        grid.size - 1,
+    )
+    return i0, i1, apex, exit_i
+
+
 def _corner_facts(lap: Lap, reference: Lap) -> list[dict]:
     """Single fact source shared by coaching evidence and the Analysis table."""
     grid, delta = time_delta(lap, reference)
@@ -318,16 +363,10 @@ def _corner_facts(lap: Lap, reference: Lap) -> list[dict]:
     ref = _on_grid(reference, grid)
     facts = []
     for zone in detect_corners(reference):
-        d0, d1 = zone["span_m"]
-        i0 = min(int(np.searchsorted(grid, d0)), grid.size - 1)
-        i1 = min(int(np.searchsorted(grid, d1)), grid.size - 1)
-        apex = min(int(np.searchsorted(grid, zone["apex_m"])), grid.size - 1)
-        if i1 <= i0 or not i0 <= apex < i1:
+        indices = _zone_indices(grid, zone)
+        if indices is None:
             continue
-        exit_i = min(
-            int(np.searchsorted(grid, zone["apex_m"] + EXIT_OFFSET)),
-            grid.size - 1,
-        )
+        i0, i1, apex, exit_i = indices
         mine_facts = _channel_corner_facts(grid, mine, i0, i1, apex, exit_i)
         ref_facts = _channel_corner_facts(grid, ref, i0, i1, apex, exit_i)
         row = {**zone}
@@ -412,3 +451,148 @@ def _single_lap_corner_facts(lap: Lap) -> list[dict]:
 def single_lap_corner_table(lap: Lap) -> list[dict]:
     """Inspectable absolute corner rows used by the default Analysis mode."""
     return [dict(row) for row in _single_lap_corner_facts(lap)]
+
+
+class _PatternMetric(NamedTuple):
+    """A fact key that can show a habit, and the one direction that costs time."""
+
+    key: str
+    unit: str
+    category: str
+    threshold: float
+    sign: float  # which way the difference has to run to be the costly one
+    word: str  # what that direction is called, to a driver
+    counter: str  # and the other one, which is only ever counted
+    phrase: str
+
+
+# Only the direction that costs time, and only for metrics that have one. The
+# thresholds and directions are the same ones `opportunity_catalog` coaches on,
+# so a habit and a finding can never point opposite ways about the same corner.
+#
+# Peak brake pressure and pedal overlap are absent because neither has a side
+# that is simply worse, so "you do this at most corners" would not be advice.
+PATTERN_METRICS = (
+    _PatternMetric(
+        "brake_point_m", "m", BRAKING, NOTABLE_BRAKE_POINT_M, -1.0, "earlier", "later",
+        "Braking earlier than the reference at most corners",
+    ),
+    _PatternMetric(
+        "min_speed_kmh", "km/h", CORNER_SPEED, NOTABLE_MIN_SPEED_KMH, -1.0, "slower", "faster",
+        "Carrying less speed through the slowest part of most corners",
+    ),
+    _PatternMetric(
+        "throttle_reapply_m", "m", THROTTLE, NOTABLE_THROTTLE_POINT_M, 1.0, "later", "earlier",
+        "Getting back on the throttle later than the reference at most corners",
+    ),
+    _PatternMetric(
+        "coast_distance_m", "m", COASTING, NOTABLE_COAST_M, 1.0, "more", "less",
+        "Coasting more than the reference at most corners",
+    ),
+)
+
+# A habit has to be visible in enough corners to be one. Two corners agreeing is
+# a pair; the same thing at three of four is a way of driving. The share matters
+# as well as the count: three agreeing out of twelve measured is the opposite of
+# a pattern, and reporting only the three would hide the nine.
+MIN_PATTERN_CORNERS = 4
+MIN_PATTERN_AGREEING = 3
+MIN_PATTERN_SHARE = 0.6
+
+
+def corner_patterns(corners: list[dict]) -> list[dict]:
+    """Habits that cost time at most corners, strongest first.
+
+    The per-corner findings are ranked by time lost and cut to three, so a
+    driver who brakes early everywhere gets three cards that each say it about
+    one corner, and nobody says the useful thing: that it is how they brake.
+    This is that sentence, and it is arithmetic rather than inference — a count,
+    a share, and a median over the corners that agree.
+
+    Every corner the metric was measured at counts toward the share, not only
+    the ones a finding was written about. That is the whole point of it: the
+    claim is about the corners nobody mentioned as much as the ones they did.
+
+    A corner whose difference sits inside the reporting threshold is neither
+    for nor against — it is a corner where the habit did not show. It still
+    counts as measured, so a habit at three corners out of twelve cannot be
+    reported as the way somebody drives.
+
+    **One direction only.** The debrief reports a difference whichever way it
+    ran, because it is describing a lap and refuses to claim what caused what.
+    A habit is read as advice: it sits at the top of the panel, above the
+    findings, in the place a driver looks for what to work on. Reported
+    symmetrically it says things like "going faster through the slowest part of
+    most corners" — which, on the two slowest laps a real participant drove, is
+    what it actually said. Praise in the place advice goes is worse than
+    silence, so a difference is only a pattern when it runs the way that costs
+    time. The other direction is still counted, as ``against``, because a
+    corner that ran the other way is evidence the habit is not one.
+
+    Deliberately not a field of the evidence packet. It is a pure function of
+    the corners already in one, so storing it there would add nothing a reader
+    of an audit record could not recompute — and every stored record is matched
+    by exact packet equality, so a new key would invalidate every analysis
+    anybody has already waited for a model to produce.
+    """
+    patterns = []
+    for metric in PATTERN_METRICS:
+        gaps: dict[str, float] = {}
+        for corner in corners:
+            if not isinstance(corner, dict):
+                continue
+            label = corner.get("corner")
+            mine, ref = corner.get(metric.key), corner.get(f"ref_{metric.key}")
+            if not isinstance(label, str) or not label:
+                continue
+            if not _is_number(mine) or not _is_number(ref):
+                continue
+            gaps[label] = float(mine) - float(ref)
+        if len(gaps) < MIN_PATTERN_CORNERS:
+            continue
+        agreeing = {
+            label: gap
+            for label, gap in gaps.items()
+            if gap * metric.sign >= metric.threshold
+        }
+        against = sum(1 for gap in gaps.values() if gap * -metric.sign >= metric.threshold)
+        share = len(agreeing) / len(gaps)
+        if len(agreeing) < MIN_PATTERN_AGREEING or share < MIN_PATTERN_SHARE:
+            continue
+        middle = median(agreeing.values())
+        patterns.append(
+            {
+                "metric": metric.key,
+                "category": metric.category,
+                "unit": metric.unit,
+                "direction": metric.word,
+                "corners": sorted(agreeing),
+                "measured": len(gaps),
+                "agreeing": len(agreeing),
+                # Corners that ran the other way, past the same threshold. Not a
+                # pattern of its own and never reported as one; it is here so a
+                # reader can see how clean the claim above it is.
+                "against": against,
+                "against_direction": metric.counter,
+                "median": round(middle, 1),
+                "headline": metric.phrase,
+                "detail": (
+                    f"{len(agreeing)} of {len(gaps)} corners, "
+                    f"typically {abs(middle):.0f} {metric.unit} {metric.word}"
+                ),
+                # How far past its own threshold the typical corner ran, so
+                # patterns measured in metres and in km/h can be ranked
+                # against each other at all.
+                "strength": round(share * abs(middle) / metric.threshold, 3),
+            }
+        )
+    patterns.sort(key=lambda pattern: pattern["strength"], reverse=True)
+    return patterns
+
+
+def _is_number(value: object) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    )

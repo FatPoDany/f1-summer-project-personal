@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from f1coach_core import load_sample_session
 from f1coach_core.adherence import (
     ADHERENCE_COLUMNS,
     AdherenceError,
@@ -22,13 +23,16 @@ from f1coach_core.adherence import (
     Shift,
     adherence,
     adherence_columns,
+    fastest,
     prescriptions,
     run_prescriptions,
     session_adherence,
 )
 from f1coach_core.debrief import DebriefPoint
 from f1coach_core.lap import Lap
+from f1coach_core.reference import composite_debrief, composite_reference
 from f1coach_core.session import Session
+from racecoach.granite.report import measure_report
 
 
 def _lap(name: str, *, brake_at: float = 120.0, dip_width: float = 90.0) -> Lap:
@@ -612,3 +616,46 @@ def test_the_export_button_carries_adherence_and_not_a_screen_of_empty_columns(
     assert first["advice_prescribed"] == ""  # nobody had told them anything yet
     assert int(second["advice_prescribed"]) >= 1
     assert second["advice_followed_rate"] != ""
+
+
+def test_every_card_a_participant_read_is_a_card_adherence_counted():
+    """``run_prescriptions`` and ``measure_report`` are one screen and its ledger.
+
+    The debrief is what somebody was shown; the prescriptions are what they can
+    be held to having been told. A card on the screen that is missing from the
+    ledger is advice the manipulation check will not notice them following, and
+    it goes missing silently -- the numbers stay plausible, they just describe
+    less of the run than they claim to.
+
+    This drifted once already, the moment the fastest lap stopped being read
+    against nothing: the debrief gave it cards and the ledger still skipped it.
+    Asserting the two agree exactly is stronger than asserting a count, because
+    it survives every later change to what either of them reports.
+    """
+    laps = list(load_sample_session().laps)
+    shown = [
+        point
+        for lap_report in measure_report(laps).laps
+        for point in lap_report.points
+    ]
+
+    assert shown, "the sample session must produce a debrief to compare against"
+    assert run_prescriptions(laps) == prescriptions(shown)
+
+
+def test_the_fastest_lap_contributes_to_the_ledger_at_all():
+    """The specific gap the assertion above generalises.
+
+    Stated separately because an equality that holds by both sides being empty
+    would pass it, and the fastest lap being skipped is precisely how one side
+    goes empty.
+    """
+    laps = list(load_sample_session().laps)
+    anchor = fastest(laps)
+    composite = composite_reference(laps, anchor=anchor)
+
+    from_the_fastest = prescriptions(composite_debrief(anchor, composite))
+
+    assert from_the_fastest
+    counted = {(p.corner, p.metric) for p in run_prescriptions(laps)}
+    assert {(p.corner, p.metric) for p in from_the_fastest} <= counted

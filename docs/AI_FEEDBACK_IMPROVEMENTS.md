@@ -83,8 +83,8 @@ finding["issue"], finding["cause"], finding["action"] = guidance[selected["metri
 这句话是确定性可算的：对 `_corner_facts` 的 `brake_point_m - ref_brake_point_m`
 取符号一致性 + 中位数，跨弯角聚合。数字仍然确定 → 仍然零幻觉；模型只负责措辞。
 
-> 成本：一天。在 `features.py` 加一个 session 级聚合，`coach.py` 的 contract 加一
-> 类 `scope: "session"` 的 finding。
+> 成本：一天。**已完成，见 §8。** 落地时没有走 contract 那条路（理由见 §8.5），
+> 也不是对称报告的（真实数据推翻了，见 §8.4）。
 
 ### C. 没有"上一条建议有没有落地"
 
@@ -146,7 +146,8 @@ throttle 次数 / pedal overlap），完全没有弯速相关的建议。
 
 合成参考圈（每个弯取该 session 最好的一次）能同时救这两件事。
 
-> 成本：一天。
+> 成本：一天。**已完成，见 §8。** 注意落地时**没有合成任何一条圈**——合成会在接缝处
+> 编造遥测。做法是"一条真圈当坐标系 + 每个弯取真实测量值"，理由见 §8.2。
 
 ### G. 语言 —— 清单里 ROI 最高的一条
 
@@ -247,7 +248,7 @@ throttle 次数 / pedal overlap），完全没有弯速相关的建议。
 | 2 | ~~**C** 跨圈依从度~~ **C** 跨 session 依从度 | 不是给参与者的反馈（见 §C 上方的更正），是研究缺的那个 manipulation check |
 | 3 | **G** 中文模板 | 改 15 个字符串，零风险 |
 | 4 | **D** 修掉假 confidence | 它现在是一个没有依据的可靠性断言 |
-| 5 | **B / F** 模式聚合与合成参考圈 | 反馈质量的天花板在这里 |
+| ~~5~~ | ~~**B / F** 模式聚合与合成参考圈~~ **已完成（§8）** | 反馈质量的天花板在这里 |
 | 并行 | TSPulse 离线 spike | 放研究者机器上，不进参与者包 |
 | 暂缓 | Granite Embedding | 等有了自由文本语料再说 |
 
@@ -524,3 +525,293 @@ ValueError: invalid literal for int() with base 10: ''
 
 > **注意 7.5 最后这条的分量**：姊妹文档 §11.8 那个 BOM 缺陷就是**跑冻结的 exe 才
 > 抓到的**，读代码读不出来。"源码测试全绿"和"参与者手上那个包是对的"是两件事。
+
+---
+
+## 8. 进展：B 与 F 已完成（2026-08-28）
+
+两条一起做，因为它们落在同一个地方。**F** 让参考不再是"一条可能只是运气好的圈"，
+**B** 让"你在大部分弯都这样"这句话第一次有人说。在真实数据上，两者最终都命中了
+**同一圈**——B0826 coached 那一段的最快圈——而那正是旧代码最没话可说的一圈。
+
+### 8.1 改了什么
+
+| 文件 | 改动 |
+|---|---|
+| `src/f1coach_core/reference.py`（新，334 行） | `CompositeReference` / `CornerBest`；`composite_reference` / `corner_measurements` / `composite_corner_facts` / `composite_corner_table` / `composite_evidence_summary` / `composite_debrief` / `composite_review_points` / `composite_summary`；`evidence_for` / `reference_name` 两个统一入口 |
+| `src/f1coach_core/features.py` | `NOTABLE_*` 四个阈值与四个类别名搬到这里（`debrief` 改为导入并再导出）；抽出 `_zone_indices`；新增 `corner_patterns` 与 `PATTERN_METRICS` |
+| `src/f1coach_core/debrief.py` | 抽出 `debrief_points` / `review_points`（吃事实、不吃圈），`lap_debrief` / `corner_review_points` 改为转调 |
+| `src/f1coach_core/adherence.py` | `run_prescriptions` 补上最快圈那一份建议，见 8.6 |
+| `src/f1coach_core/audit.py` | 改用 `evidence_for` / `reference_name`，两条路都能记 composite |
+| `src/f1coach_core/llm.py` | 新增 composite 的 prompt 语境；带上 `corner_delta_s` |
+| `src/f1coach_core/report.py` | HTML 导出认识 composite：图表退回单圈，引用照实标为比较 |
+| `src/racecoach/granite/report.py` | 会话级 debrief 的最快圈不再只有一句恭喜 |
+| `src/apex/coaching_queue.py` | 最快圈排的是 composite，不是 `None` |
+| `src/apex/coach_panel.py` | `PatternBanner`；接受 composite 上下文；引用标签 `vs best` |
+| `src/apex/analysis_view.py` | 参考下拉多一项"Best at each corner"，最快圈默认选它；弯角表与 debrief 走 composite |
+| `src/apex/captions.py` | `composite_caption` |
+| `tests/test_reference.py`（新，16 条）、`tests/test_patterns.py`（新，15 条） | 加上 `coach_panel` 6 条、`granite_report` 3 条、`adherence` 2 条，共 **42 条新测试** |
+
+### 8.2 F：为什么不是"合成一条圈"
+
+§2.F 的原话是"合成参考圈"。**没有合成任何一条圈**，而且这是刻意的。
+
+把几条圈按弯角拼成一条新的 dataframe，就得在接缝处编造速度、时间和踏板值——一份
+看起来像遥测、但没有任何一次真实驾驶产生过的数据。这个项目其它地方在这件事上的
+立场很硬：`analysis/metrics.py` 开头写着 *"if a number is not in this document,
+the coach may not say it"*，`study.py:_blank` 宁可留空也不填 0。合成圈会把这条线
+从后门绕过去。
+
+所以真正做的是：**保留一条真圈当坐标系（anchor），每个弯的目标值取该弯开得最快的
+那一圈的实测值。** 每一个 `ref_*` 都是某条圈真的记录过的数，而且每一行都带
+`ref_source` 说明是哪一条。少了接缝，也少了一整类"这个数从哪来的"的问题。
+
+三条纪律（和 `adherence` 是同一套，理由也一样）：
+
+1. **弯角只在一条圈上检测。** `detect_corners` 按检测顺序编号，`T4` 的意思只是
+   "这条圈上的第四个 dip"。在两条圈上各检测一次再按名字配对，多一个 dip 就会让后面
+   每个名字错位。所以所有圈都在 anchor 的弯角网格上量。
+2. **"这个弯谁最快"按分区用时判，不按圈速判。** 圈速快不代表每个弯都快，这正是
+   §2.F 抱怨的那件事。
+3. **它按"真的贡献了弯角的圈"计数。** 界面上叫 `Best at each corner (3 laps)`，
+   审计里叫 `best corners of 3 laps`——即使那一段有 5 圈。一条处处更慢的圈既不改变
+   任何目标值也不改变 evidence packet，所以它也不该改变名字：名字一动，
+   `latest_coaching_report` 就会为一个根本没变的比较错过已经存在的报告，把参与者
+   送回去等模型算一遍磁盘上已经有的答案。
+4. **它没有圈速，所以它不报圈速。** `lap_time_s` 和 `total_delta_s` 都是 `None`；
+   报的是 `corner_delta_s`——被测弯角里可拿回的时间，这是唯一被真的量到的东西。
+   把几段最好的拼起来当成一个圈速写在屏幕上，参与者拿自己看得见的成绩一对就知道
+   对不上，然后整块屏幕的可信度一起没了。
+
+### 8.3 F：最快圈那一圈现在有话说了
+
+§2.F 说"后果最重的是单圈模式"。在自带样例上，前后是这样：
+
+```
+改前（single_lap）：T8 coast_distance 105 m vs 20 m（一个写死的 guide）
+                    T9 brake_applications 3 次 vs 1 次
+                    T1 brake_applications 2 次 vs 1 次
+
+改后（composite）： T5 exit_speed  161.2 km/h vs 211.3 km/h  ← lap01 真开出来过
+                    T6 min_speed    20.4 km/h vs  33.8 km/h  ← lap01
+                    T8 full_throttle 1910 m   vs 1845 m      ← lap05
+                    整段：2.87 s，分布在 10 个弯里的 5 个
+```
+
+左边那三条的参照是常量；右边这三条的参照是这位参与者自己在同一场里开出来过的。
+后者可达性是被证明过的——**有人真的那样开过那个弯**，而且就是他自己。
+
+改动只落在**最快圈**上：其余每一圈仍然对着 session best。理由是这样两边不会打架
+——Garage 后台排的队和 Analysis 界面打开时用的上下文必须一致，否则 Granite 会在
+参与者的 CPU 上为同一圈跑第二次（几分钟）。最快圈原本的上下文是"没有上下文"，换掉
+它不会让任何已经算好的分析失效。
+
+界面上：参考下拉多了一项 **Best at each corner (N laps)**，最快圈默认选它。
+选中时曲线区不叠加任何参考——composite 没有一条可画的轨迹，而这一圈原本也就没有
+叠加——但**弯角表、debrief 文字、AI 面板**三样都换成了真比较。
+会话级 debrief（§5 那个界面，也就是研究的干预本身）同样：最快圈从"这是你最快的一圈"
+变成了三条可看的地方。它在屏幕上仍然是紫色标题，`is_reference` 现在问的是"这一圈
+是不是整段的基准"而不是"它是不是它自己的参考"。
+
+### 8.4 B：真实数据当场推翻了对称报告
+
+第一版 `corner_patterns` 是**对称**的：差值往哪边跑都算一种 pattern，措辞跟着变。
+理由当时看着很对——`debrief.py` 就是这么做的，它明确拒绝断言因果，只报"量到了什么"。
+
+**拿 `win_collect_data` 里 15 圈真实数据一跑就塌了：**
+
+```
+B0826 coached lap01  ->  Going FASTER through the slowest part of most corners  [5 of 7]
+B0826 coached lap02  ->  Going FASTER through the slowest part of most corners  [5 of 7]
+```
+
+这两圈是这位参与者**最慢的两圈**。而 banner 的位置在 finding 卡片**上方**——那是一个
+人找"我该改什么"的地方。放在那里的一句表扬，比什么都不说更糟。
+
+问题出在照搬：`debrief.py` 是在**描述一圈**，可以两边都报；banner 是在**给建议**，
+位置决定了它会被这样读。§2.B 自己的例子其实早就写明了方向——"一个每个弯都**刹早**
+的人"。刹早是毛病，刹晚不是。我做的时候把方向丢了。
+
+改成**只报会损失时间的那个方向**，四个指标的方向与阈值直接取 `opportunity_catalog`
+教练用的那一套，这样 pattern 和 finding 不可能对同一个弯指相反的方向。反方向的弯
+仍然数，记成 `against`——它不是另一个 pattern，它是"这个说法有多干净"的证据。
+
+改完，同样 15 圈真实数据里只剩 2 条 pattern：
+
+```
+0823 baseline lap01   Braking earlier than the reference at most corners
+                      [4 of 6 corners, typically 25 m earlier]
+B0826 coached lap03   Carrying less speed through the slowest part of most corners
+                      [5 of 7 corners, typically 24 km/h slower]
+```
+
+第一条**逐字就是 §2.B 举的那个例子**。第二条落在那一段的最快圈上——也就是 §8.3 里
+改前"只有四个 technique check"的那一圈：B 和 F 在同一圈上会合。
+
+15 圈出 2 条，这个稀疏程度是想要的：**banner 出现才意味着什么。** 门槛是
+`measured ≥ 4`、`agreeing ≥ 3`、`share ≥ 0.6`，三个数都写成了常量、有测试盯着，
+将来要改可以直接对着数据吵。
+
+### 8.5 B：为什么不是 contract 里的 `scope: "session"` finding
+
+§2.B 的成本行提的是"`coach.py` 的 contract 加一类 `scope: "session"` 的 finding"。
+**没有这么做**，理由是走那条路会把这句话的内容切掉一半：
+
+- `_require_measurement_free_prose` 不许 prose 里出现任何数字（连全角数字都算），
+  所以 **"6 个弯里的 4 个"这个数根本没地方放**——而那个数就是这句话的全部分量。
+- citation 只能引 `opportunity_catalog` 里的 `(弯, 指标)`，而那个目录只包含
+  `coachable_corners` 挑出的前 6 个弯。pattern 的意义恰恰在于它覆盖了**没被出卡的
+  那些弯**，限制在前 6 个就把它变成了三张卡的第四份拷贝。
+- finding 是"某一段路上的一个断言"，配一个跳过去的 `◈ show` 按钮。pattern 没有可跳的
+  地方。做成第四张卡会让人去找"它说的是哪个弯"。
+
+所以 pattern 走的是自己的通道：确定性算出来，`PatternBanner` 单独渲染（左侧一道
+类别色边、`ACROSS CORNERS` 标签、无 focus chip 无 confidence chip），LLM 的 schema
+和校验器一行未动。审计也没丢——pattern 是 `evidence_summary["corners"]` 的纯函数，
+审计记录里那份 corners 原样保存着，任何时候都能重算出完全一样的结果。
+
+**并且刻意没有把它写进 evidence packet。** `latest_coaching_report` 是拿整个 packet
+做全等匹配的：多一个 key，所有人已经等模型跑出来的分析全部作废、下次打开逐圈重跑。
+一个能重算的派生量不值这个代价。（对照 §7.3 的教训：这次是同一类"两条路必须一致"的
+问题，但结论相反——不是漏传参数，而是根本不该存。）
+
+### 8.6 一个必须跟着改的地方：依从度的账本
+
+`adherence.run_prescriptions` 的 docstring 写着 *"Mirrors `measure_report`: every lap
+against the run's fastest, **the fastest lap having nothing to lose to itself**"*，
+代码里就是 `if lap is anchor: continue`。
+
+**F 把这句话变成假的了。** 最快圈现在有卡片了，参与者会读到，而账本还在跳过它——
+于是"他被告知了什么"少记了一部分，manipulation check 会**悄悄少报**。数字看着照样
+合理，只是描述的范围比它声称的小。这正是 §7.3 那个 bug 的形状第四次出现。
+
+已修，并且加了一条比数数更强的守卫：
+
+```python
+assert run_prescriptions(laps) == prescriptions(shown)   # shown 来自 measure_report
+```
+
+断言两边**完全相等**，而不是断言某个数量。这样它对将来任何一边报什么的改动都还成立，
+而它正好会在"某一圈被结构性地漏掉"时红。红过再绿：把 `if lap is anchor: continue`
+放回去，两条测试立刻失败。
+
+### 8.7 在真实数据上的结果，和一个必须说清楚的坑
+
+同一批 handover，同一套隔离 workspace（`~\Apex` 一个字节没碰）：
+
+| driver | phase | prescribed | measured | followed | rate | shift_sd |
+|---|---|---|---|---|---|---|
+| B0826 | coached | 4 → **7** | 4 → **7** | 1 → **3** | 0.25 → **0.429** | 0.67 → **0.90** |
+| C0826 | control | 4 → **6** | 4 → **6** | 0 → **0** | 0.0 → **0.0** | −0.65 → **−0.46** |
+
+可测的建议条数涨了 50–75%，全部来自"每段的最快圈现在也出卡片了"。对一个 n 很小的
+研究，这是直接的收益：同样的两个人，依从度是在更多条建议上估出来的。
+
+> **坑：这两行的新旧数字不可混用。**
+> B0826 和 C0826 是 2026-08-26 采的，跑的是**旧版本**——他们看到的最快圈那张卡上
+> 写着"This was your quickest lap of the session."，没有任何建议。而
+> `run_prescriptions` 是**重算**的（它必须能处理没有审计记录的旧数据），所以在新版本上
+> 重算，会把他们从没看见过的建议算进"他被告知的"里面。
+>
+> 也就是说：**上面的"改后"三列对这两位先导参与者是高估的**，而对正式研究里用新包采的
+> 数据是正确的。规则很简单——**一批数据用哪个版本采的，就一直用哪个版本算依从度，
+> 不要跨版本重算，也不要把跨版本的两批放进同一张表。**（先导数据的原始数字保留在
+> §6.5，不要覆盖。）
+
+### 8.8 验证
+
+- **782 passed / 17 skipped**（接手时 740 / 17，加了 42 条），`ruff check src tests` 干净。
+  分段读：740 → 加 `test_patterns` 15 → 加 `test_reference` 16 →
+  面板 6 + 会话报告 3 + 依从度 2 = 782。另有 3 条既有测试改了断言，全部是 F 故意改掉的
+  行为（队列给最快圈的参考、下拉项数、`test_window` 里那条改名为
+  `test_session_best_opens_against_its_own_corners_not_against_nothing`）。
+- **红过再绿**，四处分别验过：把 pattern 改回对称报告 → 方向测试与散布测试红；
+  把会话 debrief 的 composite 关掉 → 最快圈测试红；把 banner 从 `_clear_cards` 里
+  摘掉 → 堆积测试红；把 `if lap is anchor: continue` 放回 → 依从度两条守卫红。
+- **真实数据跑通**：`racecoach study-summary` 在 15 圈真实 handover 上输出上表；
+  pattern 规则在同样 15 圈上从 5 条（其中 4 条是表扬）收到 2 条（都可执行）。
+- **离屏渲染检查过版式**：banner 在三张卡之上，左侧红色类别边，`ACROSS CORNERS`
+  小标签、加粗结论、暗色明细行；没有 focus chip 也没有 confidence chip，一眼看得出
+  它和下面三张不是同一种东西。（offscreen 平台没有字体，截图上是方块，与 §5.4 同因。）
+- **既有审计记录仍然有效**：comparison 模式的 evidence packet 一个 key 都没变
+  （见 §8.5），所以已经算好的逐圈分析不会因为这次改动重跑。唯一会重跑的是每段的
+  最快圈——它的参考从 `null` 变成了 `best corners of N laps`，那正是这次要改的事。
+
+### 8.9 还没做的
+
+- **pattern 没有进会话级 debrief。** 那是研究真正的干预界面，价值最高的落点。
+  一开始没做是因为 `apex/debrief_view.py` 被另一个会话持有；那个理由在 08-28 下午
+  已经不成立了（文件放开了），**但仍然不做**，换成一个更好的理由：往那块屏幕上加
+  内容就是在改自变量，而现在正是不该改它的时候，见 §8.10。等这批数据收完再说。
+  （`render_markdown` 那条路本可以单独加，但那会让 markdown 和界面说的不一样，
+  比两边都不说更糟。）
+- **非最快圈仍然对着 session best**，不是 composite。理由在 §8.3：换掉会让曲线区
+  失去参考叠加，并让所有已算好的分析全部重跑。代价是 §2.F 抱怨的"最快圈可能只是
+  运气"对其余圈只解决了一半。
+- **单圈模式没有 pattern。** 单圈模式的 `ref_*` 是写死的 guide，"你在大部分弯都比
+  guide 差"是在拿人跟一个常量比，不是跟驾驶比。F 之后这个模式本来也少见了——
+  最快圈不再落到它里面。
+- **`MAX_PATTERNS_SHOWN = 2`** 是界面上的取舍，不是测量上的：`corner_patterns` 返回
+  全部合格的 pattern，研究侧拿得到完整数据。
+
+### 8.10 一件要你决定的事：这批改动动了参与者读到的东西
+
+姊妹文档 [STUDY_CAN_WE_SHOW_IMPROVEMENT.md](STUDY_CAN_WE_SHOW_IMPROVEMENT.md)
+**§12.8** 已经把这件事写成了三个选项和一条建议（建议是"先不发"），不重复。这一节
+只补一件那边没覆盖到的事：**范围比那边写的宽。**
+
+§12.8 说的是 `racecoach/granite/report.py` 改了 session debrief 的内容。那是真的，
+但同一批改动还动了 **Lap Analysis 那块屏幕**，而那块屏幕参与者一样看得到——它是从
+Garage 点开一圈进去的（`main_window.py:100`），而且它右侧面板的阅读时长就是 §2.H
+记的那个剂量（`analysis_view.py:453` 的 `REPORT_VIEW`）。
+
+完整清单：
+
+| 参与者看得到的地方 | 改前 | 改后 |
+|---|---|---|
+| Session debrief 屏（干预本身） | 最快圈一句恭喜、零条发现 | 最快圈有发现，也会被模型叙述 |
+| Lap Analysis 的 AI 面板 | 最快圈 4 条写死的 technique guide | 最快圈引用自己其它圈的实测值 |
+| Lap Analysis 的 AI 面板 | — | **新增 pattern banner**：一句从来没有参与者见过的话 |
+| Lap Analysis 的弯角表 / debrief 抬头 | 最快圈是单圈表，没有抬头 | 多一列 Δ，多一行抬头 |
+| Garage 的 `ANALYSED · n findings` | 最快圈的 n 来自单圈技术检查 | 来自 composite |
+
+**所以除了自变量不一致，还有一层：剂量的单位也变了。** `report_seconds`
+（`exposure.py:phase_exposure`）量的就是这块面板在参与者眼前多久。一块多了 banner、
+把四条写死的 guide 换成三条真发现的面板，本来就该被读得更久。同一个数字在改前改后
+不是同一件事的度量，跨版本放进同一列会把"内容变多了"读成"参与者更投入"。
+
+> 更正：这一段先前写的是 `advice_seconds`，那是错的。`advice_seconds` 加的是
+> **corner view**（review 窗口里屏幕上有 AI 建议的那些秒），不是这块面板。会被这次
+> 改动抬高的是 `report_seconds`。结论不变，列名换一个。
+
+**而且事后分不出来。** 一条 `ReviewView` 只有十个字段
+（`id / at / driver / phase / kind / lap / corner / seconds / advice / findings`），
+**没有一个记应用是哪一版**——`SCHEMA_VERSION = "apex-exposure-v1"` 版本化的是日志
+文件格式，不是构建。而 `findings` 数的是 finding，**banner 不计**
+（`analysis_view.py:452` 的 `count = len(findings)`）。所以"三条发现 + 一条 banner"
+和"三条发现"在日志里是**完全相同的一行**。真要中途发，最低前提是先把构建标识写进
+曝光记录；没有它，跨版本的 `report_seconds` 不是"要小心",是**不能用**。
+
+**还有一个 banner 自己带出来的缺陷**：`advice=count > 0`，而 `count` 同样只数 finding。
+`coach_panel._nothing_found()` 有一条刻意的分支——没有任何一个弯单独达标、但 pattern
+成立时，屏幕上是"一条 banner + 一句『没有哪个弯特别突出，上面那条就是要说的』"。
+那一刻参与者**正在读一句教练建议**，而这条曝光记录写的是 `advice=False`、`findings=0`。
+这是新加的 banner 造成的，不是既有缺陷。真要发，这个也得一起修——让 banner 计入
+`advice`，并且单独记一个 banner 数，否则连"他看的时候屏幕上有没有建议"都记错了。
+
+它的影响范围要说准，免得两边都误判：**原始日志错，逐条导出错，汇总列不受影响。**
+`study-exposure` 是逐条写的（`study.py:459` 的 `row["advice"] = 1 if view.advice else 0`），
+所以错值会进到一个真的产物里；而汇总里唯一读 `advice` 的是 `advice_seconds`，它只看
+corner view（`exposure.py:407`），banner 是 report view，进不去。也就是说：既不能当成
+"只是内部状态"不管，也不必去汇总表里找一列被它污染的东西——那一列不存在。
+
+我在 §8.7 提醒过依从度不要跨版本重算——那是**测量侧**。上面这些是**干预侧**，比那条重：
+测量可以在分析机上重算，已经发生的干预不能。§8.7 那段没有说到这一点，是我漏了。
+
+现状，说清楚免得后面有人搞错：
+
+- **参与者包里没有这批改动。** `repos\Apex` 和便携 zip 停在 08-28 上午那一版
+  （`f301231` + 另一个会话修的重复排队缺陷），构建戳上写明了不含这些。
+- **我不会自己重打包换上。** 打好的包就是这项研究的仪器，悄悄换掉它正是笔记里已经
+  记过一次的那类失败。要不要发是你的决定。
+- 代码全在仓库里，随时可发。三条路和推荐见姊妹文档 §12.8。

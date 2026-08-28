@@ -14,9 +14,15 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from f1coach_core.debrief import DebriefPoint, debrief_summary, lap_debrief
+from f1coach_core.debrief import DebriefPoint, debrief_points, debrief_summary, lap_debrief
 from f1coach_core.lap import Lap
 from f1coach_core.loader import TelemetrySchemaError, load_telemetry_csv
+from f1coach_core.reference import (
+    CompositeReference,
+    composite_corner_facts,
+    composite_reference,
+    composite_summary,
+)
 from racecoach.granite.narrate import NarratedDebrief, NarrationError, narrate_debrief
 
 
@@ -25,14 +31,27 @@ class LapReport:
     """One lap measured against the session's best, narrated where possible."""
 
     lap: Lap
-    reference: Lap
+    reference: Lap | CompositeReference
     points: tuple[DebriefPoint, ...]
     summary: str
     narrated: NarratedDebrief | None = None
 
     @property
     def is_reference(self) -> bool:
-        return self.lap is self.reference
+        """Whether this is the lap the rest of the session is measured from.
+
+        The quickest lap is now read against the best each corner was driven,
+        so it is no longer its own reference by identity. It is still the lap
+        everything else is measured from, and that is what this flag is asked
+        for: the screen marks it, and marking a different lap would say the
+        session had a different best one.
+        """
+        anchor = (
+            self.reference.anchor
+            if isinstance(self.reference, CompositeReference)
+            else self.reference
+        )
+        return self.lap is anchor
 
     @property
     def spoken_count(self) -> int:
@@ -81,21 +100,29 @@ def measure_report(laps: list[Lap], *, limit: int = 3) -> SessionReport:
     reference = fastest(laps)
     if reference is None:
         return SessionReport(laps=(), reference=None)
+    # The quickest lap has nothing quicker to be read against, so it used to be
+    # handed one sentence of congratulation and no findings at all -- the lap a
+    # driver most wants explained, and the one this report had least to say
+    # about. It is read against the best each of its corners was driven
+    # instead, which is a target it demonstrably can reach because it or one of
+    # its neighbours already did.
+    composite = composite_reference(laps, anchor=reference)
     return SessionReport(
-        laps=tuple(_measure(lap, reference, limit=limit) for lap in laps),
+        laps=tuple(_measure(lap, reference, limit=limit, composite=composite) for lap in laps),
         reference=reference,
     )
 
 
-def _measure(lap: Lap, reference: Lap, *, limit: int) -> LapReport:
-    """One lap's measured debrief. The reference has nothing to lose to itself."""
+def _measure(
+    lap: Lap,
+    reference: Lap,
+    *,
+    limit: int,
+    composite: CompositeReference | None = None,
+) -> LapReport:
+    """One lap's measured debrief, against the session best or its own corners."""
     if lap is reference:
-        return LapReport(
-            lap=lap,
-            reference=reference,
-            points=(),
-            summary="This was your quickest lap of the session.",
-        )
+        return _measure_fastest(lap, reference, limit=limit, composite=composite)
     try:
         points = lap_debrief(lap, reference, limit=limit)
     except ValueError:  # laps too short to share a distance grid
@@ -105,6 +132,43 @@ def _measure(lap: Lap, reference: Lap, *, limit: int) -> LapReport:
         reference=reference,
         points=tuple(points),
         summary=debrief_summary(lap, reference, points),
+    )
+
+
+def _measure_fastest(
+    lap: Lap,
+    reference: Lap,
+    *,
+    limit: int,
+    composite: CompositeReference | None,
+) -> LapReport:
+    """The quickest lap, against the best each of its corners was driven.
+
+    Falls back to the sentence it used to get when there is nothing to build a
+    composite from — a single-lap session, or laps too short to share a grid.
+    Saying nothing is right in that case; it was only ever wrong because there
+    was something to say and nobody looked.
+    """
+    alone = LapReport(
+        lap=lap,
+        reference=reference,
+        points=(),
+        summary="This was your quickest lap of the session.",
+    )
+    if composite is None:
+        return alone
+    try:
+        facts = composite_corner_facts(lap, composite)
+    except ValueError:  # too short to share a distance grid with the anchor
+        return alone
+    points = debrief_points(facts, limit=limit)
+    if not points:
+        return alone
+    return LapReport(
+        lap=lap,
+        reference=composite,
+        points=tuple(points),
+        summary=composite_summary(facts),
     )
 
 

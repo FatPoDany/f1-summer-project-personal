@@ -13,16 +13,42 @@ show that. A model may later narrate these points, but they stand without one.
 from dataclasses import dataclass
 from typing import NamedTuple
 
-from f1coach_core.features import _corner_facts
+from f1coach_core.features import (
+    BRAKING,
+    COASTING,
+    CORNER_SPEED,
+    NOTABLE_BRAKE_POINT_M,
+    NOTABLE_COAST_M,
+    NOTABLE_MIN_SPEED_KMH,
+    NOTABLE_THROTTLE_POINT_M,
+    THROTTLE,
+    _corner_facts,
+)
 from f1coach_core.lap import Lap
 
-# How far a measured difference must move before it is worth showing. Set to sit
-# above ordinary lap-to-lap scatter rather than at a level that means anything
-# on its own; they are reporting thresholds, not targets to drive to.
-NOTABLE_BRAKE_POINT_M = 10.0
-NOTABLE_MIN_SPEED_KMH = 3.0
-NOTABLE_THROTTLE_POINT_M = 10.0
-NOTABLE_COAST_M = 15.0
+# The reporting thresholds and the category names moved next to the fact keys
+# they are about (features), because the cross-corner patterns measured there
+# have to call the same difference notable as the debrief a participant reads
+# and as the adherence held against it. They are re-exported here: this is
+# still where a reader looks for what "notable" means to a driver.
+__all__ = [
+    "BRAKING",
+    "CATEGORY_FOCUS",
+    "COASTING",
+    "CORNER_SPEED",
+    "MIN_TIME_LOST_S",
+    "NOTABLE_BRAKE_POINT_M",
+    "NOTABLE_COAST_M",
+    "NOTABLE_MIN_SPEED_KMH",
+    "NOTABLE_THROTTLE_POINT_M",
+    "THROTTLE",
+    "DebriefPoint",
+    "corner_review_points",
+    "debrief_points",
+    "debrief_summary",
+    "lap_debrief",
+    "review_points",
+]
 
 # Time loss below this is not worth a participant's attention.
 MIN_TIME_LOST_S = 0.05
@@ -58,11 +84,6 @@ class DebriefPoint:
             return self.corner
         return f"{self.corner} · {self.time_lost_s:.2f} s"
 
-
-BRAKING = "braking"
-CORNER_SPEED = "corner speed"
-THROTTLE = "throttle"
-COASTING = "coasting"
 
 # What each category is about, in the terms a driver would use. Handed to the
 # model so its advice is about braking or about throttle, rather than about a
@@ -183,8 +204,26 @@ def lap_debrief(
     Only losses are reported: a participant reviewing their own drive wants the
     places to look at, and a corner they were quicker through is not one.
     """
+    return debrief_points(
+        _corner_facts(lap, reference), limit=limit, min_time_lost_s=min_time_lost_s
+    )
+
+
+def debrief_points(
+    facts: list[dict],
+    *,
+    limit: int = 3,
+    min_time_lost_s: float = MIN_TIME_LOST_S,
+) -> list[DebriefPoint]:
+    """The same debrief, from corner facts somebody else measured.
+
+    Split out so a comparison against per-corner bests reads exactly as a
+    comparison against one lap does. The rows have the same shape either way,
+    and a participant should not be able to tell which produced their debrief
+    from how it is worded.
+    """
     points = []
-    for fact in _corner_facts(lap, reference):
+    for fact in facts:
         lost = fact.get("time_lost_s")
         if lost is None or lost < min_time_lost_s:
             continue
@@ -210,11 +249,21 @@ def corner_review_points(lap: Lap, reference: Lap | None = None) -> list[Debrief
     and category are left empty rather than compared against the lap itself.
     """
     against = lap if reference is None else reference
+    return review_points(_corner_facts(lap, against), compared=reference is not None)
+
+
+def review_points(facts: list[dict], *, compared: bool) -> list[DebriefPoint]:
+    """Every corner as a reviewable stretch, from facts somebody else measured.
+
+    ``compared`` says whether the ``ref_`` values came from other driving or
+    from the lap itself; without it a lap compared with itself would be handed
+    back a set of differences of exactly zero, dressed as findings.
+    """
     points = []
-    for fact in _corner_facts(lap, against):
+    for fact in facts:
         best = None
         lost = None
-        if reference is not None:
+        if compared:
             lost = fact.get("time_lost_s")
             best = max(_candidates(fact), key=lambda item: item.score, default=None)
         points.append(_point(fact, best, lost))

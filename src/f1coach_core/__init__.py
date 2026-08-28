@@ -33,6 +33,7 @@ from f1coach_core.debrief import (
 )
 from f1coach_core.features import (
     build_evidence_summary,
+    corner_patterns,
     corner_table,
     detect_corners,
     single_lap_corner_table,
@@ -42,6 +43,16 @@ from f1coach_core.granite_coach import GraniteCoach, GraniteCoachError
 from f1coach_core.lap import Lap, StudyIdentity
 from f1coach_core.llm import build_coach_prompt
 from f1coach_core.loader import TelemetrySchemaError, load_telemetry_csv
+from f1coach_core.reference import (
+    CompositeReference,
+    composite_corner_facts,
+    composite_debrief,
+    composite_reference,
+    composite_review_points,
+    composite_summary,
+    evidence_for,
+    reference_name,
+)
 from f1coach_core.report import render_html_report
 from f1coach_core.sample import load_sample_lap, load_sample_session
 from f1coach_core.session import Session, load_session
@@ -63,6 +74,7 @@ __all__ = [
     "SAMPLE_SESSION_NAME",
     "AuditedCoachingAttempt",
     "SavedCoachingReport",
+    "CompositeReference",
     "CoachProvider",
     "CoachingReport",
     "CoachingSchemaError",
@@ -73,6 +85,12 @@ __all__ = [
     "DebriefPoint",
     "Lap",
     "StudyIdentity",
+    "composite_corner_facts",
+    "composite_debrief",
+    "composite_reference",
+    "composite_review_points",
+    "composite_summary",
+    "corner_patterns",
     "corner_review_points",
     "debrief_summary",
     "lap_debrief",
@@ -89,6 +107,7 @@ __all__ = [
     "detect_corners",
     "delete_session",
     "ensure_sample_session",
+    "evidence_for",
     "get_provider",
     "import_lap",
     "import_telemetry",
@@ -101,6 +120,7 @@ __all__ = [
     "load_sample_session",
     "load_session",
     "load_telemetry_csv",
+    "reference_name",
     "render_html_report",
     "run_audited_coaching",
     "sector_spans",

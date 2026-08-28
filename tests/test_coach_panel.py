@@ -9,15 +9,17 @@ import pytest
 from PySide6.QtCore import QRunnable, QThreadPool
 
 from apex import theme
-from apex.coach_panel import CoachPanel, FindingCard, _CoachTask
+from apex.coach_panel import CoachPanel, FindingCard, PatternBanner, _CoachTask
 from apex.coaching_queue import MANAGED_TIMEOUT_S
 from apex.main_window import MainWindow
 from f1coach_core import (
+    CoachingReport,
     CoachProvider,
     Evidence,
     Finding,
     build_coach_prompt,
     build_evidence_summary,
+    composite_reference,
     get_provider,
     latest_coaching_report,
     load_sample_session,
@@ -26,6 +28,7 @@ from f1coach_core import (
 )
 from f1coach_core.coach import opportunity_catalog
 from f1coach_core.llm import report_from_llm_text
+from f1coach_core.reference import composite_evidence_summary
 from sample_laps import slow_and_best, slow_lap
 
 
@@ -628,3 +631,160 @@ def test_the_same_pair_is_never_read_twice_at_once(qtbot, analysis):
 
     assert panel._running[key] is first
     assert "Still reading" in panel._placeholder.text()
+
+
+# -- across corners ----------------------------------------------------------
+
+
+def _brakes_early_everywhere(monkeypatch):
+    """A driver whose habit is the thing worth saying, not any one corner of it."""
+    monkeypatch.setattr(
+        "apex.coach_panel.corner_patterns",
+        lambda _corners: [
+            {
+                "metric": "brake_point_m",
+                "category": "braking",
+                "unit": "m",
+                "direction": "earlier",
+                "corners": ["T1", "T3", "T4", "T5"],
+                "measured": 6,
+                "agreeing": 4,
+                "against": 0,
+                "against_direction": "later",
+                "median": -22.0,
+                "headline": "Braking earlier than the reference at most corners",
+                "detail": "4 of 6 corners, typically 22 m earlier",
+                "strength": 1.47,
+            }
+        ],
+    )
+
+
+def _banners(panel):
+    return [
+        panel._cards.itemAt(i).widget()
+        for i in range(panel._cards.count())
+        if isinstance(panel._cards.itemAt(i).widget(), PatternBanner)
+    ]
+
+
+def _card_widgets(panel):
+    return [
+        panel._cards.itemAt(i).widget()
+        for i in range(panel._cards.count())
+        if isinstance(panel._cards.itemAt(i).widget(), FindingCard)
+    ]
+
+
+def test_the_habit_is_shown_above_the_corners_it_is_a_habit_at(qtbot, monkeypatch):
+    """Three cards about one corner each cannot say the thing that spans them."""
+    _brakes_early_everywhere(monkeypatch)
+    lap, reference = slow_and_best()
+    panel = CoachPanel()
+    qtbot.addWidget(panel)
+    panel.set_context(lap, reference)
+
+    panel.show_report(get_provider("mock").generate(build_evidence_summary(lap, reference)))
+
+    order = [
+        type(panel._cards.itemAt(i).widget()).__name__
+        for i in range(panel._cards.count())
+        if isinstance(panel._cards.itemAt(i).widget(), (PatternBanner, FindingCard))
+    ]
+    assert order[0] == "PatternBanner"
+    assert order.count("PatternBanner") == 1
+    assert set(order[1:]) == {"FindingCard"}
+
+
+def test_showing_a_second_report_does_not_leave_the_first_habit_behind(
+    qtbot, monkeypatch
+):
+    """A banner is cleared with the cards, or two laps stack their habits."""
+    _brakes_early_everywhere(monkeypatch)
+    lap, reference = slow_and_best()
+    panel = CoachPanel()
+    qtbot.addWidget(panel)
+    panel.set_context(lap, reference)
+    report = get_provider("mock").generate(build_evidence_summary(lap, reference))
+
+    panel.show_report(report)
+    panel.show_report(report)
+
+    assert len(_banners(panel)) == 1
+
+
+def test_a_habit_with_no_corner_that_stood_out_is_not_called_nothing(
+    qtbot, monkeypatch
+):
+    """"Nothing significant" above a banner naming four corners is a contradiction.
+
+    A habit spread thinly costs time without any single corner crossing the bar,
+    which is exactly the case the aggregate exists for.
+    """
+    _brakes_early_everywhere(monkeypatch)
+    lap, reference = slow_and_best()
+    panel = CoachPanel()
+    qtbot.addWidget(panel)
+    panel.set_context(lap, reference)
+
+    panel.show_report(
+        CoachingReport(findings=(), model="mock", prompt_version="mock-3")
+    )
+
+    assert _banners(panel)
+    assert "Nothing significant" not in panel._placeholder.text()
+    assert "pattern above" in panel._placeholder.text()
+
+
+def test_no_habit_means_no_banner(qtbot, monkeypatch):
+    """The sample has none, and a banner on every lap would mean nothing."""
+    lap, reference = slow_and_best()
+    panel = CoachPanel()
+    qtbot.addWidget(panel)
+    panel.set_context(lap, reference)
+
+    panel.show_report(get_provider("mock").generate(build_evidence_summary(lap, reference)))
+
+    assert _banners(panel) == []
+
+
+# -- reading the quickest lap against its own corners ------------------------
+
+
+def test_the_best_lap_cites_other_laps_rather_than_code_stamped_guides(qtbot):
+    """Its citations are measurements, so they must not be labelled as guides."""
+    session = load_sample_session()
+    best = session.best_lap
+    composite = composite_reference(list(session.laps), anchor=best)
+    panel = CoachPanel()
+    qtbot.addWidget(panel)
+    panel.set_context(best, composite)
+
+    panel.show_report(
+        get_provider("mock").generate(composite_evidence_summary(best, composite))
+    )
+
+    assert _card_widgets(panel)
+    assert panel._reference_label() == "best"
+    citations = _panel_text(panel)
+    assert "review guide" not in citations
+    assert " vs best " in citations
+
+
+def test_a_composite_context_is_remembered_by_name_not_by_path(qtbot):
+    """A composite is not a file, and gaining a lap has to be a new context."""
+    session = load_sample_session()
+    composite = composite_reference(list(session.laps), anchor=session.best_lap)
+    panel = CoachPanel()
+    qtbot.addWidget(panel)
+
+    panel.set_context(session.best_lap, composite)
+
+    assert panel._context_key() == (str(session.best_lap.source), composite.name)
+    assert composite.name == f"best corners of {len(composite.sources)} laps"
+
+
+def _panel_text(panel):
+    from PySide6.QtWidgets import QLabel
+
+    return " | ".join(label.text() for label in panel.findChildren(QLabel))

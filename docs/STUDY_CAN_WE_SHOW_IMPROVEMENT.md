@@ -625,3 +625,219 @@ plain `utf-8` 读的 —— `manifest.json`、`participant.json`、`exposure.jso
 ### 11.11 这不改变的事
 
 n 还是每臂 1 个人。剂量-反应需要的是**辅导组内部有足够的曝光量差异**，一个人给不出任何差异。这一节做的是**从下一个参与者开始，这条证据链有数据可用**；已经采的那五个包补不回来。
+
+---
+
+## 12. Session Debrief 每点一次就多生成一次（2026-08-28，真实使用中报出来的）
+
+### 12.1 你看到的现象
+
+> "不选中任何 session 中的一行直接点，每点一次都会重复生成一次；好像生成出来后
+> 选中了某一行 lap 点了之后不会再生成一次。"
+
+前半句是真的，而且比看起来严重。后半句的因果猜错了 —— **和选不选 lap 行没有关系**，
+决定性的变量是**报告有没有回来**。选一行、移动鼠标、再点回去，这个过程本身就花掉了
+几秒到几十秒，报告在这段时间里回来了，于是第二次点就"不再生成"。真正的分界线是时间，
+不是选择。
+
+### 12.2 真正的原因
+
+`SessionDebriefView.set_session()` 的早退守卫写成了这样：
+
+```python
+if (
+    session is not None
+    and self._session is not None
+    and self._report is not None          # ← 这一条
+    and self._session.path == session.path
+    and len(self._session.laps) == len(session.laps)
+):
+    return
+```
+
+它把"这个 session 已经在屏幕上了"理解成了"**已经在屏幕上、而且报告已经算完了**"。
+
+问题在于两者之间有一段很长的空档。`_DebriefTask` 是故意把端点解析放进工作线程里的，
+它自己的 docstring 就写着「starting the bundled server can take three minutes off a
+cold disk」。在那三分钟里 `self._report` 一直是 `None`，于是守卫不成立，代码往下走：
+
+```python
+self._session = session
+self._report = None
+self._task = None          # ← 正在跑的那个任务，引用被丢掉了
+self._clear_cards()
+...
+self._start(narrate=self._coach_ready())   # ← 于是又起了一个
+```
+
+`self._task = None` 把在跑的任务**丢掉**（不是取消，是不再认它），紧接着
+`_start()` 里那句 `if ... or self._task is not None: return` 就拦不住了，第二个
+任务被塞进线程池。
+
+而这个池子是 `MainWindow._coaching_pool`，**`maxThreadCount == 1`**，而且是
+Lap Analysis 的 AI Race Engineer 共用的那一个。所以点三次的后果是：
+
+- 同一个 session 被叙述三遍，一遍接一遍；
+- 前两遍的结果全部被 `_is_current()` 丢掉，一个字都不会显示；
+- 这期间谁去 Lap Analysis 要单圈辅导，都得排在它们后面。
+
+参与者读的那块屏幕就是干预本身，所以这不只是"多花点 CPU"。
+
+### 12.3 为什么测试没抓到
+
+`tests/test_debrief_view.py` 里的 `InlinePool` 是这么写的：
+
+```python
+class InlinePool:
+    def start(self, task, priority: int = 0) -> None:
+        task.run()
+```
+
+`set_session()` 还没返回，报告就已经算完了。于是 `test_returning_to_the_same_session_keeps_the_prose`
+一直是绿的 —— 它测的是"报告已经在了，再进来不重算"，而**真实的池子永远不会处在这个状态**：
+它有工作线程，signal 是排队投递的，任何一次重新进入这个界面都落在报告还没回来的那段空档里。
+
+补了一个 `QueuedPool`：接下工作，然后**不做**。这才是真实池子在那三分钟里的样子。
+
+### 12.4 改了什么
+
+守卫改成按"这个 session 是不是已经在处理中"判断，而不是按"报告在不在"：
+
+```python
+    and len(self._session.laps) == len(session.laps)
+    and (self._report is not None or self._task is not None)
+```
+
+三条新测试，前两条红过再绿：
+
+- `test_asking_again_while_it_is_still_working_queues_nothing` —— 修之前排进 3 个任务，
+  修之后 1 个；
+- `test_the_cards_do_not_pile_up_as_the_model_speaks` —— 见 12.5；
+- `test_a_debrief_that_failed_can_be_asked_for_again` —— 这条修前修后都是绿的，它在这里
+  是**防止改过头**：失败之后 `_report` 和 `_task` 都是 `None`，必须还能再点一次重试，
+  否则一次失败就把这块屏幕永久钉死了。
+
+### 12.5 顺手修的第二处：卡片栏的间隔件在累积
+
+`_clear_cards()` 只摘走 `itemAt(i).widget()` 不是 `None` 的项，而布局末尾那个
+`addStretch(1)` 是个 spacer item，`widget()` 返回 `None` —— 它每次都被留下来，
+而 `_render()` 每次又加一个新的。
+
+`_render()` 不是只跑一次：模型每讲完一圈就重画一次。两圈的 session 打完之后布局里有
+**6 个项，应该是 3 个**。视觉上看不出来（末尾几个 stretch 平分同一段空白），但它是随
+使用时长单调增长的。改成整栏清空，spacer 一起清。
+
+### 12.6 已经知道、这一版**没有**修的
+
+在一份 debrief 正在叙述的时候**切到另一个 session**，仍然会把在跑的那个丢掉而不是停掉。
+新的那份要跑是对的，但被丢掉的那份会继续占着那个单线程池直到自己跑完 —— 研究者一个个
+翻参与者的时候就会踩到，症状和 12.2 一样。
+
+要修的话是给 `_DebriefTask` 加一个 `abandon()` 标志，让 `on_measured` / `on_narrated`
+两个回调在被丢弃后抛一个哨兵异常，在 `_run()` 里先于那条 `except Exception` 接住 ——
+粒度是"一圈叙述"，因为 `narrate_debrief()` 那次 HTTP 调用本身中断不了。约 15 行，
+但它动的是线程边界上的控制流，和这次这个一行守卫不是一个量级的改动，所以单独拿出来，
+没有混进要马上装到参与者机器上的这一版里。
+
+### 12.7 验证与打包
+
+- `pytest -q` → **740 passed, 17 skipped**（比昨天多 3 条，就是上面那三条）
+- `ruff check src tests` → clean
+- 重新 `pyinstaller apex.spec`，换进 `C:\Users\hh25303\repos\Apex`
+- **修没修进去是读出来确认的**：把新 `Apex.exe` 里的压缩代码流解开，找到了那两段新
+  docstring；同样的检查跑在被替换掉的那个 exe 上，两段都**不在**。
+- `_internal` 逐文件哈希对比：1074 个文件，唯一的差异是 `base_library.zip`，而它的
+  154 个成员按名字和 CRC 完全一致 —— 只是时间戳被重写了。`_internal` 原样不动。
+- 便携 zip 重打：`Apex-Study-2026-08-28.zip`，解压后 3884 个文件、1,058,467,047 字节
+  与源目录逐项相同，**从解压出来的那份**跑 `study-exposure --help` / `study-adherence --help`
+  退出码 0。
+- 详见 `docs/STUDY_PORTABLE_BUILD.md` §12 和包里的 `apex-study-build.txt`。
+
+### 12.8 一件需要你决定的事：debrief 的**内容**在 08-28 下午被改了
+
+12.7 那个包打完之后，另一条并行的工作改了 `racecoach/granite/report.py` 里的
+`measure_report()`：**最快的那一圈**原本只拿到一句 "This was your quickest lap of the
+session." 和零条发现，现在改成用「它自己每个弯被开得最好的那一次」拼出一个参照
+（`CompositeReference`），于是最快圈也会有发现、也会被模型叙述。
+
+就工程上说这是对的 —— 一个车手最想让人解释的那一圈，原本恰恰是这份报告最没话说的一圈。
+`SessionDebriefView` 那边不用改：`LapReport.is_reference` 改成了属性、会把 composite
+解回它的 anchor，所以紫色的"session best"还是标在同一圈上；我这边 13 条测试在合过之后
+的树上全绿，整套 782 passed / 17 skipped，ruff clean，都是我自己跑的。
+
+**但它动的是干预本身。** 参与者读的那块屏幕就是这项研究要测的东西。已经采回来的三个包
+（0823、B0826、C0826）是在**旧行为**下产生的报告；如果下一个参与者拿到的是新行为，
+那"辅导"这个自变量在参与者之间就不是同一个东西了 —— 这种混淆事后补不回来。
+
+顺带还有一个量的问题：每个 session 要叙述的圈数从 N-1 变成 N，跑在那个单线程池上。
+三圈的 phase 多等一圈的叙述时间；等 §10.10 那个 3→5 圈的调整做了之后，是 5 次而不是 4 次。
+
+所以有三条路，选哪条是你的决定，不是打包决定：
+
+1. **先不发**。参与者机器上的包停在 08-28 上午这一版（哈希见 `STUDY_PORTABLE_BUILD.md`
+   §12），新行为留在仓库里，等这批数据收完再上。**已采的三个包和后面的参与者用同一个干预。**
+2. **发，并且把已采的三个包重新生成一遍报告**。debrief 是可以在分析机上从 handover 重跑的
+   （`racecoach debrief`），所以理论上可以让所有人都落在新行为下 —— 但 0823/B0826/C0826
+   当时**实际读到的**是旧报告，重跑只能让存档一致，改不了他们当时受到的干预。
+3. **发，并把它记成一个中途变更**。在效度威胁里写明哪几个参与者在哪一版下，样本量这么小的
+   情况下这基本等于承认前三个包和后面的不可合并。
+
+我的建议是 **1**（范围其实比这一节写的更宽，见 §12.9 —— 那条更强的理由在剂量列上）：这项改动的收益是"报告更完整"，而代价是"自变量在参与者之间不一致"，
+在 n 还这么小的时候后者贵得多。等这一批收完，它是个明显该上的改进。
+
+（另外还有一个相关的提议：把跨弯道的 pattern banner 也放进 session debrief 这块屏幕。
+同样是改干预内容，同样先不做，理由同上。）
+
+### 12.9 范围比 12.8 写的更宽：这批改动也落在**剂量**上
+
+12.8 只写了 debrief。这是我写窄了。同一批改动还改了 **Lap Analysis** 那块屏幕，而参与者
+是能到那块屏幕的 —— `main_window.py:100` 把 Garage 的 `lapOpened` 直接接到 `show_analysis`，
+`AnalysisView` **没有**研究者模式的门（`SyntheticCaptureView` / `StudyView` / `LivePitWallView`
+才有）。这三处我自己查过：
+
+- 最快圈的辅导现在引用它自己的其它圈，而不是四条写死在代码里的通用指引；
+- 多了一条 **pattern banner** —— 一句到目前为止没有任何参与者见过的话
+  （`coach_panel.py:912`，插在 `FindingCard` 同一栏里）；
+- 那一圈的弯道表多了 Δ 列和一个 debrief 标题。
+
+**要紧的一条在这里。** `analysis_view.py:453` 把这块面板的停留时间记成 `REPORT_VIEW`，
+而 `_start_report_view()` 是在**发现落到屏幕上那一刻**开始计时的（面板还在跑的时候没人能读，
+所以不从请求开始算，这是对的）。`PatternBanner` 插进的正是同一块面板的同一栏。
+
+> **改一处列名。** 这一节最初写的是 `advice_seconds`，**错了**。
+> `phase_exposure()`（`exposure.py:407`）里 `advice_seconds` 只加**弯道视图**里带辅导的那些
+> （`sum(v.seconds for v in corners if v.advice)`），跟这块面板无关。被这批改动撑大的是
+> **`report_seconds`**（`exposure.py:408`），它把每一条 `REPORT_VIEW` 都加进去，不看 `advice`。
+> 结论和下面那三条前提都不变，但**要查的是 `report_seconds`** —— 照着旧的列名去审计
+> `advice_seconds`，会看到一切正常然后得出错误的结论。
+
+于是：**内容变多的面板会被读得更久。** 把改动前后的 `report_seconds` 放进同一列，读出来的
+"参与者更投入"其实是"当时屏幕上字更多"。这不再只是自变量不一致，**混淆已经进到那条
+剂量列里**了 —— 而剂量-反应正是 §5 里给 n 这么小的设计留的那条退路。
+
+还有一个缺口：`opened()` 记了 `findings=count`，但 `count` 只数 finding，**不数 banner**。
+所以"3 条发现 + 1 条 banner"和"3 条发现"在日志里长得一模一样，事后分不出来。
+
+**以及一处直接记错了的值**（不是分不出来，是写错了）。`coach_panel._nothing_found()` 里有一个
+故意留的分支：pattern 成立、但没有任何单个弯道过线，屏幕上是一条 banner 加一句
+"No single corner stood out — the pattern above is what there is to say."。参与者这时**正在
+读辅导**，而 `_start_report_view()` 的 `advice=count > 0` 用的还是那个只数 finding 的
+`count`，于是这一行记的是 `advice=False, findings=0`。
+
+这个错值目前**不会**动 `report_seconds`（它不看 `advice`），也不会动 `advice_seconds`
+（它只看弯道视图）—— 但 `racecoach study-exposure` 的逐条导出会把它原样写出来
+（`study.py:459`），所以它进了产出物，不只是躺在日志里。是这条 banner 带进来的。
+
+所以 §12.8 的建议不是被削弱，是被加强了：**选 1**（先不发，等这批收完）。
+
+如果最后还是要中途发，那么在发之前有**三件**事要做（都不大，也都不改变上面的建议）：
+
+1. **把构建标识记进曝光记录**，让每一条剂量行能追到是哪一版产生的。`ReviewView` 现在的十个
+   字段（id / at / driver / phase / kind / lap / corner / seconds / advice / findings）没有
+   一个记构建；`SCHEMA_VERSION = "apex-exposure-v1"` 版本化的是**文件格式**，替代不了它。
+   没有这个，混着两版的 `report_seconds` 就是不可用的，而不只是需要小心。
+2. **把 banner 算进 `advice`**，修掉上面那个 `advice=False` 的错值。
+3. **单独记 banner 的条数**，让"3 条发现 + 1 条 banner"和"3 条发现"在日志里分得开。
+
+（可恢复性上有个不对称，值得记住：**测量**这一侧还能补救 —— adherence 之类可以在分析机上
+用同一版重算；**干预**这一侧不行 —— 参与者当时读到了什么，就是读到了什么。）
