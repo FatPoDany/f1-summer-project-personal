@@ -15,6 +15,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from f1coach_core.debrief import DebriefPoint, debrief_points, debrief_summary, lap_debrief
+from f1coach_core.features import CornerScatter, corner_scatter
 from f1coach_core.lap import Lap
 from f1coach_core.loader import TelemetrySchemaError, load_telemetry_csv
 from f1coach_core.reference import (
@@ -107,8 +108,14 @@ def measure_report(laps: list[Lap], *, limit: int = 3) -> SessionReport:
     # instead, which is a target it demonstrably can reach because it or one of
     # its neighbours already did.
     composite = composite_reference(laps, anchor=reference)
+    # What counts as a notable difference is partly this driver's own steadiness
+    # through each corner, so it is measured once per run and handed down.
+    scatter = corner_scatter(laps, reference)
     return SessionReport(
-        laps=tuple(_measure(lap, reference, limit=limit, composite=composite) for lap in laps),
+        laps=tuple(
+            _measure(lap, reference, limit=limit, composite=composite, scatter=scatter)
+            for lap in laps
+        ),
         reference=reference,
     )
 
@@ -119,12 +126,15 @@ def _measure(
     *,
     limit: int,
     composite: CompositeReference | None = None,
+    scatter: CornerScatter | None = None,
 ) -> LapReport:
     """One lap's measured debrief, against the session best or its own corners."""
     if lap is reference:
-        return _measure_fastest(lap, reference, limit=limit, composite=composite)
+        return _measure_fastest(
+            lap, reference, limit=limit, composite=composite, scatter=scatter
+        )
     try:
-        points = lap_debrief(lap, reference, limit=limit)
+        points = lap_debrief(lap, reference, limit=limit, scatter=scatter)
     except ValueError:  # laps too short to share a distance grid
         points = []
     return LapReport(
@@ -141,6 +151,7 @@ def _measure_fastest(
     *,
     limit: int,
     composite: CompositeReference | None,
+    scatter: CornerScatter | None = None,
 ) -> LapReport:
     """The quickest lap, against the best each of its corners was driven.
 
@@ -161,7 +172,7 @@ def _measure_fastest(
         facts = composite_corner_facts(lap, composite)
     except ValueError:  # too short to share a distance grid with the anchor
         return alone
-    points = debrief_points(facts, limit=limit)
+    points = debrief_points(facts, limit=limit, scatter=scatter)
     if not points:
         return alone
     return LapReport(

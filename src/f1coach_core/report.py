@@ -190,8 +190,7 @@ def _findings_section(coaching: CoachingReport | None, *, has_reference: bool) -
             for e in finding.evidence
         )
         cards.append(
-            f'<div class="card"><strong>{html.escape(finding.issue)}</strong> '
-            f'<span class="chip">confidence {finding.confidence:.2f}</span>'
+            f'<div class="card"><strong>{html.escape(finding.issue)}</strong>'
             f"<div>{html.escape(finding.cause)}</div>"
             f"<div>→ {html.escape(finding.action)}</div>{evidence}</div>"
         )

@@ -51,6 +51,15 @@ complied; at worst it costs a real one. That is the asymmetry a manipulation
 check wants, because a study that wrongly believes its advice was taken cannot
 interpret anything that follows.
 
+The debrief that produced the ask now clears the same bar (``features.
+notable_bar``, and ``run_prescriptions`` hands it the run's own scatter), which
+it did not always. While the ask was gated on the fixed threshold alone and
+compliance on the larger of the two, the software could tell a participant to
+find 4 km/h through a corner they wander 8 km/h in, and then decline to count
+4 km/h as having found it. Nobody could have satisfied that pair, and every
+corner where it happened entered the manipulation check as a participant who
+was told something and did not do it.
+
 ``shift_sd`` sits beside the binary for an analyst who wants a continuous
 measure -- which, for dose-response, is the one worth having anyway.
 """
@@ -58,27 +67,17 @@ measure -- which, for dose-response, is the one worth having anyway.
 from dataclasses import dataclass
 from statistics import mean, pstdev
 
-from f1coach_core.debrief import (
-    NOTABLE_BRAKE_POINT_M,
-    NOTABLE_COAST_M,
-    NOTABLE_MIN_SPEED_KMH,
-    NOTABLE_THROTTLE_POINT_M,
-    DebriefPoint,
-    lap_debrief,
-)
-from f1coach_core.features import _corner_facts
+from f1coach_core.debrief import DebriefPoint, lap_debrief
+from f1coach_core.features import NOTABLE_THRESHOLDS, _corner_facts, corner_scatter
 from f1coach_core.lap import Lap
 from f1coach_core.reference import composite_debrief, composite_reference
 from f1coach_core.session import Session
 
 # The reporting threshold behind each metric, so a shift is judged in the unit
 # that decided the advice was worth giving rather than in one chosen later.
-METRIC_THRESHOLDS = {
-    "brake_point_m": NOTABLE_BRAKE_POINT_M,
-    "min_speed_kmh": NOTABLE_MIN_SPEED_KMH,
-    "throttle_reapply_m": NOTABLE_THROTTLE_POINT_M,
-    "coast_distance_m": NOTABLE_COAST_M,
-}
+# The floor only: what a corner actually had to clear is `Shift.required`,
+# which raises it to the participant's own spread wherever that is wider.
+METRIC_THRESHOLDS = NOTABLE_THRESHOLDS
 
 
 class AdherenceError(ValueError):
@@ -137,7 +136,13 @@ def prescriptions(points: list[DebriefPoint]) -> list[Prescription]:
 
     out: list[Prescription] = []
     for (corner, metric), group in groups.items():
-        threshold = METRIC_THRESHOLDS[metric]
+        # The bar the advice was given under, which at a corner this driver
+        # never repeats is wider than the fixed one. Falls back to the fixed
+        # threshold for points built before one was recorded.
+        threshold = max(
+            (point.threshold for point in group if point.threshold is not None),
+            default=METRIC_THRESHOLDS[metric],
+        )
         gap = mean(point.gap for point in group)
         if abs(gap) < threshold:
             continue
@@ -179,14 +184,17 @@ def run_prescriptions(laps: list[Lap], *, limit: int = 3) -> list[Prescription]:
     if anchor is None:
         return []
     composite = composite_reference(laps, anchor=anchor)
+    scatter = corner_scatter(laps, anchor)
     points: list[DebriefPoint] = []
     for lap in laps:
         try:
             if lap is anchor:
                 if composite is not None:
-                    points += composite_debrief(lap, composite, limit=limit)
+                    points += composite_debrief(
+                        lap, composite, limit=limit, scatter=scatter
+                    )
             else:
-                points += lap_debrief(lap, anchor, limit=limit)
+                points += lap_debrief(lap, anchor, limit=limit, scatter=scatter)
         except ValueError:  # laps too short to share a distance grid
             continue
     return prescriptions(points)

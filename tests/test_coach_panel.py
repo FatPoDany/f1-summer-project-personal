@@ -157,6 +157,45 @@ def test_finding_card_displays_coloured_focus_chip(qtbot, focus, label, colour):
     assert colour in card._focus_chip.styleSheet()
 
 
+def test_a_card_makes_no_claim_about_how_sure_anything_is(qtbot):
+    """It used to, in green, on every card of the whole study.
+
+    The chip read "high" and a number, and the number came from the model on
+    the Granite path -- across the eighty-nine findings served to the study's
+    laps it never once fell below the threshold that made it green. A card that
+    reassures identically about everything is not reporting reliability, it is
+    lending authority; a stored finding that still carries the old value must
+    not put it back on screen either.
+    """
+    old_record = Finding(
+        focus="braking",
+        issue="You start braking earlier than on your quicker run through here.",
+        cause="You are on the brakes before you need to be on the way in.",
+        action="Try braking a little later.",
+        confidence=0.95,
+        evidence=(
+            Evidence(
+                metric="brake_point",
+                corner="T1",
+                value=580.0,
+                ref=595.0,
+                unit="m",
+                span=(510.0, 960.0),
+            ),
+        ),
+    )
+    card = FindingCard(old_record)
+    qtbot.addWidget(card)
+
+    from PySide6.QtWidgets import QLabel
+
+    shown = " ".join(
+        child.text() for child in card.findChildren(QLabel) if child.text()
+    )
+    assert "0.95" not in shown
+    assert "high" not in shown.lower()
+
+
 def test_evidence_zoom_targets_the_span(qtbot, analysis):
     panel = analysis._panel
     panel._settle.stop()  # this test asks for the run; don't race the automatic one
@@ -640,7 +679,7 @@ def _brakes_early_everywhere(monkeypatch):
     """A driver whose habit is the thing worth saying, not any one corner of it."""
     monkeypatch.setattr(
         "apex.coach_panel.corner_patterns",
-        lambda _corners: [
+        lambda _corners, _scatter=None: [
             {
                 "metric": "brake_point_m",
                 "category": "braking",

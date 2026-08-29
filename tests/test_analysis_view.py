@@ -19,6 +19,8 @@ from f1coach_core import (
     load_sample_session,
     single_lap_corner_table,
 )
+from f1coach_core.build import app_build
+from f1coach_core.coach import CoachingReport
 from sample_laps import lap_without_position, slow_lap
 
 
@@ -486,3 +488,66 @@ def test_reading_the_demonstration_is_not_recorded_against_its_participant(qtbot
     view.coach_shutdown()
 
     assert written == []
+
+
+def test_a_report_that_is_only_a_habit_banner_is_recorded_as_coaching_read(
+    qtbot, tmp_path, monkeypatch
+):
+    """The panel shows a banner and no cards when no single corner stood out.
+
+    "No single corner stood out -- the pattern above is what there is to say"
+    is a screen full of coaching, and reading the finding count alone recorded
+    the participant in front of it as having been shown nothing. The value is
+    wrong in the raw log and in the per-view export, which is a real artefact,
+    even though no summary column reads it.
+    """
+    monkeypatch.setattr(
+        "apex.coach_panel.corner_patterns",
+        lambda _corners, _scatter=None: [
+            {
+                "metric": "brake_point_m",
+                "category": "braking",
+                "unit": "m",
+                "direction": "earlier",
+                "corners": ["T1", "T3", "T4", "T5"],
+                "measured": 6,
+                "agreeing": 4,
+                "against": 0,
+                "against_direction": "later",
+                "median": -22.0,
+                "headline": "Braking earlier than the reference at most corners",
+                "detail": "4 of 6 corners, typically 22 m earlier",
+                "strength": 1.5,
+            }
+        ],
+    )
+    view = _study_view(qtbot, tmp_path)
+    clock, written = _timed(view)
+    silent = CoachingReport(findings=(), model="mock", prompt_version="mock-3")
+
+    view._panel.show_report(silent)
+    clock.tick(40.0)
+    view.coach_shutdown()
+
+    assert view._panel.patterns_shown == 1
+    assert [(v.findings, v.patterns, v.advice) for v in written] == [(0, 1, True)]
+
+
+def test_the_build_that_showed_the_advice_is_on_every_recorded_view(qtbot, tmp_path):
+    """Which version of the intervention this participant met.
+
+    The coaching changed while collection was running. Nothing else in the
+    record moves when it does, so without this two conditions pool into one.
+    """
+    view = _study_view(qtbot, tmp_path)
+    clock, written = _timed(view)
+
+    view._panel.reportReady.emit(
+        get_provider("mock").generate(
+            build_evidence_summary(view._lap, view._ref_combo.currentData())
+        )
+    )
+    clock.tick(30.0)
+    view.coach_shutdown()
+
+    assert written and written[0].build == app_build()

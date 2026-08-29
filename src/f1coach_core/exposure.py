@@ -27,6 +27,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
+from f1coach_core.build import app_build
 from f1coach_core.workspace import SAMPLE_SESSION_NAME, is_arrived, workspace_root
 
 SCHEMA_VERSION = "apex-exposure-v1"
@@ -82,6 +83,16 @@ class ReviewView:
     corner: str = ""  # empty for a report view
     advice: bool = False  # a validated AI instruction was on screen with it
     findings: int | None = None  # report views: how many were on screen
+    # Report views: how many cross-corner habit banners were above the cards.
+    # Counted apart from `findings` because it is a different kind of claim --
+    # one about the circuit rather than about a corner -- and because a report
+    # can consist of nothing else, which is a case the study has to be able to
+    # find rather than read as an empty screen.
+    patterns: int | None = None
+    # Which build of Apex was on screen. The advice a participant reads is the
+    # study's intervention, and it changed while collection was running; without
+    # this, two conditions pool into one that never existed. See `build`.
+    build: str = ""
     at: str = ""  # UTC, when the view ended
     id: str = ""  # stable, so a log that travels twice cannot count twice
 
@@ -97,6 +108,8 @@ class ReviewView:
             "seconds": round(self.seconds, 2),
             "advice": self.advice,
             "findings": self.findings,
+            "patterns": self.patterns,
+            "build": self.build,
         }
 
 
@@ -111,6 +124,8 @@ VIEW_COLUMNS = (
     "seconds",
     "advice",
     "findings",
+    "patterns",
+    "build",
     "at",
 )
 
@@ -136,6 +151,7 @@ def _view_from(data: object) -> ReviewView | None:
     if seconds < 0:
         return None
     findings = data.get("findings")
+    patterns = data.get("patterns")
     return ReviewView(
         driver=driver,
         phase=phase,
@@ -145,6 +161,10 @@ def _view_from(data: object) -> ReviewView | None:
         corner=str(data.get("corner") or ""),
         advice=bool(data.get("advice")),
         findings=int(findings) if isinstance(findings, int) else None,
+        # Absent in logs written before banners were counted, which is not the
+        # same as a report that had none: None, never zero.
+        patterns=int(patterns) if isinstance(patterns, int) else None,
+        build=str(data.get("build") or ""),
         at=str(data.get("at") or ""),
         id=str(data.get("id") or ""),
     )
@@ -308,6 +328,7 @@ class ExposureLog:
         corner: str = "",
         advice: bool = False,
         findings: int | None = None,
+        patterns: int | None = None,
     ) -> None:
         """Start timing something now on screen, closing whatever was before.
 
@@ -329,6 +350,11 @@ class ExposureLog:
             corner=corner,
             advice=advice,
             findings=findings,
+            patterns=patterns,
+            # Stamped here rather than asked of the caller: a front end that
+            # forgot would produce a log that looks complete and silently pools
+            # two versions of the intervention.
+            build=app_build(),
         )
         self._elapsed = 0.0
         self._started = self._clock()

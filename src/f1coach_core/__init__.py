@@ -32,10 +32,13 @@ from f1coach_core.debrief import (
     lap_debrief,
 )
 from f1coach_core.features import (
+    CornerScatter,
     build_evidence_summary,
     corner_patterns,
+    corner_scatter,
     corner_table,
     detect_corners,
+    notable_bar,
     single_lap_corner_table,
     time_delta,
 )
@@ -99,6 +102,9 @@ __all__ = [
     "TelemetrySchemaError",
     "available_providers",
     "build_coach_prompt",
+    "CornerScatter",
+    "corner_scatter",
+    "notable_bar",
     "build_evidence_summary",
     "coaching_audit_dir",
     "coaching_report_from_dict",

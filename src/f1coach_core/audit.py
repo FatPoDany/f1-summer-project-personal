@@ -25,6 +25,7 @@ from f1coach_core.coach import (
     CoachProvider,
     coaching_report_from_dict,
 )
+from f1coach_core.input_device import InputDevice, detect_input_device
 from f1coach_core.lap import NO_IDENTITY, Lap, StudyIdentity
 from f1coach_core.llm import build_coach_prompt
 from f1coach_core.reference import CompositeReference, evidence_for, reference_name
@@ -65,6 +66,7 @@ def run_audited_coaching(
     is recorded against the lap just like a request or validation failure.
     """
     raw_text = ""
+    device = detect_input_device(lap)
 
     def progress(text: str) -> None:
         nonlocal raw_text
@@ -80,6 +82,10 @@ def run_audited_coaching(
         summary = evidence_for(lap, reference)
         prompt = build_coach_prompt(summary)
         provider = provider_factory()
+        # Set here rather than asked of the factory: the factory belongs to the
+        # caller and knows about servers and endpoints, while the device is a
+        # property of this lap, which is held here.
+        provider.device = device.kind
         report = provider.generate(summary, on_progress=progress)
     except Exception as exc:  # provider and imported telemetry are trust boundaries
         error = str(exc)
@@ -98,6 +104,7 @@ def run_audited_coaching(
             raw_response=raw_text,
             report=report,
             error=error,
+            input_device=device,
         )
     except OSError as exc:
         audit_error = str(exc)
@@ -130,6 +137,7 @@ def write_coaching_audit(
     raw_response: str,
     report: CoachingReport | None,
     error: str | None = None,
+    input_device: InputDevice | None = None,
 ) -> Path:
     """Write one audit record; returns its path. Raises OSError on write
     failure — the caller decides whether auditing may break the run it audits."""
@@ -148,6 +156,22 @@ def write_coaching_audit(
         "driver": identity.driver,
         "phase": identity.phase,
         "setup": identity.setup,
+        # What they were driving with, measured off their own steering rather
+        # than assumed. Nothing else records it -- the capture manifest fixes
+        # the track, the car and the lap count and says nothing about the
+        # controls -- and it decides whether the advice above was executable on
+        # the hardware in front of them. Kept outside `evidence_summary` on
+        # purpose: that dict is this file's match key, so a new field in it
+        # would orphan every report already generated.
+        "input_device": None if input_device is None else input_device.kind,
+        "input_device_evidence": (
+            None
+            if input_device is None
+            else {
+                "steady_rate_share": input_device.steady_rate_share,
+                "moving_samples": input_device.moving_samples,
+            }
+        ),
         "model": report.model if report else None,
         "prompt_version": report.prompt_version if report else None,
         "evidence_summary": evidence_summary,

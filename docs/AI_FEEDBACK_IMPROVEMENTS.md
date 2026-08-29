@@ -49,13 +49,17 @@ finding["issue"], finding["cause"], finding["action"] = guidance[selected["metri
 
 两者不冲突：正确做法是让模型写、写砸了回退到模板，而不是像现在这样永远用模板。
 
-### 1.2 一个应该量化、但还没量化的问题
+### 1.2 一个应该量化的问题（**已量化，见 §9**）
 
 既然散文是模板、数字是 `const`，那这套 LLM 调用相对 `MockCoach`
 （`coach.py:MockCoach`，它同样从真实 evidence 里挑最差的弯）到底多带来了什么？
 
 对同一批 session 跑两边、比 finding 重合度就知道。**如果重合度很高，"AI 辅导"这个
 干预在论文里的措辞就要小心。** 这不是坏消息，是必须先知道的事。
+
+> **已量化（2026-08-28），见 §9。** 重合度低：首条引用重合 0.12，44 份审计里只有
+> 1 份是完全一样的三张卡。所以这个干预**不是** `MockCoach` 换层皮。但差异是
+> 系统性的（mock 83 条里 62 条说 `min_speed`），**只能说选择不同，不能说模型更准**。
 
 ---
 
@@ -116,7 +120,10 @@ control 组快，现在没有任何办法区分"建议本身没用"和"建议没
 **这是一个关于可靠性的断言，背后什么都没有。** 换成可算的（这个差值是该参与者
 自己圈间散布的几个 sd），或者直接删掉。留着假的最差。
 
-> 成本：半天。
+> 成本：半天。**已完成，见 §12 —— 是删掉。** 实测送到参与者眼前的 89 条 finding
+> 全部落在 0.80–0.98，**整个研究里每一张卡片都是同一个绿色的 "high"**。而"换成可算的"
+> 那条路走不通：散布在 coaching 这条路上拿不到（§10.6 的边界），何况 E 之后已经没有
+> 剩余的梯度需要表达 —— 能上屏的 finding 都已经清过那个门槛了。
 
 ### E. 阈值是拍脑袋的常量，从没跟这个人自己的散布比过
 
@@ -133,7 +140,10 @@ NOTABLE_COAST_M = 15.0
 第二段 3 圈是 6 个观测，够估一个粗糙的 per-corner sd。**这是 TSPulse 唯一真能加分
 的地方**，见 §3.1。
 
-> 成本：一天（含把阈值从常量改成"常量与个人散布取大"）。
+> 成本：一天（含把阈值从常量改成"常量与个人散布取大"）。**已完成，见 §10。**
+> 量出来的结果比预期严重：`min_speed` 的阈值比它自己的噪声底低 2.7 倍，而这个阈值
+> 同时是排序用的除数 —— 所以它就是 §9 里 `min_speed` 统治一切的原因。落地时**没有**
+> 改 `opportunity_catalog` 那一组（第四组阈值），理由见 §10.6。
 
 ### F. 参考圈选法太朴素，单圈模式几乎无话可说
 
@@ -157,8 +167,13 @@ throttle 次数 / pedal overlap），完全没有弯速相关的建议。
 如果参与者里有中文母语者，现在的英文建议是一个理解力混淆项：读不懂建议和不采纳
 建议在数据里长得一模一样。
 
-> 成本：半天。注意 `_require_measurement_free_prose` 用 `character.isdigit()`
-> 判断，中文全角数字（０-９）也会被 `isdigit()` 判为真，本地化时不要在措辞里写数字。
+> 成本：半天。~~注意 `_require_measurement_free_prose` 用 `character.isdigit()`
+> 判断，中文全角数字（０-９）也会被 `isdigit()` 判为真~~
+>
+> **这一条 2026-08-28 换掉了做法，见 §11。** 本研究是英文授课项目，"参与者读不懂英文"
+> 的前提不成立，而混着两种语言会让语言本身变成两条臂之间没控制的变量（问卷里根本没有
+> 语言字段）。真正的问题不是语言而是**语域和硬件**：模板用的是事实核查器的措辞，而且
+> 15 条里 14 条在要求踏板压力——参与者用的是键盘（实测，见 §11.2）。
 
 ### H. 曝光量仍然没记录
 
@@ -246,9 +261,10 @@ throttle 次数 / pedal overlap），完全没有弯速相关的建议。
 |---|---|---|
 | 1 | **A** 会话级 debrief 接到 GUI | 研究的干预本来就该是这个东西，代码已写好，缺的只是入口 |
 | 2 | ~~**C** 跨圈依从度~~ **C** 跨 session 依从度 | 不是给参与者的反馈（见 §C 上方的更正），是研究缺的那个 manipulation check |
-| 3 | **G** 中文模板 | 改 15 个字符串，零风险 |
-| 4 | **D** 修掉假 confidence | 它现在是一个没有依据的可靠性断言 |
+| ~~3~~ | ~~**G** 中文模板~~ **改为"人话 + 按设备措辞"，已完成（§11）** | 前提不成立；真正的问题是语域和硬件，不是语言 |
+| ~~4~~ | ~~**D** 修掉假 confidence~~ **已完成（§12）** | 它现在是一个没有依据的可靠性断言 |
 | ~~5~~ | ~~**B / F** 模式聚合与合成参考圈~~ **已完成（§8）** | 反馈质量的天花板在这里 |
+| ~~并行~~ | ~~**E** 阈值对个人散布校准~~ **已完成（§10）** | 量完才发现它不是打磨项：阈值同时是排序除数，错的那个决定了大部分卡片说什么 |
 | 并行 | TSPulse 离线 spike | 放研究者机器上，不进参与者包 |
 | 暂缓 | Granite Embedding | 等有了自由文本语料再说 |
 
@@ -815,3 +831,525 @@ corner view（`exposure.py:407`），banner 是 report view，进不去。也就
 - **我不会自己重打包换上。** 打好的包就是这项研究的仪器，悄悄换掉它正是笔记里已经
   记过一次的那类失败。要不要发是你的决定。
 - 代码全在仓库里，随时可发。三条路和推荐见姊妹文档 §12.8。
+
+---
+
+## 9. 进展：§1.2 那个问题有答案了（2026-08-28）
+
+**"这套 LLM 调用相对 `MockCoach` 到底多带来了什么"——量出来了：重合度很低。**
+从 08-25 提出到现在一直没量，而它是唯一一个能决定论文里"AI 辅导"这个词能怎么写的
+数字。
+
+### 9.1 不用加载模型就能测
+
+散文是模板、数字是 `const`，所以模型的全部自由度就是**挑哪几个 `(弯, 指标)`**。
+而每个审计文件里已经存着当时喂给 provider 的那个 evidence packet
+（`audit.py:130-148` 的 `evidence_summary`）。所以只要把 `MockCoach` 在**同一个
+packet** 上重放一遍，跟当时真的返回的那份报告比选择就行了 —— 不加载 2.1 GB 权重、
+不重新推理、不改写任何审计文件。
+
+工具落在 `scripts/coach_overlap.py`，只读，默认读 `APEX_WORKSPACE/sessions`：
+
+```
+python scripts/coach_overlap.py [sessions_dir] [--json out.json]
+```
+
+比两个层次：每条 finding 的**首条引用**（这张卡到底在说什么），和整份报告的
+**引用集合**（Jaccard）。分开比是因为一张卡就是一条建议 —— 两份报告顺带引到同一个
+弯，不代表它们在说同一件事。
+
+### 9.2 结果（44 份成功审计 / 15 圈 / 5 个 session）
+
+```
+same cards, same order : 1/44
+identical prose        : 0/44
+lead-citation overlap  : 23/194 = 0.12
+mean citation Jaccard  : 0.27
+```
+
+**只有 1 份 44 分之一是完全一样的三张卡**，而那一份是因为当时只有一个弯够格出卡
+（G1 M1），双方没得选。
+
+### 9.3 但低重合**不等于**"模型判断得更好"
+
+差异是**系统性的，不是逐弯的判断分歧**。看首条引用的指标分布（comparison 模式，
+29 份）：
+
+| | 指标分布 |
+|---|---|
+| Granite | `entry_speed` 23、`throttle_point` 14、`min_speed` 9、`brake_point` 9、`exit_speed` 6，尾巴还有三个 |
+| MockCoach | **`min_speed` 62**、`exit_speed` 10、`throttle_point` 6、`brake_point` 4、`full_throttle` 1 |
+
+`MockCoach` 的策略是"按 `time_lost_s` 排弯，取该弯最大的那个机会"，而在这条赛道上
+那几乎永远是 `min_speed`——**83 条里 62 条**。它不是在跟模型比判断力，它是一个
+几乎只会说一句话的基线。
+
+所以这个 0.12 要这么读：**两套不同的选择策略，不是两个关于同一圈的意见。**
+论文里能说的是"LLM 的选择不能由这个确定性基线复现"，**不能**说"LLM 选得更对"——
+后者需要一个外部正确答案，而这批数据里没有。
+
+> 真要往"更对"上走，需要的是别的东西：教练评分、或者 §2.C 那条依从度链路
+> （被点名的弯后来真的动了没有）。依从度现在已经有了（§6），等样本够了它就是
+> 这个问题的自然答案。
+
+### 9.4 它比 mock 克制得多
+
+每份报告出几张卡：
+
+| | 1 张 | 2 张 | 3 张 |
+|---|---|---|---|
+| Granite（comparison） | 4 | 11 | 14 |
+| MockCoach（comparison） | 2 | — | 27 |
+| Granite（single_lap） | **10** | 4 | 1 |
+| MockCoach（single_lap） | — | — | 15 |
+
+`MAX_FINDINGS = 3` 是上限不是配额，mock 基本每次顶满，模型经常只说一两条。
+**这是目前为止唯一一处模型行为明显不同于"排序取前三"的地方**，而且方向是对的
+（少说几句好过凑数）。但它没有被记录成任何指标 —— 现在也不知道"只出一张卡"是
+模型判断只有一件事值得说，还是它单纯少写了。
+
+### 9.5 单圈模式接近退化 —— F 的事后证据
+
+single_lap 那 15 份里，**14 份的首条引用是 `brake_applications`**，10 份只有一张卡。
+也就是说单圈模式下模型的回答接近一个常数。
+
+这正是 §2.F 说的那个后果的实测版：最快圈那一圈掉进单圈模式，只有 4 个 technique
+check，于是"参与者最想听解释的一圈"拿到的是几乎每次都一样的一句话。**F 已经把这条
+路堵掉了**（最快圈现在对着 composite 读，见 §8.3）—— 这批数字是它当时缺的那个证据，
+只是来晚了。
+
+### 9.6 这 44 份**不是**参与者读到的东西
+
+必须写清楚，免得被当成曝光记录用：
+
+- 时间戳是 `2026-08-24T16:26` 到 `2026-08-27T11:07`，**全都在对应 session 结束之后**
+  （0823 的圈是 08-23 17:52 跑的，审计是 08-24 写的）；
+- 每一圈都同时有 comparison 和 single_lap 两份，这是研究者在本机把每圈两种模式都扫了
+  一遍的形状，不是参与者点出来的；
+- 参与者实际读了什么，唯一的记录是 §7 的曝光日志，不是这里。
+
+所以这批数字回答的是"**这套流水线在真实圈上会怎么选**"，不是"**参与者被告知了
+什么**"。对 §1.2 那个问题来说这就够了，但两者不能互相顶替。
+
+### 9.7 结论
+
+- **"AI 辅导"这个干预不是 `MockCoach` 换层皮**——重合度 0.12，可以这么写进论文。
+- 但**别写成"模型选得更准"**：这批数据只证明选择不同，没证明谁对。
+- 顺带得到两个可以当质量指标记的东西：**每份报告的卡片数**（模型的克制程度）和
+  **单圈模式的指标熵**（现在接近 0）。
+- 这个脚本随样本增长可以重跑，人越多结论越硬。
+
+---
+
+## 10. 进展：E 已完成（2026-08-28）
+
+四个 `NOTABLE_*` 常量的注释一直写着"设在一般圈间散布之上"。**现在量过了，这句话对
+其中最重要的一个是假的**，而且它造成的不只是"多说几句废话"——它就是 §9 里
+`min_speed` 统治一切的原因。
+
+### 10.1 先量：没人量过的那个散布
+
+在 15 圈真实数据上，每个 run 用最快圈当坐标系（`detect_corners` 是位置编号，必须
+定一条锚圈，理由同 `adherence` / `reference`），逐弯逐通道算圈间 population sd：
+
+| 通道 | 阈值 | 中位 sd | p75 | 最大 | 散布 > 阈值的弯 |
+|---|---|---|---|---|---|
+| `min_speed_kmh` | **3.0 km/h** | **8.0 km/h** | 17.2 | 53.1 | **34 / 43** |
+| `brake_point_m` | 10.0 m | 8.5 m | 14.7 | 35.4 | 13 / 30 |
+| `throttle_reapply_m` | 10.0 m | 7.1 m | 16.5 | 33.0 | 2 / 7 |
+| `coast_distance_m` | 15.0 m | 10.3 m | 17.0 | 44.0 | 3 / 7 |
+
+`min_speed` 的阈值比它自己的噪声底**低 2.7 倍**，而且它是唯一一个**每个弯都测得到**
+的通道。一个最慢点在弯里飘 8 km/h 的人，某一圈低了 4 km/h，这不是关于他驾驶的事实，
+这是"他开了两圈"这个事实。
+
+> 工具：`scripts/`（`corner_scatter` 在 `features.py`，可直接对任何 session 重算）。
+> n=3 的 sd 自带约一半的误差，所以它**只用来抬高门槛，从不降低**，见 10.2。
+
+### 10.2 改成什么
+
+一句话：**"值得说"的门槛 = max(固定阈值, 这个人在这个弯自己的散布)**。
+
+- `features.corner_scatter(laps, anchor)` —— 唯一的散布定义，锚圈网格，population sd，
+  某圈没测到的通道**缺席而不是记 0**（`study._blank` 的同一立场）。
+- `features.notable_bar(metric, corner, scatter)` —— 唯一的门槛定义。
+- 三个读者全部改用它：participant 读的 debrief（`debrief._candidates`）、跨弯角
+  banner（`features.corner_patterns`）、依从度（`adherence`，它本来就在
+  `Shift.required` 上做 `max`，现在两边是同一个 bar）。
+
+**取大**这一步是让 3 圈 sd 能用的全部理由：它只可能抬高门槛，所以 sd 估错**只会漏掉
+一个真实观测，永远不会造出一个**。这和 `adherence` 依赖的是同一个不对称性。
+
+还有一个刻意的设计：**门槛记在 `DebriefPoint.threshold` 上，而不是事后重算**。依从度
+是几个月后在另一台机器上算的，重算会让它随"当时手边有哪些圈"漂移。理由和 `metric` /
+`gap` 记在点上是同一条。
+
+### 10.3 它同时是 §9 那个 `min_speed` 统治的原因
+
+阈值不只是闸门，**它还是把不同单位的通道排到一起的除数**（`score = |gap| / 门槛`）。
+除数偏小的通道不是"偶尔混进来"，是**每次都赢**：
+
+```python
+# coach.py MockCoach._finding_for
+add("braking",   metres / 10.0, ...)   # brake_point
+add("cornering", slower / 3.0,  ...)   # min_speed   ← 除数是噪声底的 1/2.7
+add("throttle",  metres / 15.0, ...)   # throttle_point
+focus = max(FOCUS_AREAS, key=lambda n: opportunities[n]["score"])
+```
+
+20 m 的刹车差得 2.0 分，9 km/h 的弯速差得 3.0 分 —— 于是这个弯被报成"速度问题"。
+§9 量到的 **mock 83 条里 62 条是 `min_speed`**，不是关于赛道或参与者的事实，是这个
+除数的事实。debrief 那一侧同样：73 个点里 **58 个**的解释句来自 `min_speed`。
+
+### 10.4 一个谁也满足不了的要求（这才是真正的 bug）
+
+改之前：**给建议**用固定阈值，**判有没有照做**用 max(固定阈值, 个人散布)。两条不同的
+线。后果在 sample session 上一抓一个：
+
+```
+T9  min_speed  要求移动 7.70 km/h   算作照做需要 7.83 km/h
+```
+
+软件让参与者去找 7.7 km/h，然后规定找到 7.83 才算找到了。**这个要求没有人能满足**，
+而每一个这样的弯都会以"被告知了、但没做"的身份进入 manipulation check —— 也就是
+§2.C 那条链路最关键的那个数。
+
+现在两条线是同一条，并且有一条守卫测试直接断言它：
+`test_what_the_debrief_asks_for_is_never_less_than_what_counts_as_doing_it`。
+
+### 10.5 真实数据上的效果
+
+**debrief（73 个有时间损失的弯，5 个 session）：**
+
+| 解释句来自 | 改前 | 改后 |
+|---|---|---|
+| `min_speed_kmh` | 58 | 46 |
+| `brake_point_m` | 7 | **10** |
+| `coast_distance_m` | 0 | **2** |
+| `throttle_reapply_m` | 2 | 1 |
+| （没有解释句） | 6 | 14 |
+
+**只有 8/73（11%）的点失去了解释句**，界面不会空掉——弯还在、时间损失还在，只是
+不再硬安一个通道上去。刹车和滑行拿回了它们本来就该赢的那些弯。
+
+**依从度（真实配对）：**
+
+| 参与者 | | 提出的要求 | 照做 | rate | mean shift_sd |
+|---|---|---|---|---|---|
+| B0826 baseline→coached | 改前 | 7 | 3 | 0.429 | 0.90 |
+| | 改后 | **6** | 3 | **0.500** | 1.01 |
+| C0826 baseline→control | 改前/改后 | 6 | 0 | 0.000 | −0.46 |
+
+要看清楚这里发生了什么：**分子没动（3 还是 3），少掉的是分母里那个不可能满足的要求。**
+这正是"取大"承诺的方向——它不会制造出依从，只会去掉一个本来就不该计入的问号。
+对照组一个数都没变。
+
+> n=1/臂，这不是证据，只是方向对。真正的数要等样本。
+
+### 10.6 没做的：`opportunity_catalog` 那一组阈值
+
+代码里其实有**四组**阈值，第四组在 `coach.py:opportunity_catalog`，管的是**模型能引用
+哪些 (弯, 指标)** —— 也就是参与者读到的那几张卡。它没改，而且它跟另外三组本来就
+对不齐：
+
+| 指标 | `opportunity_catalog` | `NOTABLE_*` |
+|---|---|---|
+| `brake_point` | ≤ ref − 10 | 10 ✓ |
+| `min_speed` | ≤ ref − 3 | 3 ✓ |
+| `throttle_reapply` | ≥ ref + 15 | **10** ✗ |
+| `coast_distance` | ≥ ref + 10 | **15** ✗ |
+
+**没一起改的理由是具体的，不是没时间**：`opportunity_catalog` 只拿得到 evidence
+packet，而 packet 是**每条审计的匹配键**（`latest_coaching_report` 要求
+`evidence_summary ==` 完全相等）。要让它知道散布，就得把散布塞进 packet，那会让
+**每一份已存的分析全部失配**——那些文件是"这个参与者到底被告知了什么"的唯一机器可读
+记录，也正是 §9 的输入。为一个阈值改动去搅动它，在数据还在收的时候不划算。
+
+所以现在的状态要说清楚：**debrief 那一侧的门槛认这个人自己的散布，卡片那一侧还不认。**
+这个不一致以前就在（上表后两行），现在被拉大了。下一步该做的是决定散布该不该进
+packet，而 §10.3 已经给了它一个明确的诊断：`min_speed` 的除数 3.0 就是 §9 那个
+62/83 的原因。
+
+### 10.7 验证
+
+- **红过再绿**：把 `notable_bar` 改回只认常量，5 个测试立刻红，其中包括 10.4 那条
+  守卫；恢复后全绿。
+- `795 passed / 17 skipped`（改前 782/17，新增 13 个测试，全在 `tests/test_scatter.py`）。
+- `ruff check src tests` 干净。
+- 文档里引用的数字（58→46、11%、校准表）是**用发布路径**重跑确认的，不是用一次性脚本
+  算完就写上去的。
+
+### 10.8 这批改动同样动了参与者读到的东西
+
+跟 §8.10 一模一样的性质：debrief 的措辞会变、有 11% 的点不再给解释句、banner 的触发
+条件变严。**参与者包没动**，代码在树里。它应该和 **G（中文）/ D（假 confidence）**
+攒成同一次版本跳，而不是各自单独发。
+
+---
+
+## 11. 进展：G 换掉了做法，并且顺带发现了一个更重的问题（2026-08-28）
+
+### 11.1 G 原来的前提不成立
+
+原写法是"把 15 条模板本地化成中文"，理由是"参与者里若有中文母语者，英文建议是理解力
+混淆项"。**这是英文授课的硕士项目**，参与者有语言门槛证明，前提失效。
+
+更要紧的是做了会**新造一个混淆项**：一部分人读中文、一部分读英文，语言就成了两条臂
+之间没控制的变量，而问卷（`participant.py`）只记 racing_games / sim_racing /
+driving / age_band，**没有语言字段**，事后连控制都控制不了。
+
+但 G 底下那个担心是真的，只是**跟语言无关**：模板是用**事实核查器的语域**写的，不是
+用司机的语域写的。原文长这样：
+
+> "The cited brake-onset position is displaced toward the approach."
+> "The cited comparison shows a larger gap between brake release and throttle pickup."
+
+`cited` 几乎每句都有——那是校验架构漏进参与者文案里的词，对读的人没有任何意义。而这
+批参与者的问卷是：racing games "a few times"、sim racing "casual"、"licence, rarely
+drive"、18–24。
+
+### 11.2 然后量到了一件更重的事：他们用的是键盘
+
+这是本次最重要的发现，而且是**测出来的，不是猜的**。
+
+研究自带的 TORCS runtime，`drivers/human/preferences.xml`：
+
+```xml
+<attstr name="throttle"    val="Up Arrow"/>
+<attstr name="brake"       val="Down Arrow"/>
+<attstr name="left steer"  val="Left Arrow"/>
+<attstr name="right steer" val="Right Arrow"/>
+```
+
+而遥测自己也这么说。按住的键由游戏按**固定斜率**推进，所以转向要么以一个速度动，
+要么不动。全部 20 条真实圈（5 个 study run + sample session）：
+
+```
+每一圈的转向变化里，落在同一个速率 ±10% 之内的比例
+0823 / B0826 / C0826 / sample :  0.941 – 0.953     速率 ≈ 1.235 /s
+```
+
+**手不会以一个恒定角速度转十九次里的十九次，只有斜坡会。** 这就是
+`f1coach_core/input_device.py` 判定的依据，阈值定在 0.8（远低于实测），而且是单边的：
+误判成 analogue 只损失措辞，误判成 keyboard 会跟人讲他没按的键。
+
+> 顺带补一个洞：**设备以前哪里都没记**。capture manifest 钉死赛道、车、圈数，
+> 只字不提操控。现在写进审计记录（顶层 `input_device` + 判据），**刻意不放进
+> `evidence_summary`**——那个 dict 是审计的匹配键，加字段会让已有分析全部失配（§10.6
+> 的同一条规矩）。
+
+### 11.3 15 条里有 14 条是给踏板写的
+
+键盘上刹车从无到有由游戏用固定斜率完成，司机唯一能控制的是**什么时候按下、什么时候
+松开、按多久**。而模板在要求：
+
+| 模板 | 要求 | 键盘上 |
+|---|---|---|
+| `peak_brake` | "Build brake pressure smoothly" | **做不到** |
+| `brake_release` | "Release brake pressure progressively" | **做不到** |
+| `min_speed` | "Release the brake smoothly" | **做不到** |
+| `throttle_reapply` | "Begin squeezing the throttle progressively" | **做不到** |
+| `exit_throttle` / `full_throttle` / `throttle_point` | "smooth pedal build" | **做不到** |
+
+只有 `entry_speed` 一条本来就与脚无关。**这不是"难以执行"，是"无法执行"**，而无法执行
+的建议和被无视的建议在数据里长得一模一样——正是 §2.C 那条依从度链路要排除的混淆，
+只不过这一次它是必然发生而不是可能发生。
+
+### 11.4 改了什么
+
+- **`f1coach_core/guidance.py`** —— 15 条句子的**唯一来源**。以前有两份手工维护的
+  拷贝（`llm.py` 的 `_ground_model_prose` 和 `coach.py` 的 `MockCoach`），而且**已经
+  漂移了**：§9 量到 44 份里 0 份措辞相同，其中一部分就是这个原因。现在两条路读同一张表。
+- **两个语域**：analogue（踏板）与 digital（按键）。digital 那一套**从不提压力**，
+  只提按下 / 松开 / 按多久，并且只点名研究实际绑定的 Up / Down Arrow。
+- **`f1coach_core/input_device.py`** —— 从这个人自己的转向轨迹读出设备，附带判据
+  （`steady_rate_share`、样本数），因为这是事后对别人设备下的推断，研究者应该能复核
+  而不是只能相信。
+- 语域由 `run_audited_coaching` 从圈上测出来交给 provider，**不经过 evidence packet**。
+
+### 11.5 真实参与者圈上的前后对比
+
+同一条 B0826 baseline 的圈，同一个弯：
+
+```
+改前   Minimum corner speed is lower than the reference.
+       The cited comparison shows more speed lost through the slowest section.
+       Release the brake smoothly and preserve momentum through the slowest section.
+
+改后   You slow down more at the slowest part of this corner than on your quicker run through here.
+       The Down Arrow is held past the point where the car has slowed enough.
+       Let go of the Down Arrow sooner so the car keeps rolling through the middle.
+```
+
+### 11.6 一条刻意没有下的结论：`brake_applications`
+
+原建议是 *"Use one progressive brake application and one controlled release."*
+而在键盘上，**短按就是唯一能刹得不满的办法**——叫人只按一次，等于叫他放弃唯一的刹车
+调节手段。§9 还量到这条是单圈模式下最常出现的一条（15 份里 14 份的首条引用）。
+
+数据也不支持原来的方向。86 个弯的对照：
+
+| 相对参考圈的刹车次数 | n | 平均丢失时间 |
+|---|---|---|
+| 更少 | 24 | **+1.90 s** |
+| 一样 | 42 | +0.74 s |
+| 更多 | 20 | **+0.34 s** |
+
+相关系数只有 −0.081（弱，且是观察性的、有反向因果的可能），**所以不能反过来说"多按更
+快"**。能说的是：这批数据里没有任何迹象支持"少按更好"。
+
+因此 digital 版本**不下"只按一次"这个结论**，改成一个两边都成立的要求——把刹车在转向
+之前做完，而不是进弯之后再补：
+
+> "Short presses of the Down Arrow are how a keyboard brakes gently, so more than
+> one is not wrong in itself. Try to have the braking finished before you turn in,
+> rather than adding more once the car is already in the corner."
+
+这一条的措辞是**教练学上的判断**，不是测量结论，需要你确认。
+
+### 11.7 验证
+
+- `815 passed / 17 skipped`（改前 795/17，新增 20 个测试，全在 `tests/test_guidance.py`）。
+- `ruff check src tests scripts` 干净。
+- 新测试大多是**否定式**的，因为文案层以前一条断言都没有：任何句子不许含数字
+  （否则会在参与者等结果的时候被 contract 打回）、不许含旧语域的词、digital 一套不许
+  出现压力词、不许点名研究没绑定的键、每个模型可引用的 metric 必须有句子（缺了会让模型
+  自己写的散文**原样发布**）。其中两条**当场抓到我自己写错的字**（digital 的
+  `peak_brake` 说了 "harder"，`coast_distance` 说了 "pedals"）。
+
+### 11.8 同样进不了当前的包
+
+和 §8 / §10 一样，这改的是参与者读到的东西。**参与者包没动。** G（现在是这个版本）、
+D、E 应该攒成同一次版本跳。
+
+---
+
+## 12. 进展：D 已完成（2026-08-28）
+
+### 12.1 它假到什么程度，量出来了
+
+三条路径各假各的：
+
+| 路径 | confidence 从哪来 |
+|---|---|
+| mock | `round(min(0.9, 0.5 + 0.8 * time_lost), 2)` —— 时间损失的线性函数 |
+| LLM | **模型自己填**，然后 `_ground_model_prose` 把 focus / issue / cause / action 全覆盖掉，**唯独把这个数留着** |
+| 界面 | `coach_panel` 渲染成 `high · 0.85`，≥0.8 是绿色 |
+
+真正被送到参与者眼前的那 **89 条 finding**（5 个 session 的全部审计）：
+
+```
+0.80 ×10   0.85 ×28   0.88 ×1   0.90 ×40   0.95 ×9   0.98 ×1
+```
+
+**没有一条低于 0.80。** 也就是说整个研究里的每一张卡片、每一个参与者，看到的都是同一个
+绿色的 "high"。它不只是没有依据 —— 它**从不变化**，所以不携带任何信息，却看起来携带。
+一个对什么都同样打包票的东西不是在报告可靠性，是在给建议镀一层权威。
+
+### 12.2 为什么不换成"可算的"（原文的选项 a）
+
+原文建议"换成可算的（这个差值是该参与者自己圈间散布的几个 sd）"。**算不出来**，
+理由正是 §10.6 那条边界：散布是 session 级的，而 coaching 这条路只拿得到 evidence
+packet，要让它知道散布就得改 packet，就会让已存的分析全部失配。
+
+但更根本的理由是：**E 之后已经没有剩余的可靠性梯度需要表达了。** 一条 finding 能被发布，
+前提就是它的差值清过了一个**设在这个人自己在这个弯的散布之上**的门槛
+（`features.notable_bar`）。所以屏幕上的每一条都已经通过了 confidence 声称要报告的那个
+检验；再给一个 0–1 的数，只是把"通过了"重新包装成"有多确定"。
+
+而仍然在 finding 之间变化的两件事 —— **差值多大**、**它花了多少时间** —— 卡片上本来就有，
+而且是从圈上量出来的真数。
+
+**所以是删掉，不是换掉。**
+
+### 12.3 改了什么
+
+- **schema 不再问**（`llm.py:build_coach_response_format`）。这一步单独重要：只要 schema
+  还要求它，一个强制执行 schema 的服务器就会**逼**模型每次都编一个，而它进不进审计文件
+  就只取决于下游有没有一行代码记得丢掉它。
+- **grounding 里显式丢弃**（`_ground_model_prose` 里 `finding.pop("confidence", None)`），
+  和覆盖散文同一个位置、同一个理由。
+- **mock 不再算**。
+- **两处渲染删掉**：`coach_panel` 的 chip、`report.py` 导出 HTML 里的 chip。
+- **`Finding.confidence` 变成 `float | None = None`**，`to_dict` 不再写出。
+
+### 12.4 为什么契约里还留着这个字段
+
+因为**直接删会让 30 份已存的参与者分析全部读不出来**。`latest_coaching_report` 会用当前
+的严格契约重新校验存档（`set(raw) == required_finding`），而每一份旧记录都带着这个数。
+
+而那些文件是"**这个参与者当时到底被告知了什么**"的唯一记录。拒绝它们不会把那个数消掉，
+只会把"它曾经被展示过"这件事一起藏掉。
+
+所以契约从"必须恰好是这几个键"放宽成"必须包含这几个键，另外容忍 confidence"：
+**旧记录照常载入并能显示，新的 finding 一个都不写。** 载入的旧值留在对象上，但
+`to_dict` 不会再把它写出去，界面也不会再画它（有一条测试专门锁这两件事）。
+
+### 12.5 验证
+
+- **30 份真实参与者分析全部恢复成功，0 份失配。** E、G、D 三轮下来 evidence packet
+  一个字节没动，所以没有任何一份存档被孤立 —— 这是每一轮都刻意守住的那条线（§10.6、
+  §11.4）。
+- `819 passed / 17 skipped`（改前 815/17）。`ruff check src tests scripts` 干净。
+- **红过再绿**：把 chip 加回卡片，`test_a_card_makes_no_claim_about_how_sure_anything_is`
+  立刻红（`Braking high · 0.95 …`），去掉后绿。
+- 新测试锁住的是：schema 里没有这个词、模型给的三个不同的数一个都不留、mock 不写、
+  旧记录能载入但不再写出、卡片上既没有数也没有 "high"。
+
+### 12.6 同样进不了当前的包
+
+和 §8 / §10 / §11 一样。**参与者包没动。** B/F、E、G、D 四批攒成同一次版本跳。
+
+---
+
+## 13. 发包记录（2026-08-28 ~16:20）
+
+**这是第一个改变参与者读到的内容的构建。** 前三位参与者（0823、B0826、C0826）读的是
+旧措辞，从这一版起两批可以靠 `build` 列分开：他们的曝光日志里那一列是空的，之后写的
+每一条都是 `d37e916+`。
+
+### 13.1 发包前的三个前提，都做了
+
+| 前提 | 落地 | 守卫测试 |
+|---|---|---|
+| 构建标识进曝光记录 | `f1coach_core/build.py` + `apex.spec` 把 commit 写进 bundle；`ExposureLog.opened` 盖章，**不问调用方**（会忘） | `test_the_build_that_showed_the_advice_is_on_every_recorded_view` |
+| banner 计入 `advice` | `analysis_view._start_report_view` 现在是 `count > 0 or banners > 0` | `test_a_report_that_is_only_a_habit_banner_is_recorded_as_coaching_read`（去掉修复立刻红） |
+| banner 单独计数 | `ReviewView.patterns`，导出多一列；旧日志里是**空白不是 0** | `test_a_banner_is_counted_apart_from_the_findings_it_sits_above` |
+
+`advice_seconds` 的含义没有变（它只加 corner view），这一点是**断言过的**，不是假设的
+—— 那一列是剂量-反应的自变量，悄悄变宽会让已经导出的每一个剂量改变含义。
+
+### 13.2 交换过程
+
+`827 passed / 17 skipped`、ruff 干净之后，构建到 D:（profile 卷只剩 4.2 GB，见记忆
+里那条），换上两个 exe，`_internal` 只补进新增的 `build_id.txt`。
+
+**验证过的，不是假设的：**
+
+- 用 PyInstaller 自己的 archive reader 把 `PYZ.pyz` 取出来 unmarshal：装上的两个 exe
+  里 `f1coach_core.guidance` / `input_device` / `build` 三个新模块都在，
+  **两个备份里一个都没有**。
+- `racecoach.exe --help` 退出码 0；`Apex.exe` 从包目录启动，11.5 秒出现标题 "Apex" 的
+  窗口，干净退出（用的是 D: 上的临时 `APEX_WORKSPACE`，没碰参与者数据）。
+- `racecoach.exe study-exposure` 导出的表头里有新的 `patterns` 和 `build` 两列并且
+  带出了值 —— **新的记录形状在打包后的二进制里是通的**，不只是在源码里。
+
+### 13.3 一个差点毁掉包的东西
+
+`_internal` **没有** mirror。先逐文件比过：新构建 1073 个文件，包里 1074 个，没有大小
+差异，新构建多一个 `build_id.txt`，而**包里多两个**：`libcrypto-3-x64.dll` 和
+`libssl-3-x64.dll`，6.8 MB 的 OpenSSL。`_ssl.pyd` 两边都在而且字节相同，所以那两个
+DLL 就是它背后的全部 —— `/MIR` 会把它们删掉，`import ssl` 从此坏掉，而下载模型走的
+就是它。
+
+> 已知，且下次装便携包时要注意：`dist\Apex` 本身缺这两个 DLL。从装好的包里拷过去，
+> 或者在组装好的副本里先验一下 `import ssl`。（已写进记忆。）
+
+### 13.4 一件不影响使用、但影响可复现性的事
+
+构建标识是 **`d37e916+`**。`+` 表示"这个 commit 加上没提交的改动"，而这次没提交的是
+24 个文件。它足够把两批参与者分开（那是前提要求的），但**不能反查回代码**。
+
+`apex-study-build.txt` 里记了新增的三个模块、改动的文件清单和两个 exe 的 SHA-256，
+那是目前的重建凭据。如果要让这个标识永久可解析：提交之后重新构建再换一次（约 3 分钟），
+标识就会变成一个干净的 commit。这件事**在有下一位参与者跑之前做都还来得及**。

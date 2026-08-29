@@ -112,4 +112,5 @@ class OllamaCoach(CoachProvider):
             text,
             model=f"ollama/{self.model}",
             evidence_summary=evidence_summary,
+            device=self.device,
         )

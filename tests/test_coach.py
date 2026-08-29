@@ -32,7 +32,6 @@ def valid_payload(summary: dict, focus: str = "braking") -> dict:
                 "issue": f"The main opportunity is {focus}",
                 "cause": "The cited telemetry differs from the reference.",
                 "action": "Use a smoother and more repeatable technique in this zone.",
-                "confidence": 0.8,
                 "evidence": [evidence],
             }
         ],
@@ -51,11 +50,28 @@ def test_valid_grounded_payload_round_trips(summary):
     assert report.to_dict() == payload
 
 
+def test_a_stored_confidence_still_loads_but_is_not_written_out_again(summary):
+    """Every audit recorded before it was removed carries one.
+
+    Those files are the only account of what a participant was actually shown,
+    so they have to keep loading -- refusing them would not remove the number,
+    it would hide that it was ever there. What must not happen is the value
+    coming back out of the other side as though something still measured it.
+    """
+    payload = valid_payload(summary)
+    payload["findings"][0]["confidence"] = 0.85
+
+    report = coaching_report_from_dict(payload, summary)
+
+    assert report.findings[0].confidence == 0.85
+    assert "confidence" not in report.to_dict()["findings"][0]
+
+
 @pytest.mark.parametrize(
     ("mutate", "fragment"),
     [
         (lambda data: data.pop("findings"), "missing 'findings'"),
-        (lambda data: data["findings"][0].pop("issue"), "keys must be exactly"),
+        (lambda data: data["findings"][0].pop("issue"), "keys must be"),
         (lambda data: data["findings"][0].update(focus="strategy"), "focus"),
         (lambda data: data["findings"][0].update(confidence=1.5), "confidence"),
         (lambda data: data["findings"][0].update(evidence=[]), "evidence"),
@@ -136,7 +152,7 @@ def test_validator_rejects_extra_fields_at_every_contract_level(summary, level):
         target = payload["findings"][0]["evidence"][0]
     target["invented"] = "not allowed"
 
-    with pytest.raises(CoachingSchemaError, match="keys must be exactly"):
+    with pytest.raises(CoachingSchemaError, match="keys must be"):
         coaching_report_from_dict(payload, summary)
 
 
@@ -165,7 +181,7 @@ def test_mock_coach_grounds_findings_in_the_evidence(summary):
     track_end = max(corner["span_m"][1] for corner in summary["corners"])
     for finding in report.findings:
         assert finding.focus in {"braking", "cornering", "throttle"}
-        assert 0.0 <= finding.confidence <= 1.0
+        assert finding.confidence is None  # nothing measures one, so none is written
         assert finding.evidence
         assert any(
             catalog[(evidence.corner, evidence.metric)]["focus"] == finding.focus
@@ -185,3 +201,24 @@ def test_mock_coach_stays_quiet_on_a_matching_lap():
 def test_unknown_provider_is_a_readable_error():
     with pytest.raises(ValueError, match="granite, mock, ollama, watsonx"):
         get_provider("granite-cloud")
+
+
+def test_nothing_a_participant_reads_claims_a_reliability_it_cannot_have(summary):
+    """D: the chip said "high" on every card of the whole study.
+
+    Eighty-nine findings were served to the study's laps and every one of them
+    carried a number between 0.80 and 0.98, rendered green. It was the model's
+    invention on the Granite path and a linear function of time lost on the
+    mock, and a value that never varies cannot distinguish anything -- it only
+    lends the advice an authority nothing measured.
+
+    Nothing takes its place. A finding is published only when its difference
+    cleared a bar set above the driver's own scatter through that corner
+    (``features.notable_bar``), so the reliability a confidence claimed to
+    report is the condition of the finding existing at all.
+    """
+    served = get_provider("mock").generate(summary).to_dict()
+
+    assert served["findings"]
+    for finding in served["findings"]:
+        assert "confidence" not in finding

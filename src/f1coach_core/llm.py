@@ -12,6 +12,7 @@ from f1coach_core.coach import (
     coaching_report_from_dict,
     opportunity_catalog,
 )
+from f1coach_core.guidance import guidance_for
 
 PROMPT_VERSION = "coach-v4"
 
@@ -78,7 +79,6 @@ Return ONLY a JSON object, without markdown, with this shape:
     "issue": "<corner and the main opportunity, without measurements>",
     "cause": "<difference directly supported by cited metrics, without measurements>",
     "action": "<one concrete technique to try, without measurements>",
-    "confidence": <0.0-1.0>,
     "evidence": [
       {{"metric": "<available metric>", "corner": "<available corner>",
         "value": <exact driver value>, "ref": <exact reference value>,
@@ -161,7 +161,6 @@ def build_coach_response_format(evidence_summary: dict) -> dict:
             "issue": {**prose, "maxLength": 180},
             "cause": prose,
             "action": prose,
-            "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
             "evidence": {
                 "type": "array",
                 "minItems": 1,
@@ -169,7 +168,7 @@ def build_coach_response_format(evidence_summary: dict) -> dict:
                 "items": citation_items,
             },
         },
-        "required": ["focus", "issue", "cause", "action", "confidence", "evidence"],
+        "required": ["focus", "issue", "cause", "action", "evidence"],
     }
     schema = {
         "type": "object",
@@ -237,6 +236,8 @@ def report_from_llm_text(
     text: str,
     model: str,
     evidence_summary: dict | None = None,
+    *,
+    device: str = "",
 ) -> CoachingReport:
     """Parse model output, stamp provenance, and publish only grounded findings.
 
@@ -263,7 +264,7 @@ def report_from_llm_text(
     first_rejection: CoachingSchemaError | None = None
     for raw in findings:
         candidate = _without_repeated_citations(raw, used_citations)
-        _ground_model_prose([candidate], evidence_summary)
+        _ground_model_prose([candidate], evidence_summary, device)
         try:
             coaching_report_from_dict(
                 {
@@ -339,114 +340,51 @@ def _without_repeated_citations(
     return candidate
 
 
-def _ground_model_prose(findings, evidence_summary: dict | None = None) -> None:
+def _ground_model_prose(
+    findings, evidence_summary: dict | None = None, device: str = ""
+) -> None:
     """Render metric-specific guidance before the strict trust-boundary check.
 
     Some OpenAI-compatible local servers cannot reliably enforce JSON Schema
     string patterns, and a small model may infer vehicle behaviour that is not
     measured. Granite chooses the focus and citation; these templates turn that
     choice into advice that cannot outrun the selected telemetry fact.
+
+    The sentences themselves live in ``guidance``, shared with ``MockCoach`` so
+    one metric cannot mean two different things depending on which provider
+    answered. ``device`` picks the phrasing: advice about pedal pressure is not
+    advice at all to somebody holding an arrow key.
     """
     if not isinstance(findings, list):
         return
-    guidance = {
-        "brake_point": (
-            "Initial braking begins earlier than the reference.",
-            "The cited brake-onset position is displaced toward the approach.",
-            "Move initial brake application progressively toward the cited reference marker.",
-        ),
-        "peak_brake": (
-            "Peak brake pressure differs from the reference.",
-            "The cited pressure traces reach different peaks.",
-            "Build brake pressure smoothly and compare the peak with the cited reference.",
-        ),
-        "brake_release": (
-            "Brake release timing differs from the reference.",
-            "The cited release positions do not align.",
-            "Release brake pressure progressively toward the cited reference point.",
-        ),
-        "entry_speed": (
-            "Corner entry speed is lower than the reference.",
-            "The cited comparison shows less speed carried into the zone.",
-            "Keep the approach repeatable and preserve speed into corner entry.",
-        ),
-        "min_speed": (
-            "Minimum corner speed is lower than the reference.",
-            "The cited comparison shows more speed lost through the slowest section.",
-            "Release the brake smoothly and preserve momentum through the slowest section.",
-        ),
-        "min_speed_point": (
-            "The slowest point differs from the reference.",
-            "The cited minimum-speed positions do not align.",
-            "Use a repeatable brake release and aim to align the slowest point with the reference.",
-        ),
-        "exit_speed": (
-            "Corner exit speed is lower than the reference.",
-            "The cited comparison shows less speed carried onto the exit.",
-            "Prioritise a clean exit and build acceleration progressively.",
-        ),
-        "throttle_reapply": (
-            "Throttle reapplication comes later than the reference.",
-            "The cited pickup point is displaced farther along the exit.",
-            "Begin squeezing the throttle progressively toward the cited reference point.",
-        ),
-        "throttle_point": (
-            "The half-throttle point comes later than the reference.",
-            "The cited comparison shows a delayed throttle build on exit.",
-            "Build throttle progressively earlier as the car settles on exit.",
-        ),
-        "full_throttle": (
-            "Full throttle comes later than the reference.",
-            "The cited comparison shows a delayed completion of throttle application.",
-            "Use a smooth pedal build toward the cited full-throttle point.",
-        ),
-        "exit_throttle": (
-            "Exit throttle is lower than the reference.",
-            "The cited comparison shows less throttle carried at the exit sample.",
-            "Build pedal input smoothly and prioritise a stable corner exit.",
-        ),
-        "coast_distance": (
-            "The coasting phase is longer than the reference.",
-            "The cited comparison shows a larger gap between brake release and throttle pickup.",
-            "Reduce the pause with a smooth transition from brake release to throttle pickup.",
-        ),
-        "brake_applications": (
-            "Brake application needs review.",
-            "The braking input is split into repeated applications.",
-            "Use one progressive brake application and one controlled release.",
-        ),
-        "throttle_applications": (
-            "Throttle application needs review.",
-            "The exit input is interrupted by repeated throttle applications.",
-            "Build throttle progressively as steering unwinds.",
-        ),
-        "pedal_overlap": (
-            "Pedal transition needs review.",
-            "Brake and throttle are applied together through part of the zone.",
-            "Separate brake release from throttle pickup with a controlled transition.",
-        ),
-    }
-    if evidence_summary and evidence_summary.get("analysis_mode") == "single_lap":
-        guidance["coast_distance"] = (
-            "Throttle transition needs review.",
-            "The telemetry shows an extended neutral-pedal phase.",
-            "Make the brake-release to throttle-pickup transition smooth and deliberate.",
-        )
+    single_lap = bool(
+        evidence_summary and evidence_summary.get("analysis_mode") == "single_lap"
+    )
     for finding in findings:
         if not isinstance(finding, dict):
             continue
         evidence = finding.get("evidence")
         if not isinstance(evidence, list):
             continue
-        selected = next(
-            (
-                item
-                for item in evidence
-                if isinstance(item, dict) and item.get("metric") in guidance
-            ),
-            None,
-        )
-        if selected is None:
+        selected = None
+        chosen = None
+        for item in evidence:
+            if not isinstance(item, dict):
+                continue
+            found = guidance_for(
+                str(item.get("metric", "")), device=device, single_lap=single_lap
+            )
+            if found is not None:
+                selected, chosen = item, found
+                break
+        if selected is None or chosen is None:
             continue
         finding["focus"] = EVIDENCE_METRICS[selected["metric"]][3]
-        finding["issue"], finding["cause"], finding["action"] = guidance[selected["metric"]]
+        finding["issue"] = chosen.issue
+        finding["cause"] = chosen.cause
+        finding["action"] = chosen.action
+        # A model asked how sure it is will answer, and the answer measures
+        # nothing. Dropped here rather than ignored downstream, so it never
+        # reaches an audit record and cannot be read back later as though
+        # something had computed it.
+        finding.pop("confidence", None)

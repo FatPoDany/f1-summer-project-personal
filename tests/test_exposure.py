@@ -4,11 +4,13 @@ import json
 
 import pytest
 
+from f1coach_core.build import app_build
 from f1coach_core.exposure import (
     CORNER_VIEW,
     REPORT_VIEW,
     ExposureLog,
     ReviewView,
+    _view_from,
     adopt_views,
     append_view,
     exposure_columns,
@@ -17,6 +19,7 @@ from f1coach_core.exposure import (
     phase_exposure,
     read_views,
 )
+from f1coach_core.study import exposure_csv
 
 
 @pytest.fixture(autouse=True)
@@ -292,3 +295,146 @@ def test_a_participant_reading_on_their_own_machine_still_counts(tmp_path):
     log.closed()
 
     assert [(v.kind, v.seconds) for v in written] == [("report", 30.0)]
+
+
+# -- what a record has to be able to say afterwards --------------------------
+
+
+def test_every_view_records_which_build_of_apex_was_on_screen():
+    """The advice is the intervention, and it changed while collection ran.
+
+    Nothing else in the record moves when it does: the capture manifest names
+    the track and the car, the audit names the model, and the exposure schema
+    version names the shape of a line. Without this, participants who read two
+    different versions of the coaching pool into one condition that never
+    existed.
+    """
+    clock = FakeClock()
+    log, written = _log(clock)
+    log.opened(driver="P1", phase="baseline", kind=REPORT_VIEW, findings=2, advice=True)
+    clock.tick(20.0)
+    log.closed()
+
+    assert written
+    assert written[0].build == app_build()
+    assert written[0].build, "a checkout or a packaged build always has an identity"
+    assert "build" in written[0].to_dict()
+
+
+def test_a_report_that_is_only_a_habit_banner_is_still_coaching_being_read():
+    """The defect this precondition exists for.
+
+    The panel deliberately shows a cross-corner banner with no finding cards
+    when no single corner stood out -- "the pattern above is what there is to
+    say". Read off the finding count alone, that participant is recorded as
+    having been shown nothing while they sit reading advice.
+    """
+    clock = FakeClock()
+    log, written = _log(clock)
+    log.opened(
+        driver="P1",
+        phase="baseline",
+        kind=REPORT_VIEW,
+        advice=True,  # what analysis_view now passes: findings or banners
+        findings=0,
+        patterns=1,
+    )
+    clock.tick(20.0)
+    log.closed()
+
+    assert written[0].advice is True
+    assert written[0].patterns == 1
+    assert written[0].findings == 0
+
+
+def test_a_banner_is_counted_apart_from_the_findings_it_sits_above():
+    """Different claims: one about the circuit, one about a corner.
+
+    Pooled into `findings` the count would say a corner was named when none
+    was, and the study could no longer ask what a banner on its own does.
+    """
+    clock = FakeClock()
+    log, written = _log(clock)
+    log.opened(driver="P1", phase="baseline", kind=REPORT_VIEW, findings=3, patterns=2)
+    clock.tick(20.0)
+    log.closed()
+
+    row = written[0].to_dict()
+    assert row["findings"] == 3
+    assert row["patterns"] == 2
+
+
+def test_a_log_written_before_any_of_this_still_loads():
+    """Participants have already handed logs in. They are the record."""
+    old = _view_from(
+        {
+            "driver": "P1",
+            "phase": "baseline",
+            "kind": REPORT_VIEW,
+            "seconds": 12.0,
+            "advice": True,
+            "findings": 2,
+        }
+    )
+
+    assert old is not None
+    assert old.build == ""
+    # None, not zero: nobody counted banners then, which is not the same as a
+    # report that had none.
+    assert old.patterns is None
+
+
+def test_the_export_leaves_an_uncounted_banner_blank_rather_than_zero():
+    views = {
+        "P1": [
+            ReviewView(
+                driver="P1",
+                phase="baseline",
+                kind=REPORT_VIEW,
+                seconds=10.0,
+                advice=True,
+                findings=1,
+                patterns=None,
+                at="2026-08-28T10:00:00+00:00",
+            ),
+            ReviewView(
+                driver="P1",
+                phase="baseline",
+                kind=REPORT_VIEW,
+                seconds=10.0,
+                advice=True,
+                findings=0,
+                patterns=1,
+                build="abc1234",
+                at="2026-08-28T10:01:00+00:00",
+            ),
+        ]
+    }
+
+    rows = exposure_csv(views).strip().splitlines()
+    header = rows[0].split(",")
+
+    assert "patterns" in header and "build" in header
+    assert rows[1].split(",")[header.index("patterns")] == ""
+    assert rows[2].split(",")[header.index("patterns")] == "1"
+    assert rows[2].split(",")[header.index("build")] == "abc1234"
+
+
+def test_counting_the_banner_does_not_change_what_advice_seconds_means():
+    """It is a sum over corner views, and a banner is on the report screen.
+
+    Asserted rather than assumed, because the summary column is the one a
+    dose-response claim is made from: if counting banners had quietly widened
+    it, every dose already exported would have changed meaning.
+    """
+    views = [
+        ReviewView(driver="P1", phase="baseline", kind=CORNER_VIEW, seconds=30.0,
+                   corner="T1", advice=True),
+        ReviewView(driver="P1", phase="baseline", kind=REPORT_VIEW, seconds=90.0,
+                   advice=True, findings=0, patterns=2),
+    ]
+
+    summary = phase_exposure(views, "baseline")
+
+    assert summary.advice_seconds == 30.0
+    assert summary.report_seconds == 90.0

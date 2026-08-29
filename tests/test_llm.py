@@ -228,7 +228,10 @@ def test_single_lap_repeated_claims_merge_into_one_finding():
     )
 
     assert len(report.findings) == 1
-    assert report.findings[0].confidence == pytest.approx(0.95)
+    # The model offered three different numbers for how sure it was, and none
+    # of them measured anything. They are dropped where the prose is grounded,
+    # so no audit record can carry one back out as though something had.
+    assert report.findings[0].confidence is None
     assert len(report.findings[0].evidence) == 4
     assert len(
         {(item.corner, item.metric) for item in report.findings[0].evidence}
@@ -365,3 +368,16 @@ def test_report_from_llm_text_requires_findings_key(summary):
             model="m",
             evidence_summary=summary,
         )
+
+
+def test_the_schema_never_asks_the_model_how_sure_it_is():
+    """A model asked will answer, and the answer measures nothing.
+
+    Removing it downstream is not enough on its own: while the schema demanded
+    it, a server enforcing that schema forced one into every response, and the
+    only thing standing between it and an audit record was a later line of
+    code remembering to drop it.
+    """
+    schema = json.dumps(build_coach_response_format(build_evidence_summary(slow_lap())))
+
+    assert "confidence" not in schema

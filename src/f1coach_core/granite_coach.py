@@ -145,6 +145,7 @@ class GraniteCoach(CoachProvider):
             raw_text,
             model=served_model,
             evidence_summary=evidence_summary,
+            device=self.device,
         )
 
     def _request(

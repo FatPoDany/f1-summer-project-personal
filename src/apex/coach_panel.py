@@ -44,7 +44,13 @@ from f1coach_core import (
     reference_name,
     run_audited_coaching,
 )
-from f1coach_core.features import BRAKING, COASTING, CORNER_SPEED, THROTTLE
+from f1coach_core.features import (
+    BRAKING,
+    COASTING,
+    CORNER_SPEED,
+    THROTTLE,
+    CornerScatter,
+)
 from f1coach_core.reference import CompositeReference
 from racecoach.granite import host as gh
 from racecoach.granite import model as gm
@@ -293,8 +299,6 @@ class FindingCard(QFrame):
         self._focus_chip = self._make_focus_chip(finding.focus)
         top.addWidget(self._focus_chip, alignment=Qt.AlignmentFlag.AlignTop)
         top.addStretch(1)
-        confidence = self._confidence_chip(finding.confidence)
-        top.addWidget(confidence, alignment=Qt.AlignmentFlag.AlignTop)
         layout.addLayout(top)
 
         issue = QLabel(finding.issue)
@@ -337,18 +341,6 @@ class FindingCard(QFrame):
         chip.setStyleSheet(
             CHIP_STYLE + f" color: {colour}; border: 1px solid {colour}; font-weight: 600;"
         )
-        return chip
-
-    @staticmethod
-    def _confidence_chip(confidence: float) -> QLabel:
-        if confidence >= 0.8:
-            level, colour = "high", theme.GREEN
-        elif confidence >= 0.6:
-            level, colour = "medium", theme.YELLOW
-        else:
-            level, colour = "low", theme.TEXT_DIM
-        chip = QLabel(f"{level} · {confidence:.2f}")
-        chip.setStyleSheet(CHIP_STYLE + f" color: {colour};")
         return chip
 
 
@@ -404,6 +396,12 @@ class CoachPanel(QWidget):
         self._restore_pool.setMaxThreadCount(1)
         self._lap: Lap | None = None
         self._reference: Lap | CompositeReference | None = None
+        self._scatter: CornerScatter | None = None
+        # How many habit banners the last report put on screen. Read by the
+        # exposure log, which counts what a participant had in front of them:
+        # a report with no findings and a banner is still coaching being read,
+        # and was being recorded as an empty screen.
+        self.patterns_shown = 0
         self._task: _CoachTask | None = None
         self._prepare: _PrepareTask | None = None
         self._restore_after_prepare = False
@@ -500,12 +498,26 @@ class CoachPanel(QWidget):
         return "granite"
 
     def set_context(
-        self, lap: Lap | None, reference: Lap | CompositeReference | None
+        self,
+        lap: Lap | None,
+        reference: Lap | CompositeReference | None,
+        *,
+        scatter: CornerScatter | None = None,
     ) -> None:
-        """Show this exact context, restoring its last validated Granite run."""
+        """Show this exact context, restoring its last validated Granite run.
+
+        ``scatter`` is the driver's own spread through each corner of this
+        comparison, used only for the cross-corner banner. It deliberately does
+        not reach the evidence packet: that packet is the audit key every stored
+        report is matched on, and a habit is arithmetic over corners already in
+        it, so putting a bar in there would invalidate every analysis anybody
+        has waited for a model to produce and buy nothing a reader could not
+        recompute.
+        """
         self._task = None  # an older worker may finish, but cannot mutate this context
         self._restore_task = None
-        self._lap, self._reference = lap, reference
+        self._lap, self._reference, self._scatter = lap, reference, scatter
+        self.patterns_shown = 0
         self.report = None
         self.audit_path = None
         self._audit_button.setEnabled(False)
@@ -908,6 +920,7 @@ class CoachPanel(QWidget):
         self._chip.show()
         self._clear_cards()
         patterns = self._patterns()
+        self.patterns_shown = len(patterns[:MAX_PATTERNS_SHOWN])
         for pattern in patterns[:MAX_PATTERNS_SHOWN]:
             self._cards.insertWidget(self._cards.count() - 2, PatternBanner(pattern))
         if not report.findings:
@@ -954,7 +967,7 @@ class CoachPanel(QWidget):
             summary = evidence_for(self._lap, self._reference)
         except (ValueError, KeyError, OSError):  # laps too short to share a grid
             return []
-        return corner_patterns(summary.get("corners", []))
+        return corner_patterns(summary.get("corners", []), self._scatter)
 
     def _failed(self, message: str) -> None:
         self._task = None

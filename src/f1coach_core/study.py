@@ -458,6 +458,9 @@ def exposure_csv(logs: dict[str, list[ReviewView]]) -> str:
             row = view.to_dict()
             row["advice"] = 1 if view.advice else 0
             row["findings"] = _blank(view.findings)
+            # Blank, not zero, for logs written before banners were counted:
+            # "nobody recorded this" and "there were none" are different rows.
+            row["patterns"] = _blank(view.patterns)
             lines.append(",".join(_csv_cell(row.get(name, "")) for name in VIEW_COLUMNS))
     return "\n".join(lines) + "\n"
 

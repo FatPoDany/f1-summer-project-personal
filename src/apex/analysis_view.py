@@ -25,6 +25,7 @@ from apex.widgets.strip_stack import StripStack
 from apex.widgets.track_replay import TrackMap, span_indices
 from f1coach_core import (
     CompositeReference,
+    CornerScatter,
     DebriefPoint,
     Lap,
     Session,
@@ -33,6 +34,7 @@ from f1coach_core import (
     composite_review_points,
     composite_summary,
     corner_review_points,
+    corner_scatter,
     corner_table,
     debrief_summary,
     lap_debrief,
@@ -184,6 +186,7 @@ class AnalysisView(QWidget):
         self._reference: Lap | None = None
         self._compare: Lap | CompositeReference | None = None
         self._composite: CompositeReference | None = None
+        self._scatter_cache: dict[int, CornerScatter] = {}
         self._replay_window: ReplayWindow | None = None
         # How long the coach's findings were the thing in front of the
         # participant. Paused while the review window is up, so this and the
@@ -236,6 +239,7 @@ class AnalysisView(QWidget):
     def set_context(self, lap: Lap, session: Session | None) -> None:
         self._report_exposure.closed()  # a different lap is a different reading
         self._lap, self._session = lap, session
+        self._scatter_cache = {}
         title = f"{lap.source.stem} — {lap.lap_time:.3f} s"
         if session is not None:
             title = f"{session.name} · {title}"
@@ -304,11 +308,33 @@ class AnalysisView(QWidget):
         except (ValueError, IndexError, KeyError):
             return None
 
+    def _scatter_for(self, anchor: Lap | None) -> CornerScatter | None:
+        """This driver's own spread through each corner, on `anchor`'s grid.
+
+        Keyed on the anchor and never on the session, because that is what makes
+        the numbers mean anything: corner names come from detecting apexes on
+        one lap, so a spread measured on the session best is about different
+        corners than a comparison the reader pointed at lap 2. Recomputed when
+        the reference changes rather than shared, for the same reason.
+        """
+        if anchor is None or self._session is None or len(self._session.laps) < 2:
+            return None
+        cached = self._scatter_cache.get(id(anchor))
+        if cached is None:
+            try:
+                cached = corner_scatter(list(self._session.laps), anchor)
+            except (ValueError, IndexError, KeyError):
+                cached = {}
+            self._scatter_cache[id(anchor)] = cached
+        return cached or None
+
     def _apply_reference(self) -> None:
         if self._lap is None:
             return
         selected = self._ref_combo.currentData()
         composite = selected if isinstance(selected, CompositeReference) else None
+        anchor = composite.anchor if composite is not None else selected
+        scatter = self._scatter_for(anchor if isinstance(anchor, Lap) else None)
         # Everything that draws a trace, colours a sector or plays footage needs
         # one lap of channels; a per-corner reference has none, so those get None
         # and the screen looks as it does for a lap read on its own. What is
@@ -319,9 +345,9 @@ class AnalysisView(QWidget):
         self._stack.set_lap(self._lap, self._sector_colors(trace))
         self._stack.set_reference(trace)
         self._draw_track(trace)
-        self._panel.set_context(self._lap, selected)
-        self._populate_debrief(trace, composite)
-        self._populate_corners(trace, composite)
+        self._panel.set_context(self._lap, selected, scatter=scatter)
+        self._populate_debrief(trace, composite, scatter=scatter)
+        self._populate_corners(trace, composite, scatter=scatter)
 
     def _draw_track(self, reference: Lap | None) -> None:
         """The whole lap, with nothing picked out until something is cited."""
@@ -340,7 +366,11 @@ class AnalysisView(QWidget):
     # -- driver debrief ----------------------------------------------------
 
     def _populate_debrief(
-        self, reference: Lap | None, composite: CompositeReference | None = None
+        self,
+        reference: Lap | None,
+        composite: CompositeReference | None = None,
+        *,
+        scatter: CornerScatter | None = None,
     ) -> None:
         """Deterministic, and independent of whether a model ever runs."""
         if self._replay_window is not None:
@@ -359,14 +389,18 @@ class AnalysisView(QWidget):
                 facts = composite_corner_facts(self._lap, composite)
             except ValueError:  # too short to share a distance grid
                 facts = []
-            points = composite_debrief(self._lap, composite) if facts else []
+            points = (
+                composite_debrief(self._lap, composite, scatter=scatter)
+                if facts
+                else []
+            )
             heading = composite_summary(facts)
         else:
             if reference is self._lap:
                 self._debrief_heading.hide()
                 return
             try:
-                points = lap_debrief(self._lap, reference)
+                points = lap_debrief(self._lap, reference, scatter=scatter)
             except ValueError:  # laps too short to share a distance grid
                 points = []
             heading = debrief_summary(self._lap, reference, points)
@@ -443,20 +477,28 @@ class AnalysisView(QWidget):
             self._replay_window.update_advice(self._advice, complete=True)
 
     def _start_report_view(self, findings) -> None:
-        """The findings are now on screen; start counting how long they stay.
+        """What is now on screen, and how long it stays there.
 
         Started here rather than when the analysis was requested, because a
         request that is still running is not something anybody can read.
+
+        A habit banner counts as advice. It is the panel's own sentence about
+        the circuit rather than one of the model's corner findings, and it is
+        deliberately shown when no single corner stood out -- so reading only
+        the finding count records a participant sitting in front of coaching as
+        having been shown nothing.
         """
         identity = self._lap.identity if self._lap is not None else None
         count = len(findings) if findings is not None else 0
+        banners = self._panel.patterns_shown
         self._report_exposure.opened(
             driver=identity.driver if identity else None,
             phase=identity.phase if identity else None,
             kind=REPORT_VIEW,
             lap_source=self._lap.source if self._lap is not None else None,
-            advice=count > 0,
+            advice=count > 0 or banners > 0,
             findings=count,
+            patterns=banners,
         )
 
     def hideEvent(self, event) -> None:
@@ -548,7 +590,11 @@ class AnalysisView(QWidget):
     # -- corner table ------------------------------------------------------
 
     def _populate_corners(
-        self, reference: Lap | None, composite: CompositeReference | None = None
+        self,
+        reference: Lap | None,
+        composite: CompositeReference | None = None,
+        *,
+        scatter: CornerScatter | None = None,
     ) -> None:
         self._corner_rows = []
         if self._lap is None:
@@ -559,10 +605,14 @@ class AnalysisView(QWidget):
             # they cannot drift apart: both walk the corners in lap order.
             if composite is not None:
                 rows = composite_corner_table(self._lap, composite)
-                self._review_points = composite_review_points(self._lap, composite)
+                self._review_points = composite_review_points(
+                    self._lap, composite, scatter=scatter
+                )
             elif reference is not None:
                 rows = corner_table(self._lap, reference)
-                self._review_points = corner_review_points(self._lap, reference)
+                self._review_points = corner_review_points(
+                    self._lap, reference, scatter=scatter
+                )
             else:
                 rows = single_lap_corner_table(self._lap)
                 self._review_points = corner_review_points(self._lap, None)

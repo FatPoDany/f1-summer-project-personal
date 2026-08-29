@@ -124,4 +124,5 @@ class WatsonxCoach(CoachProvider):
             text,
             model=self.model_id,
             evidence_summary=evidence_summary,
+            device=self.device,
         )

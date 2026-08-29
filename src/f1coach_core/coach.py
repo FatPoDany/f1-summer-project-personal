@@ -4,7 +4,7 @@ The response contract (fixed for the whole project):
 
     {
       "findings": [
-        {"issue": str, "cause": str, "action": str, "confidence": 0..1,
+        {"issue": str, "cause": str, "action": str,
          "evidence": [{"metric": str, "corner": str, "value": num,
                        "ref": num, "unit": str, "span_m": [d0, d1]}, ...]}
       ],
@@ -24,6 +24,8 @@ import math
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
+
+from f1coach_core.guidance import guidance_for
 
 FOCUS_AREAS = ("braking", "cornering", "throttle")
 MAX_FINDINGS = 3
@@ -99,12 +101,34 @@ class Evidence:
 
 @dataclass(frozen=True)
 class Finding:
+    """One piece of advice, and the measurements it is allowed to rest on.
+
+    There is no confidence here any more. There was, it was a number between
+    zero and one rendered as a green chip, and nothing measured it: the mock
+    computed a linear function of time lost, and the LLM path let the model
+    invent one and then kept it while overwriting every word around it. Across
+    the eighty-nine findings actually served to the study's laps it ran from
+    0.80 to 0.98 -- every card, every participant, a green "high". A number
+    that never varies carries no information, and one that looks like a
+    probability while carrying none is worse than no number at all.
+
+    Nothing replaces it, because after ``features.notable_bar`` there is
+    nothing left for it to say: a finding is published only if its difference
+    cleared a bar set above that driver's own scatter through that corner, so
+    every finding on screen has already passed the test a confidence would have
+    been claiming to report. What still varies between findings -- how big the
+    difference is, and what it cost -- is on the card already, in numbers that
+    came off the lap.
+    """
+
     focus: str
     issue: str
     cause: str
     action: str
-    confidence: float
     evidence: tuple[Evidence, ...]
+    # Kept only so audits written before it was removed still load and can be
+    # shown as what that participant was given. Never set on a new finding.
+    confidence: float | None = None
 
 
 @dataclass(frozen=True)
@@ -121,7 +145,6 @@ class CoachingReport:
                     "issue": f.issue,
                     "cause": f.cause,
                     "action": f.action,
-                    "confidence": f.confidence,
                     "evidence": [
                         {
                             "metric": e.metric,
@@ -298,10 +321,15 @@ def coaching_report_from_dict(
     for i, raw in enumerate(data["findings"]):
         where = f"findings[{i}]"
         _require(isinstance(raw, dict), f"{where} must be an object")
-        required_finding = {"focus", "issue", "cause", "action", "confidence", "evidence"}
+        required_finding = {"focus", "issue", "cause", "action", "evidence"}
+        # `confidence` is tolerated rather than required: it is no longer
+        # written (see Finding), but every audit recorded before it was removed
+        # carries one, and those records are the only account of what a
+        # participant was told. Refusing them here would not remove the number,
+        # it would hide the evidence that it was ever shown.
         _require(
-            set(raw) == required_finding,
-            f"{where} keys must be exactly {sorted(required_finding)}",
+            required_finding <= set(raw) <= required_finding | {"confidence"},
+            f"{where} keys must be {sorted(required_finding)}",
         )
         focus = raw.get("focus")
         _require(focus in FOCUS_AREAS, f"{where}.focus must be one of {list(FOCUS_AREAS)}")
@@ -311,8 +339,13 @@ def coaching_report_from_dict(
                 f"{where}.{key} must be a non-empty string",
             )
             _require_measurement_free_prose(raw[key], f"{where}.{key}")
-        confidence = _number(raw.get("confidence"), f"{where}.confidence")
-        _require(0.0 <= confidence <= 1.0, f"{where}.confidence must be between 0 and 1")
+        confidence = None
+        if "confidence" in raw:
+            confidence = _number(raw["confidence"], f"{where}.confidence")
+            _require(
+                0.0 <= confidence <= 1.0,
+                f"{where}.confidence must be between 0 and 1",
+            )
         raw_evidence = raw.get("evidence")
         _require(
             isinstance(raw_evidence, list) and 1 <= len(raw_evidence) <= 4,
@@ -398,6 +431,12 @@ class CoachProvider(ABC):
     """One interface, three backends: watsonx / Ollama / mock."""
 
     name: str
+    # What the participant drove with, when anybody measured it. Not part of
+    # the evidence packet: that packet is the key every stored audit is matched
+    # on, and this changes only how a finding is worded, never which findings
+    # are true. Set by ``run_audited_coaching``, which is the layer that holds
+    # the lap; unset means the wording that existed before it was asked.
+    device: str = ""
 
     @abstractmethod
     def generate(
@@ -452,41 +491,15 @@ class MockCoach(CoachProvider):
             on_progress(json.dumps(payload, indent=2))
         return coaching_report_from_dict(payload, evidence_summary)
 
-    @staticmethod
-    def _single_lap_finding(corner: dict, evidence_summary: dict) -> dict:
-        catalog = opportunity_catalog(
-            {**evidence_summary, "corners": [corner]}
-        )
+    def _single_lap_finding(self, corner: dict, evidence_summary: dict) -> dict:
+        catalog = opportunity_catalog({**evidence_summary, "corners": [corner]})
         citation = next(iter(catalog.values()))
-        guidance = {
-            "coast_distance": (
-                "Throttle transition needs review",
-                "The telemetry shows an extended neutral-pedal phase.",
-                "Make the brake-release to throttle-pickup transition smooth and deliberate.",
-            ),
-            "brake_applications": (
-                "Brake application needs review",
-                "The braking input is split into repeated applications.",
-                "Use one progressive brake application and one controlled release.",
-            ),
-            "throttle_applications": (
-                "Throttle application needs review",
-                "The exit input is interrupted by repeated throttle applications.",
-                "Build throttle progressively as steering unwinds.",
-            ),
-            "pedal_overlap": (
-                "Pedal transition needs review",
-                "Brake and throttle are applied together through part of the zone.",
-                "Separate brake release from throttle pickup with a controlled transition.",
-            ),
-        }
-        issue, cause, action = guidance[citation["metric"]]
+        spoken = guidance_for(citation["metric"], device=self.device, single_lap=True)
         return {
             "focus": citation["focus"],
-            "issue": issue,
-            "cause": cause,
-            "action": action,
-            "confidence": 0.7,
+            "issue": spoken.issue,
+            "cause": spoken.cause,
+            "action": spoken.action,
             "evidence": [
                 {
                     key: citation[key]
@@ -498,19 +511,17 @@ class MockCoach(CoachProvider):
     def _finding_for(self, corner: dict) -> dict:
         label, span = corner["corner"], corner["span_m"]
         opportunities: dict[str, dict] = {
-            focus: {"score": 0.0, "causes": [], "actions": [], "evidence": []}
+            focus: {"score": 0.0, "evidence": []}
             for focus in FOCUS_AREAS
         }
 
-        def add(focus: str, score: float, cause: str, action: str, metric: str) -> None:
+        def add(focus: str, score: float, metric: str) -> None:
             value_key, ref_key, unit, _ = EVIDENCE_METRICS[metric]
             value, ref = corner.get(value_key), corner.get(ref_key)
             if value is None or ref is None:
                 return
             item = opportunities[focus]
             item["score"] = max(item["score"], score)
-            item["causes"].append(cause)
-            item["actions"].append(action)
             item["evidence"].append(
                 {
                     "metric": metric,
@@ -525,23 +536,11 @@ class MockCoach(CoachProvider):
         brake, ref_brake = corner["brake_point_m"], corner["ref_brake_point_m"]
         if brake is not None and ref_brake is not None and brake - ref_brake <= -10:
             metres = ref_brake - brake
-            add(
-                "braking",
-                metres / 10.0,
-                "braking begins earlier than the reference",
-                "move initial brake application toward the cited reference marker",
-                "brake_point",
-            )
+            add("braking", metres / 10.0, "brake_point")
 
         slower = corner["ref_min_speed_kmh"] - corner["min_speed_kmh"]
         if slower >= 3:
-            add(
-                "cornering",
-                slower / 3.0,
-                "minimum speed is lower than the reference",
-                "release the brake smoothly and preserve speed through the corner",
-                "min_speed",
-            )
+            add("cornering", slower / 3.0, "min_speed")
 
         exit_speed = corner.get("exit_speed_kmh")
         ref_exit_speed = corner.get("ref_exit_speed_kmh")
@@ -551,43 +550,26 @@ class MockCoach(CoachProvider):
             and ref_exit_speed - exit_speed >= 3
         ):
             slower_exit = ref_exit_speed - exit_speed
-            add(
-                "cornering",
-                slower_exit / 3.0,
-                "exit speed is lower than the reference",
-                "prioritise a clean exit and unwind steering progressively",
-                "exit_speed",
-            )
+            add("cornering", slower_exit / 3.0, "exit_speed")
 
         throttle, ref_throttle = corner["throttle_point_m"], corner["ref_throttle_point_m"]
         if throttle is not None and ref_throttle is not None and throttle - ref_throttle >= 15:
             metres = throttle - ref_throttle
-            add(
-                "throttle",
-                metres / 15.0,
-                "half throttle arrives later than the reference on exit",
-                "begin squeezing the throttle earlier as steering unwinds",
-                "throttle_point",
-            )
+            add("throttle", metres / 15.0, "throttle_point")
 
         full, ref_full = corner.get("full_throttle_m"), corner.get("ref_full_throttle_m")
         if full is not None and ref_full is not None and full - ref_full >= 15:
             metres = full - ref_full
-            add(
-                "throttle",
-                metres / 15.0,
-                "full throttle arrives later than the reference",
-                "build throttle progressively toward the cited full-throttle point",
-                "full_throttle",
-            )
+            add("throttle", metres / 15.0, "full_throttle")
 
         focus = max(FOCUS_AREAS, key=lambda name: opportunities[name]["score"])
         selected = opportunities[focus]
         if selected["score"] == 0.0:
+            # Nothing cleared a threshold, but the corner still cost time. Say
+            # so against the one measurement every corner has, rather than
+            # inventing a technique fault to explain it.
             focus = "cornering"
             selected = opportunities[focus]
-            selected["causes"] = ["carrying less pace through the zone than the reference"]
-            selected["actions"] = ["build a repeatable entry, apex and exit through the zone"]
             selected["evidence"] = [
                 {
                     "metric": "min_speed",
@@ -599,21 +581,15 @@ class MockCoach(CoachProvider):
                 }
             ]
 
-        time_lost = corner["time_lost_s"]
-        confidence = round(min(0.9, 0.5 + 0.8 * time_lost), 2)
-        causes = selected["causes"]
-        actions = selected["actions"]
+        # The sentences come from the same table the LLM path is grounded on, so
+        # one metric cannot mean two different things depending on which
+        # provider happened to answer.
+        spoken = guidance_for(selected["evidence"][0]["metric"], device=self.device)
         return {
             "focus": focus,
-            "issue": f"{focus.capitalize()} is the clearest opportunity",
-            "cause": (
-                causes[0][:1].upper()
-                + causes[0][1:]
-                + "".join(f", and {extra}" for extra in causes[1:])
-                + "."
-            ),
-            "action": ("; ".join(actions)[:1].upper() + "; ".join(actions)[1:] + "."),
-            "confidence": confidence,
+            "issue": spoken.issue,
+            "cause": spoken.cause,
+            "action": spoken.action,
             "evidence": selected["evidence"][:4],
         }
 

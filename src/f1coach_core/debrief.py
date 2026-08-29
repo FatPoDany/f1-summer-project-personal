@@ -20,9 +20,12 @@ from f1coach_core.features import (
     NOTABLE_BRAKE_POINT_M,
     NOTABLE_COAST_M,
     NOTABLE_MIN_SPEED_KMH,
+    NOTABLE_THRESHOLDS,
     NOTABLE_THROTTLE_POINT_M,
     THROTTLE,
+    CornerScatter,
     _corner_facts,
+    notable_bar,
 )
 from f1coach_core.lap import Lap
 
@@ -40,7 +43,10 @@ __all__ = [
     "NOTABLE_BRAKE_POINT_M",
     "NOTABLE_COAST_M",
     "NOTABLE_MIN_SPEED_KMH",
+    "NOTABLE_THRESHOLDS",
     "NOTABLE_THROTTLE_POINT_M",
+    "CornerScatter",
+    "notable_bar",
     "THROTTLE",
     "DebriefPoint",
     "corner_review_points",
@@ -77,6 +83,13 @@ class DebriefPoint:
     # adherence is measured against the advice actually given.
     metric: str = ""
     gap: float | None = None  # mine - reference, signed, in the metric's own unit
+    # The bar this difference had to clear to be said at all: the fixed
+    # threshold, raised to the driver's own spread through this corner where
+    # that was wider. Carried rather than recomputed for the same reason as
+    # `metric` and `gap` -- whatever holds a later run against this advice must
+    # use the bar the advice was actually given under, not one derived later
+    # from different laps.
+    threshold: float | None = None
 
     @property
     def headline(self) -> str:
@@ -112,10 +125,20 @@ class _Gap(NamedTuple):
     category: str
     metric: str
     delta: float
+    bar: float  # the threshold it cleared, which is not the same at every corner
 
 
-def _candidates(fact: dict) -> list[_Gap]:
-    """Every measured gap at one corner that ran past its reporting threshold."""
+def _candidates(fact: dict, scatter: CornerScatter | None = None) -> list[_Gap]:
+    """Every measured gap at one corner that ran past its reporting threshold.
+
+    That threshold is the fixed one or this driver's own scatter through this
+    corner, whichever is wider (``notable_bar``): a corner somebody repeats
+    within a metre can raise a small difference, and one they never drive the
+    same way twice cannot. It is also the divisor of ``score``, which is what
+    holds four measurements in three units comparable when only one of them
+    gets said.
+    """
+    corner = str(fact.get("corner", ""))
     out: list[_Gap] = []
 
     def gap(key: str) -> float | None:
@@ -124,54 +147,61 @@ def _candidates(fact: dict) -> list[_Gap]:
             return None
         return float(mine) - float(ref)
 
-    brake = gap("brake_point_m")
-    if brake is not None and abs(brake) >= NOTABLE_BRAKE_POINT_M:
+    brake, limit = gap("brake_point_m"), notable_bar("brake_point_m", corner, scatter)
+    if brake is not None and abs(brake) >= limit:
         word = "earlier" if brake < 0 else "later"
         out.append(_Gap(
-            abs(brake) / NOTABLE_BRAKE_POINT_M,
+            abs(brake) / limit,
             f"Braked {abs(brake):.0f} m {word}",
             f"brake point {fact['brake_point_m']:.0f} m vs {fact['ref_brake_point_m']:.0f} m",
             BRAKING,
             "brake_point_m",
             brake,
+            limit,
         ))
 
-    speed = gap("min_speed_kmh")
-    if speed is not None and abs(speed) >= NOTABLE_MIN_SPEED_KMH:
+    speed, limit = gap("min_speed_kmh"), notable_bar("min_speed_kmh", corner, scatter)
+    if speed is not None and abs(speed) >= limit:
         word = "slower" if speed < 0 else "faster"
         out.append(_Gap(
-            abs(speed) / NOTABLE_MIN_SPEED_KMH,
+            abs(speed) / limit,
             f"{abs(speed):.0f} km/h {word} at the slowest point",
             f"minimum {fact['min_speed_kmh']:.0f} km/h vs {fact['ref_min_speed_kmh']:.0f} km/h",
             CORNER_SPEED,
             "min_speed_kmh",
             speed,
+            limit,
         ))
 
-    throttle = gap("throttle_reapply_m")
-    if throttle is not None and abs(throttle) >= NOTABLE_THROTTLE_POINT_M:
+    throttle, limit = (
+        gap("throttle_reapply_m"),
+        notable_bar("throttle_reapply_m", corner, scatter),
+    )
+    if throttle is not None and abs(throttle) >= limit:
         word = "later" if throttle > 0 else "earlier"
         out.append(_Gap(
-            abs(throttle) / NOTABLE_THROTTLE_POINT_M,
+            abs(throttle) / limit,
             f"Back on throttle {abs(throttle):.0f} m {word}",
             f"throttle at {fact['throttle_reapply_m']:.0f} m "
             f"vs {fact['ref_throttle_reapply_m']:.0f} m",
             THROTTLE,
             "throttle_reapply_m",
             throttle,
+            limit,
         ))
 
-    coast = gap("coast_distance_m")
-    if coast is not None and abs(coast) >= NOTABLE_COAST_M:
+    coast, limit = gap("coast_distance_m"), notable_bar("coast_distance_m", corner, scatter)
+    if coast is not None and abs(coast) >= limit:
         word = "more" if coast > 0 else "less"
         out.append(_Gap(
-            abs(coast) / NOTABLE_COAST_M,
+            abs(coast) / limit,
             f"Coasted {abs(coast):.0f} m {word}",
             f"coasting {fact['coast_distance_m']:.0f} m "
             f"vs {fact['ref_coast_distance_m']:.0f} m",
             COASTING,
             "coast_distance_m",
             coast,
+            limit,
         ))
     return out
 
@@ -189,6 +219,7 @@ def _point(fact: dict, best: _Gap | None, lost: float | None) -> DebriefPoint:
         category="" if best is None else best.category,
         metric="" if best is None else best.metric,
         gap=None if best is None else round(best.delta, 3),
+        threshold=None if best is None else round(best.bar, 3),
     )
 
 
@@ -198,6 +229,7 @@ def lap_debrief(
     *,
     limit: int = 3,
     min_time_lost_s: float = MIN_TIME_LOST_S,
+    scatter: CornerScatter | None = None,
 ) -> list[DebriefPoint]:
     """The stretches where `lap` lost most time to `reference`, worst first.
 
@@ -205,7 +237,10 @@ def lap_debrief(
     places to look at, and a corner they were quicker through is not one.
     """
     return debrief_points(
-        _corner_facts(lap, reference), limit=limit, min_time_lost_s=min_time_lost_s
+        _corner_facts(lap, reference),
+        limit=limit,
+        min_time_lost_s=min_time_lost_s,
+        scatter=scatter,
     )
 
 
@@ -214,6 +249,7 @@ def debrief_points(
     *,
     limit: int = 3,
     min_time_lost_s: float = MIN_TIME_LOST_S,
+    scatter: CornerScatter | None = None,
 ) -> list[DebriefPoint]:
     """The same debrief, from corner facts somebody else measured.
 
@@ -227,7 +263,7 @@ def debrief_points(
         lost = fact.get("time_lost_s")
         if lost is None or lost < min_time_lost_s:
             continue
-        candidates = _candidates(fact)
+        candidates = _candidates(fact, scatter)
         # Rank by how far each gap ran past its own reporting threshold, so
         # measurements in different units stay comparable. Ties keep the order
         # above, which runs in the order a corner is driven.
@@ -237,7 +273,12 @@ def debrief_points(
     return points[:limit]
 
 
-def corner_review_points(lap: Lap, reference: Lap | None = None) -> list[DebriefPoint]:
+def corner_review_points(
+    lap: Lap,
+    reference: Lap | None = None,
+    *,
+    scatter: CornerScatter | None = None,
+) -> list[DebriefPoint]:
     """Every corner as a reviewable stretch, in the order it is driven.
 
     ``lap_debrief`` answers "what cost the most time", worst first, and drops the
@@ -249,10 +290,14 @@ def corner_review_points(lap: Lap, reference: Lap | None = None) -> list[Debrief
     and category are left empty rather than compared against the lap itself.
     """
     against = lap if reference is None else reference
-    return review_points(_corner_facts(lap, against), compared=reference is not None)
+    return review_points(
+        _corner_facts(lap, against), compared=reference is not None, scatter=scatter
+    )
 
 
-def review_points(facts: list[dict], *, compared: bool) -> list[DebriefPoint]:
+def review_points(
+    facts: list[dict], *, compared: bool, scatter: CornerScatter | None = None
+) -> list[DebriefPoint]:
     """Every corner as a reviewable stretch, from facts somebody else measured.
 
     ``compared`` says whether the ``ref_`` values came from other driving or
@@ -265,7 +310,9 @@ def review_points(facts: list[dict], *, compared: bool) -> list[DebriefPoint]:
         lost = None
         if compared:
             lost = fact.get("time_lost_s")
-            best = max(_candidates(fact), key=lambda item: item.score, default=None)
+            best = max(
+                _candidates(fact, scatter), key=lambda item: item.score, default=None
+            )
         points.append(_point(fact, best, lost))
     return points
 

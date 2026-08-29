@@ -7,7 +7,8 @@ points on the road, not the same points in time.
 """
 
 import math
-from statistics import median
+from collections.abc import Sequence
+from statistics import median, pstdev
 from typing import NamedTuple
 
 import numpy as np
@@ -44,6 +45,15 @@ NOTABLE_BRAKE_POINT_M = 10.0
 NOTABLE_MIN_SPEED_KMH = 3.0
 NOTABLE_THROTTLE_POINT_M = 10.0
 NOTABLE_COAST_M = 15.0
+
+# The same four, by the fact key they gate, so a reader that walks metrics does
+# not have to keep its own copy of the mapping.
+NOTABLE_THRESHOLDS = {
+    "brake_point_m": NOTABLE_BRAKE_POINT_M,
+    "min_speed_kmh": NOTABLE_MIN_SPEED_KMH,
+    "throttle_reapply_m": NOTABLE_THROTTLE_POINT_M,
+    "coast_distance_m": NOTABLE_COAST_M,
+}
 
 # What a difference is about, in the terms a driver would use. Shared with the
 # debrief for the same reason as the thresholds.
@@ -378,6 +388,90 @@ def _corner_facts(lap: Lap, reference: Lap) -> list[dict]:
     return facts
 
 
+
+# How wide a driver's own lap-to-lap scatter is, keyed by the corner and the
+# measurement together: a threshold only means something for one channel at one
+# place on the road.
+CornerScatter = dict[tuple[str, str], float]
+
+
+def corner_scatter(laps: Sequence[Lap], anchor: Lap) -> CornerScatter:
+    """How much this driver's own measurements wandered, corner by corner.
+
+    Every lap is measured on ``anchor``'s corner grid, for the reason
+    ``adherence`` sets out at length: ``detect_corners`` numbers apexes in the
+    order it finds them, so detecting on each lap and matching by name would
+    silently compare one lap's T3 with another's T4 as soon as one of them has
+    an extra dip in it.
+
+    Population sd, the house convention -- these laps are the whole run, not a
+    sample drawn from a larger one. A corner a lap did not record is absent
+    rather than zero, the stance ``study._blank`` takes: a corner with no
+    braking detected is not a corner braked at the start line.
+    """
+    if len(laps) < 2:
+        return {}
+    per_lap = []
+    for lap in laps:
+        try:
+            per_lap.append({str(fact["corner"]): fact for fact in _corner_facts(lap, anchor)})
+        except (ValueError, IndexError):  # too short to share a distance grid
+            continue
+    out: CornerScatter = {}
+    for corner in (str(fact["corner"]) for fact in _corner_facts(anchor, anchor)):
+        for metric in NOTABLE_THRESHOLDS:
+            values = [
+                float(facts[corner][metric])
+                for facts in per_lap
+                if corner in facts and _is_number(facts[corner].get(metric))
+            ]
+            if len(values) >= 2:
+                # Rounded where it is produced, so the one number cannot
+                # differ by a rounding step between the bar that admitted
+                # a difference and the bar a later run is held to.
+                out[(corner, metric)] = round(pstdev(values), 3)
+    return out
+
+
+def notable_bar(metric: str, corner: str, scatter: CornerScatter | None = None) -> float:
+    """How far a measurement must move at this corner before it is worth saying.
+
+    The fixed threshold, or this driver's own scatter through that corner if
+    that is wider. Without the second half the thresholds are not merely blunt,
+    they are wrong-scaled, and the first fifteen study laps say by how much:
+
+    ======================  ==========  ================  =================
+    metric                  threshold   median sd, meas.  corners wider
+    ======================  ==========  ================  =================
+    ``min_speed_kmh``         3.0 km/h          8.0 km/h  34 of 43
+    ``brake_point_m``            10.0 m             8.5 m  13 of 30
+    ``throttle_reapply_m``       10.0 m             7.1 m   2 of 7
+    ``coast_distance_m``         15.0 m            10.3 m   3 of 7
+    ======================  ==========  ================  =================
+
+    A driver whose minimum speed through a corner wanders 8 km/h from lap to lap
+    has not told anybody anything by being 4 km/h down on one of them, and the
+    3 km/h bar reports it as a fact about their driving.
+
+    The threshold is also the divisor that ranks channels against each other
+    (``score = |gap| / bar``), so one that is too small does not merely admit
+    noise -- it wins. On those same laps ``min_speed`` supplied 58 of 73 debrief
+    sentences; against each driver's own scatter it supplies 46, and braking and
+    coasting take the corners where they were the larger movement all along.
+
+    Taking the larger of the two is what makes a three-lap sd safe to use at
+    all. It has roughly half its own size in error, but it can only ever raise
+    the bar, so a bad estimate can cost a real observation and can never
+    manufacture one. That asymmetry is the same one ``adherence`` relies on, and
+    it has to be: a bar that decides something is worth saying and a bar that
+    decides the participant acted on it must be the same bar, or the software
+    can ask for a 4 km/h change and then refuse to count 4 km/h as a change.
+    """
+    fixed = NOTABLE_THRESHOLDS[metric]
+    if not scatter:
+        return fixed
+    return max(fixed, scatter.get((corner, metric), 0.0))
+
 SINGLE_LAP_GUIDES = {
     "coast_distance_m": 20.0,
     "brake_applications": 1.0,
@@ -500,7 +594,9 @@ MIN_PATTERN_AGREEING = 3
 MIN_PATTERN_SHARE = 0.6
 
 
-def corner_patterns(corners: list[dict]) -> list[dict]:
+def corner_patterns(
+    corners: list[dict], scatter: CornerScatter | None = None
+) -> list[dict]:
     """Habits that cost time at most corners, strongest first.
 
     The per-corner findings are ranked by time lost and cut to three, so a
@@ -517,6 +613,12 @@ def corner_patterns(corners: list[dict]) -> list[dict]:
     for nor against — it is a corner where the habit did not show. It still
     counts as measured, so a habit at three corners out of twelve cannot be
     reported as the way somebody drives.
+
+    With a ``scatter`` that threshold is per corner rather than one number for
+    the lap (``notable_bar``), which matters more here than anywhere else: a
+    habit is a claim about most of the circuit, so a bar set below a driver's
+    own wandering does not merely admit one noisy corner, it manufactures the
+    agreement the claim is made of.
 
     **One direction only.** The debrief reports a difference whichever way it
     ran, because it is describing a lap and refuses to claim what caused what.
@@ -538,6 +640,7 @@ def corner_patterns(corners: list[dict]) -> list[dict]:
     patterns = []
     for metric in PATTERN_METRICS:
         gaps: dict[str, float] = {}
+        bars: dict[str, float] = {}
         for corner in corners:
             if not isinstance(corner, dict):
                 continue
@@ -548,14 +651,17 @@ def corner_patterns(corners: list[dict]) -> list[dict]:
             if not _is_number(mine) or not _is_number(ref):
                 continue
             gaps[label] = float(mine) - float(ref)
+            bars[label] = notable_bar(metric.key, label, scatter)
         if len(gaps) < MIN_PATTERN_CORNERS:
             continue
         agreeing = {
             label: gap
             for label, gap in gaps.items()
-            if gap * metric.sign >= metric.threshold
+            if gap * metric.sign >= bars[label]
         }
-        against = sum(1 for gap in gaps.values() if gap * -metric.sign >= metric.threshold)
+        against = sum(
+            1 for label, gap in gaps.items() if gap * -metric.sign >= bars[label]
+        )
         share = len(agreeing) / len(gaps)
         if len(agreeing) < MIN_PATTERN_AGREEING or share < MIN_PATTERN_SHARE:
             continue
@@ -583,7 +689,9 @@ def corner_patterns(corners: list[dict]) -> list[dict]:
                 # How far past its own threshold the typical corner ran, so
                 # patterns measured in metres and in km/h can be ranked
                 # against each other at all.
-                "strength": round(share * abs(middle) / metric.threshold, 3),
+                "strength": round(
+                    share * abs(middle) / (median(bars.values()) or metric.threshold), 3
+                ),
             }
         )
     patterns.sort(key=lambda pattern: pattern["strength"], reverse=True)

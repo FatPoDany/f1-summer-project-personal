@@ -46,6 +46,7 @@ from f1coach_core.debrief import (
     review_points,
 )
 from f1coach_core.features import (
+    CornerScatter,
     _channel_corner_facts,
     _flag_technique,
     _on_grid,
@@ -309,18 +310,27 @@ def composite_debrief(
     *,
     limit: int = 3,
     min_time_lost_s: float = MIN_TIME_LOST_S,
+    scatter: CornerScatter | None = None,
 ) -> list[DebriefPoint]:
     """The stretches where this lap lost most to the best each corner was driven."""
     return debrief_points(
         composite_corner_facts(lap, composite),
         limit=limit,
         min_time_lost_s=min_time_lost_s,
+        scatter=scatter,
     )
 
 
-def composite_review_points(lap: Lap, composite: CompositeReference) -> list[DebriefPoint]:
+def composite_review_points(
+    lap: Lap,
+    composite: CompositeReference,
+    *,
+    scatter: CornerScatter | None = None,
+) -> list[DebriefPoint]:
     """Every corner as a reviewable stretch, against its own quickest version."""
-    return review_points(composite_corner_facts(lap, composite), compared=True)
+    return review_points(
+        composite_corner_facts(lap, composite), compared=True, scatter=scatter
+    )
 
 
 def composite_summary(facts: list[dict]) -> str:
