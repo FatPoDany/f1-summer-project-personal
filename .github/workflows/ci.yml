@@ -1,7 +1,15 @@
 name: ci
 
 on:
+  # Branch pushes are not watched, only the default branch. A push to a branch
+  # and the pull request opened from it are the same commit, and every run of
+  # this workflow uploads a screenshot artifact per OS: PR #2 produced four
+  # uploads of the same four PNGs. Those artifacts share one account-level
+  # storage quota, which is currently full, so the duplication is not merely
+  # wasteful -- it is competing with the runs that matter. Work on a branch is
+  # verified once, through its pull request.
   push:
+    branches: [main]
   pull_request:
 
 jobs:
