@@ -1,0 +1,484 @@
+# Apex ↔ IBMF1 数据统一方案
+
+*2026-08-29 · 本文档记录 Apex（个人成果）与 IBMF1（队友成果，`github.com/UOBGraduate/IBMF1`，线上 <https://demo.lzqqq.org/>）的数据打通路径。*
+
+*状态标注规则：**[实测]** = 本机跑过并给出数字；**[读码]** = 从源码读出的契约；**[推断]** = 尚未验证的判断。*
+
+## 0. 一句话结论
+
+Apex 采集的原始 CSV **已经能被队友的整套服务端流水线处理**，不需要重写采集器。**[实测]**
+
+我把 `win_collect_data/B0826-baseline-20260826-091209.zip`（未修改，71.1 MB）直接喂给 IBMF1 的
+`import_torcs_bundle.py` → `build_torcs_coaching_pipeline.py` → `build_torcs_review_package.py`，
+三段全部跑通，最后产出 **40 个 review event 的完整 review package**，并通过了 importer 的最终关卡
+（"必须存在属于真人车手的 coaching checkpoint"）。
+
+差的只有三件事：**14 个列名/单位适配、一个 `session.json`、一次上传调用。**
+
+## 1. 为什么会这么顺 —— 两边本来就共用一套词汇
+
+这不是巧合。`src/f1coach_core/torcs.py` 的模块 docstring 写得很明确：
+
+> Adapter for Lin's TORCS high-frequency exporter (simuv2, stride 10, ~50 Hz).
+> Field reference: `M_Lin/torcs_highfreq_field_cheatsheet.csv` (249 columns).
+
+也就是说**反向早就打通了**：队友 249 列导出器的数据，Apex 一直能读、能切圈、能分析。**[读码]**
+而 Apex 自己的原生记录器（`integrations/torcs-1.3.9/overlay/src/drivers/human/apex_human_telemetry_writer.cpp`）
+写的 106 列，是同一套命名的**子集** —— `sim_time_s`、`race_lap`、`pos_x_m`、`track_seg_type`
+这些名字两边逐字相同。
+
+所以"数据统一"不是要发明一个新契约，而是**把这套事实上已经共享的 TORCS 宽表词汇写成正式契约**，
+再补上 Apex 采不到的那几列。
+
+## 2. 取长补短：两边各自强在哪
+
+| 能力 | Apex | IBMF1 | 谁该是事实来源 |
+|---|:--:|:--:|---|
+| TORCS 真人遥测采集 | ✓ 106 列（驱动侧） | ✓ 249 列（simuv2 侧） | 各自保留，共用列名 |
+| 参与者流程：同意书、问卷、设备校准 | ✓ | — | **Apex** |
+| 实验阶段/分组（baseline / coached / control） | ✓ | 只有 `study_arm` 字段 | **Apex** |
+| 曝光记录、审计、证据校验 | ✓ | ✓ SHA-256 evidence packet | 两边都有，需对齐 |
+| 确定性规则事件检测 | ✓ | ✓ ruleset 1.0.0 + ranked opportunities | **IBMF1**（规则集更成熟） |
+| 服务端 ingest、作业队列、进度回传 | — | ✓ | **IBMF1** |
+| 网页 Viewer：录像 + 关键帧 + 遥测曲线联动 | — | ✓ React Viewer | **IBMF1** |
+| 昵称分组、历史场次、相对上一场的提升 | — | ✓ | **IBMF1** |
+| 桌面离线分析、单圈/多圈对比、报告导出 | ✓ | — | **Apex** |
+| 证据约束的 LLM 反馈 | ✓ Granite / watsonx | ✓ DeepSeek streaming | 两边并存，可互为对照 |
+| 参与者安装包分发 | ✓ 便携研究构建 | ✓ Windows/macOS 安装包 | 各自保留 |
+
+结论：**Apex 管"人和实验"，IBMF1 管"服务端和展示"**，中间靠一份统一的 session bundle 连接。
+这和 `docs/APEX_PARTICIPANT_WEB_ARCHITECTURE.md` 里已经写下的方向一致；本文档补的是它缺的**数据层落地细节**。
+
+## 3. 上传契约（读自队友源码）
+
+### 3.1 HTTP 接口 **[读码]**
+
+来源：`player_kit/tools/upload_session.py`、`player_kit/config/coach-endpoint.json`
+
+```
+POST https://upload.lzqqq.org/api/import
+  Content-Type: application/zip
+  Content-Length: <n>
+  X-Player-Upload-Token: <token>     # 见 7.2，不要硬编码进我们的仓库
+  X-IBMF1-Ingest: player-app
+  User-Agent: IBMF1-Player            # 必须，否则 Cloudflare 1010 直接拒
+  body = ZIP 原始字节
+
+202 → {"job_id": "..."}   然后轮询：
+GET  https://upload.lzqqq.org/api/import/jobs/<job_id>
+     → {"status": "...|complete|error", "message": "...", "session": {...}}
+
+409 {"error":"duplicate"} → 这个 ZIP 传过了（按 ZIP 的 SHA-256 判重）
+409 其他                  → 服务器忙，可重试（退避 4/8/12/16/24/32/40/48 秒）
+401                       → token 被拒
+413                       → 太大
+```
+
+要点：
+
+- **必须发到 `upload.lzqqq.org`，不能发 `demo.lzqqq.org`。** 后者在 Cloudflare 后面，
+  超过约 100 MB 的 body 会被边缘直接 413。`upload.lzqqq.org` 直连源站，上限是 nginx 的 **300 MB**。
+- 判重用**整个 ZIP 的 SHA-256**（`sessions.mjs:437 findDuplicateArchive`）。改任何一个字节都会变成新场次。
+- 超限时官方客户端会自动剥掉视频重传（telemetry-only）。
+
+### 3.2 ZIP 内容的硬性要求 **[读码]**
+
+来源：`deploy/coach_api/import_torcs_bundle.py`
+
+| 约束 | 值 |
+|---|---|
+| 文件数 | ≤ 6000 |
+| 解压后总字节 | ≤ 900 MB |
+| 不允许 | 符号链接、加密条目、重复路径、`..` 越界路径 |
+| 遥测 CSV | **≥ 1 个**，判定条件见下 |
+| `*.frames.csv` | ≤ 1 个（可选） |
+| `*.cars.csv` | ≤ 1 个（可选） |
+| 视频 | ≤ 1 个（`.mp4/.mov/.mkv/.avi`，可选） |
+| `session.json` | ≤ 1 个（**可选**，但强烈建议给，见 5.2） |
+
+**一个 CSV 被认成"遥测"，当且仅当它的表头同时含有这 6 列**（`REQUIRED_TELEMETRY`）：
+
+```
+sim_time_s   race_lap   speed_body_x_mps   pos_x_m   pos_y_m   track_seg_type
+```
+
+**Apex 的采集 CSV 这 6 列全有。** **[实测]** 而且文件第一行就是表头（没有 `#` 前缀元数据行），
+正好符合 `csv_columns()` 只读第一行的假设。
+
+> 要分清 Apex 内部的两种 CSV：
+>
+> - **原始采集 CSV**（`human-*.csv`，106 列，`schema_version` 是一个**列**）→ 这个才是要上传的；
+> - **canonical 单圈 CSV**（`t,dist,speed,…`，带 `# schema_version: 1` 注释头，见 `f1coach_core/schema.py`）
+>   → 这个**不能**直接上传，第一行是 `#` 注释，6 列判定会失败。
+
+## 4. 实测记录
+
+环境：本机 `.venv`（pandas 3.0.5 / numpy 2.5.2）；pillow 装在 scratchpad 的 `--target` 目录，
+**项目 venv 未被污染**。所有产物写在 scratchpad，未触碰研究工作区。
+
+### 4.1 输入
+
+`win_collect_data/B0826-baseline-20260826-091209.zip`，未做任何修改。内含 6 个成员：
+
+```
+17,429,410  human-1-1787735531-9624-1.csv     ← 真正的那次驾驶，18,833 行
+     1,584  human-1-1787736065-9624-1.csv     ← 只有表头，0 行（中途退出的那次）
+     1,286  manifest.json
+65,703,364  session.mp4
+       248  participant.json
+       960  handover.json
+```
+
+### 4.2 importer 前半段 **[实测]**
+
+```
+safe_extract:          OK
+识别出的遥测 CSV：     2 个（含那个 0 行的）
+frames sidecar / cars：无 / 无
+video：                session.mp4  ✓
+session.json：         不存在 → metadata = {}
+focus_run_id：         human-1-1787735531-9624-1   ✓ 选对了
+```
+
+focus 是靠 `car_name` 列匹配 `human|player` 正则选中的 —— Apex 写的是 `Player`，**碰巧命中**。
+没有 `session.json` 时这是唯一的兜底路径（见 5.2）。
+
+服务端直接从 CSV 算出的成绩摘要，与研究预设（aalborg / car7-trb1 / 3 圈）完全吻合：
+
+```json
+{ "best_lap_time_s": 126.576, "mean_completed_lap_time_s": 128.152,
+  "completed_laps": 3, "finish_position": 1, "top_speed_kmh": 221.096,
+  "sim_duration_s": 384.468, "distance_raced_m": 7870.442 }
+```
+
+### 4.3 coaching pipeline **[实测]**
+
+补齐 5.1 的 14 列后，`build_torcs_coaching_pipeline.py` 正常结束：
+
+```
+rows 18833 | runs 1 | sample_rate_hz_estimate 50.0 | complete_laps 3
+track_length_m_estimate 2583.813   (Aalborg)
+raw_columns 120 | derived_columns_written 32
+event_count 183 | opportunity_count 18
+事件构成: track_edge_risk 78, corner_phase 63, braking_zone 29, load_spike 13
+```
+
+### 4.4 review package **[实测]**
+
+```
+Built review package with 40 events
+events 40，全部归属 focus run；84 个文件（keyframes / event_windows）
+importer 的最终关卡 "focus_events 非空" → PASS
+```
+
+这是 **telemetry-only 路径**（没传视频，因为本机没装 ffmpeg）。带视频的路径依赖服务端 ffmpeg +
+VMAF/SSIM 质量检查，本机验证不了。**[推断]** 视频侧应该没问题 —— 服务端对 mp4 只做 remux/重编码，
+不解析内容。
+
+## 5. 差异清单
+
+### 5.1 列差异：14 个 **[实测]**
+
+用"跑 → 报错 → 补 → 再跑"逐个逼出来的**完整清单**，不是猜的。
+
+**A 类 · 纯改名（1 个）** —— 零信息损失
+
+| IBMF1 要的 | Apex 有的 |
+|---|---|
+| `track_seg_width_m` | `track_width_m` |
+
+**B 类 · 单位换算（3 个）** —— 零信息损失，除以 9.80665
+
+| IBMF1 要的 | Apex 有的 |
+|---|---|
+| `accel_body_x_g` | `accel_body_x_mps2` |
+| `accel_body_y_g` | `accel_body_y_mps2` |
+| `accel_body_z_g` | `accel_body_z_mps2` |
+
+**C 类 · Apex 确实采不到（10 个）**
+
+```
+fr_slip_angle_rad     fl_slip_angle_rad     rr_slip_angle_rad     rl_slip_angle_rad
+fr_longitudinal_slip  fl_longitudinal_slip  rr_longitudinal_slip  rl_longitudinal_slip
+total_downforce_kg    aero_drag_n
+```
+
+为什么采不到：Apex 的记录器活在 **`human` 驱动**里，只能读驱动可见的 `car->priv.wheel[]`
+（`tWheelState`）和 `tCarElt`；队友的导出器活在 **simuv2 物理模块**里，能读物理内部结构。
+`docs/DATA_AVAILABILITY.md` 把 slip angle 溯源到 `tWheel.sa` —— 那是 simuv2 的私有 wheel 结构，
+不是驱动 ABI 的 `tWheelState`。气动力（`aero_drag_n` / `total_downforce_kg`）同理，来自 `tCar.aero`。**[推断]**
+
+> **待确认**：`tWheelState` 是否也暴露了 `sa`。锁定的 `torcs-1.3.9.tar.bz2`（563 MiB）被 gitignore 排除，
+> 本机没有，无法查证。解压后执行即可确认：
+>
+> ```bash
+> grep -n "sa;\|slip" src/interfaces/car.h
+> ```
+>
+> 若 `tWheelState` 有 `sa`，Apex 加 4 列就能补齐一半，成本极低。
+
+**这 10 列缺失的实际后果**：填 NaN 后流水线**照常完成**，只是依赖它们的检测器（understeer /
+oversteer index、气动相关）不会触发。实测的 183 个事件里确实没有这两类，其余四类正常产出。
+**这是一个干净的降级，不是数据错误** —— 前提是不能把"没检测到"说成"没发生"（见 7.3）。
+
+### 5.2 `session.json` 缺失的后果 **[读码]**
+
+Apex 写的是 `manifest.json`，不是 `session.json`。importer 允许没有，但网站会失去分组能力：
+
+| 字段 | 没有时的行为（`sessions.mjs`） |
+|---|---|
+| `player_id` | 分组键退化成 `id:unknown` —— **所有 Apex 上传的场次会挤进同一个匿名玩家桶** |
+| `display_name` | 标题变成 `"Imported session"` |
+| `session_number` / `attempt` | 序号排序失效，退回按记录时间排 |
+| `recorded_at` 等 | 网站按 ZIP 内的记录时间排序，缺了只能按上传时间 |
+| `focus_run_id` | 退到 `car_name` 正则兜底（目前碰巧能中） |
+
+`ibmf1-player-session-v2` 的完整字段见 `player_kit/tools/pack_session.py:562-601`。
+和 Apex 现有数据的对应关系 —— **这是最省事的部分，几乎全是现成的**：
+
+| session.json | Apex 来源 |
+|---|---|
+| `player_id` / `display_name` | `participant.json.participant_id`（假名，见 7.1） |
+| `attempt_label` / `study_arm` | `manifest.json.phase`（`baseline` / `coached` / `control`） |
+| `session_number` | 同一 participant 的第几次采集，Apex run store 里有 |
+| `started_at` / `finished_at` | `manifest.json.started_at` / `finished_at`（已是 UTC ISO） |
+| `track` / `vehicle` | `manifest.json.study_preset.track_id` / `car_id` |
+| `run_id` / `focus_run_id` | `manifest.json.runs[0].run_id` |
+| `telemetry_sha256` | `manifest.json.runs[0].sha256`（**已经在算了**） |
+| `sample_rate_hz` | 50 |
+| `controller` | `"human"` |
+| `video_file` | `session.mp4` |
+
+### 5.3 其他两个小问题 **[实测]**
+
+1. **0 行的第二个 CSV 会被当成第二个 run 收进去。** 实测流水线能吸收掉它
+   （最终 `runs: 1`，lap summary 里只有真实那条），所以不是阻断问题；但它会白白进服务端的
+   `source_data.zip`，理论上还可能被 `focus_run_id` 的兜底逻辑选中。打包时应该滤掉零行 CSV。
+2. **没有 `*.frames.csv`，录像与遥测的对齐会退化。** IBMF1 用这个 sidecar 把视频帧对到 sim_time；
+   没有它，Viewer 只能按恒定 fps 假设推算。我们这边 `docs/✔REPLAY_SYNC_POSITION_VS_TIME.md`
+   正好研究过同一个问题，两边应该统一到同一种对齐方式。
+
+## 6. 落地方案
+
+### P0 — 导出适配器 ✅ 已完成（2026-08-29）
+
+在 Apex 侧加了"导出为 IBMF1 bundle"的能力，**没改采集器、没改队友的服务端**。
+
+- **`src/f1coach_core/ibmf1.py`**（新增，纯数据、无 Qt）
+  - `to_ibmf1_columns(df)`：A 类改名 + B 类换算 + C 类补空列。**已有的列绝不覆盖** ——
+    将来采集器真的开始写某一列，测量值优先于翻译值。
+  - `study_arm_for(phase)`：见下面那条方框，这是全模块最要紧的一个函数。
+  - `build_session(...)`：按 5.2 的映射生成 `ibmf1-player-session-v2`。
+  - `package(capture_dir, destination, *, session_number, include_background, include_video)`：
+    滤掉零行 CSV，带上 `session.mp4` 和问卷，写 `session.json`。
+- **`src/racecoach/telemetry/ibmf1_upload.py`**（新增）：§3.1 的 POST + 轮询 + 退避重试。
+  **token 只从 `IBMF1_UPLOAD_TOKEN` 环境变量读，仓库里没有任何位置写过它**；没设就报错并说明怎么设，
+  而不是发一次匿名请求再拿 401。
+- **CLI**：`racecoach export-ibmf1 <capture_dir> [--out] [--session-number] [--no-background] [--no-video]`
+  和 `racecoach upload-ibmf1 <archive>`。
+
+放在 `f1coach_core` 是因为 AGENTS.md 规定它拥有遥测契约；上传是网络行为，归 `racecoach`。
+
+> **C 类 10 列：定为写空列，不是不写。**
+> 理由不是省事，而是"空"本身就是唯一诚实的值：pandas 读成 NaN，队友流水线在这些列上做的
+> 每个 quantile/mean 都会跳过它，所以依赖它们的检测器**不产出**，而不是从一个没人测过的数产出。
+> 写 0 才是发明通道。列名和原因写在 `UNAVAILABLE_CHANNELS` 的注释里，
+> 并且每个包的 `session.json` 都带 `apex_empty_columns` 明说哪些是占位。
+> 干净的解法仍在上游（P2 第 1 条）；那边落地后这个列表可以缩到空。
+
+> ⚠️ **`study_arm_for()` 是这次改动里唯一会伤到实验的函数。**
+> 只有 `phase == "coached"` 才声明成可辅导；`baseline`、`control` 以及将来任何新 phase
+> 都原样送过去。这**正好**咬合我提的 PR #15 —— 它对"不认识的组名"一律拦下。
+> 没有 phase 的采集会显式声明 `unknown` 而**不是**不声明：不声明恰恰是队友服务端读成"可以辅导"的那个值。
+> 方向错在安全那侧只是让参与者少看一次复盘；错在另一侧就是揭盲，实验当场作废。
+> CLI 每次导出都会把这句话打出来。
+
+**送出去的和不送的**：送遥测 CSV（翻译过）、`session.mp4`、`participant.json`、`session.json`。
+**不送** `manifest.json`（里面是本机盘符和用户名，而且它的摘要描述的是翻译前的文件）、
+`handover.json`（同样的摘要理由）、`exposure.jsonl`（参与者读了多少辅导，是本研究自己的测量，
+队友服务端也用不上）。翻译改变了文件字节，所以 `session.json` 同时带
+`telemetry_sha256`（**送出去那份**）和 `apex_source_sha256`（**本工作区测量的那份**），两者可以对上。
+
+#### P0 的验证
+
+| 检查 | 结果 |
+|---|---|
+| `tests/test_ibmf1.py` | **31 passed** |
+| `ruff check .`（CI 的命令，整仓库） | All checks passed |
+| `QT_QPA_PLATFORM=offscreen pytest -q` | **858 passed, 17 skipped** |
+| **端到端：适配器产出的包 → 队友真实流水线** | importer 认出遥测和视频 → coaching pipeline **无任何手工补列直接跑完** → review package **40 events，importer 终关卡 PASS** |
+| 在 PR 分支上验新函数 | `study_arm('baseline')` → **WITHHOLD**；`participant_profile()` 读出完整问卷 |
+| CLI 运行时 | baseline 打印"will withhold"；coached 打印"WILL offer"；`--no-video` 68.3 MiB → 5.9 MiB；无 token 时报错并退出 1 |
+
+端到端用的是真实数据：`win_collect_data/B0826-baseline-20260826-091209.zip` 解包后当作采集目录，
+产出 68.3 MiB 的包，里面只有那条 18833 行的真实驾驶（**空的那条被滤掉了**）。
+
+### P1 — Apex 直接写 `session.json`
+
+把 5.2 的映射前移到采集结束时，在 `manifest.json` 旁边直接落一份 `session.json`。
+这样"导出"退化成纯打包，也方便手动上传。
+
+### P2 — 上游对齐（需要和队友谈）
+
+1. 请队友给 C 类 10 列加缺失保护：缺失即跳过对应检测器，而不是 KeyError。
+2. 把 `track_seg_width_m` / `track_width_m` 的命名分歧定下来，写进一份共享的字段字典。
+3. 确认 `tWheelState.sa` 是否可用；可用的话 Apex 记录器补 4 列 slip angle。
+
+### P3 — 录像对齐
+
+统一 frames sidecar 的格式，让 Apex 的屏幕录像也能被 Viewer 精确对齐。
+
+## 7. 三个决定 —— 已定（2026-08-29）
+
+> 三条都由用户拍板了，结论写在每节开头。7.1 和 7.3 已经写成给队友仓库的两个 PR，见 §10。
+
+### 7.1 参与者数据能不能上传到队友的服务器
+
+> **已定：保留问卷数据，并把服务端这个缺陷补上。** 用户认为有参与者问卷会更好，
+> 否决了我"上传前剔除"的建议。对应 PR：`carry-participant-questionnaire`。
+
+`participant.json` 含 `age_band`、驾驶经验、模拟驾驶经验。虽然是假名（`B0826`），
+但这是**人体研究数据流向第三方主机**。importer 不解析它，但会把它原样收进服务端的
+`source_data.zip` 长期保存。
+
+选项：(a) 上传前剔除 `participant.json`；(b) 只上传遥测和视频，问卷留本地；(c) 确认现有同意书已覆盖。
+**建议 (a)** —— 网站根本不需要这些字段，去掉零成本。
+
+### 7.2 上传 token
+
+> **已定：接受现状。** 仓库目前私有，只有团队成员能访问，风险边界比我原先估计的小得多。
+> 我们这边仍然从环境变量 / keyring 读，不把 token 写进本仓库任何位置。
+
+队友仓库的 `player_kit/config/coach-endpoint.json` 里**明文提交了一个 upload token**。
+我没有把它复制到本仓库的任何位置，本文档也不记录它的值。
+
+两件事：(1) 我们这边一律从环境变量 / keyring 读，不进 git；(2) 建议提醒队友把它挪出仓库并轮换 ——
+现在任何能读到那个仓库的人都能往生产 ingest 接口投递数据。
+
+### 7.3 ⚠️ 会破坏实验设计的风险
+
+> **已定：提 PR 修掉。** 对应 PR：`withhold-coaching-from-control-arm`。
+> 读了队友的 `CLAUDE.md` 之后，这条比我原先写的更严重也更具体 —— 见下面的补充。
+
+**补充（读码后修正）：队友其实已经设计了对照组，但闸门只在客户端。**
+`CLAUDE.md` 的 "Study arms" 一节写着：`IBMF1_COACHING_ENABLED=false` 构建出对照组安装包，
+比赛照常打包上传（两组必须产出可比的遥测），**只是启动器跑完不打开 review**。
+但 `025c2b6` 之后任何人不用 key 就能从 Sessions 列表打开任何一场比赛，而 `/coach/stream`
+完全不知道"实验分组"这回事 —— 对照组参与者只要从网站找到自己那场，就能拿到 AI 辅导，
+事后数据里也看不出来。**这是他们自己实验设计里的漏洞，不只是 Apex 接入的问题。**
+
+`coach-endpoint.json` 里 `coaching_enabled: true` —— **网站导入后会自动跑 AI coaching 并展示。**
+
+如果把 **control 组或 baseline 阶段**的场次传上去，参与者一打开网站就会看到辅导内容，
+**正式对照实验的分组盲法当场失效**。这和 `docs/APEX_PARTICIPANT_WEB_ARCHITECTURE.md` 里
+已经写下的那条约束是同一件事："未接受辅导组在主要终点完成前必须被实验权限隐藏反馈。"
+
+所以上传必须按 `phase` 分流，或者等这批数据收完再传。**这个决定权在你，不是技术默认值。**
+
+## 8. 复现本文档的实测
+
+```bash
+# 1) importer 前半段 + 成绩摘要
+python - <<'PY'
+import sys; sys.path.insert(0, ".../IBMF1/deploy/coach_api")
+import import_torcs_bundle as imp
+imp.safe_extract(ARCHIVE, EXTRACTED)
+telemetry, sidecar, cars, video, metadata = imp.find_inputs(EXTRACTED)
+staged = imp.stage_telemetry(telemetry, STAGED, metadata)
+print(imp.focus_run_id(metadata, staged), imp.telemetry_performance(staged[0][1]))
+PY
+
+# 2) 补 14 列后跑 coaching pipeline（LIGHTWEIGHT=1 跳过 matplotlib）
+TORCS_TELEMETRY_DIR=... TORCS_COACHING_DIR=... TORCS_PIPELINE_WORK_DIR=... \
+TORCS_PIPELINE_LIGHTWEIGHT=1 MPLBACKEND=Agg \
+  python IBMF1/scripts/build_torcs_coaching_pipeline.py
+
+# 3) review package（需要 pillow）
+python IBMF1/scripts/build_torcs_review_package.py --output-dir ... \
+  --video-run-id human-1-1787735531-9624-1 --video-fps 10.0 --run-metadata ...
+```
+
+## 9. 给队友仓库的两个 PR（2026-08-29，已提交）
+
+- **PR #15 — Keep the control arm out of the coach** ← <https://github.com/UOBGraduate/IBMF1/pull/15>
+- **PR #16 — Keep the questionnaire that came with a race** ← <https://github.com/UOBGraduate/IBMF1/pull/16>
+
+两个都基于 `main`（`bf55b0d`），互相独立，各 1 个 commit。
+
+### 9.1 `withhold-coaching-from-control-arm` — PR #15，commit `43aa0ab`
+
+把对照组的闸门从客户端搬到服务端。
+
+- `import_torcs_bundle.py`：`session.json` 里本来就有 `study_arm`（`session_context.py`
+  归一成 `coached`/`control`，`pack_session.py` 写进去），importer 读了旁边每一个字段
+  **偏偏漏掉这个**。现在连同 `attempt_label` 一起记进 `import_summary.json`。
+- `sessions.mjs`：新增 `coachingAllowed()`。只有"声明是 coached"或"根本没声明"
+  （手动网页上传、内置 demo）才放行；**任何其他声明的分组一律拦下**，包括这个构建不认识的
+  ——不认识的组名不构成"可以看辅导"的证据。
+- `server.mjs`：`/coach/stream` 在查 checkpoint **之前**就返回 403。
+- **文案刻意不提分组**：403 只说 "AI coaching is not available for this race"，
+  且 `study_arm` 完全不进 `publicSessionView`。告诉参与者他在哪一组、或者把每场比赛的
+  分组公开给所有访客，等于用这道闸门本来要保护的那个页面把实验揭盲了。
+- 分组存在 `record_json` 里，不需要改表结构；有测试专门验它能挺过 SQLite 往返
+  —— 一道重启后悄悄失效的闸门比没有闸门更糟。
+- **已知限制（PR 里写明了）**：这次改动之前导入的比赛没有分组字段，仍然可辅导，
+  而且在存储数据里和手动上传无法区分。
+
+### 9.2 `carry-participant-questionnaire` — PR #16，commit `6e6480e`
+
+让服务端真正认识 Apex 的 `participant.json`（`apex-participant-v1`）。
+
+- 之前它只是躺在 `source_data.zip` 里，不手动解包就读不到 ——
+  **唯一说明"谁开的这场"的东西，恰恰是 session 目录唯一答不上来的东西。**
+- `participant_profile()`：每个包最多一个，六个短字段 + 一个校验过的时间戳，
+  逐个按他们既有的方式限长。不认识的键直接丢掉，包里塞不进任意内容；
+  完全没有问卷、或只有不认识的字段，就存 null 而不是一行空值。
+- **不进 `publicSessionView`。** 那个视图产出的每个响应都不需要 key，
+  年龄段 + 驾驶经验 + 昵称 + 圈速放在一起就不再是"比赛数据"而是"参与者数据"。
+  它留在存储记录里，研究者本来就有访问权。带 key 的研究者视图是自然的下一步，
+  这次刻意不做。
+
+### 9.3 验证情况
+
+| 门 | 结果 |
+|---|---|
+| `python -m unittest discover -s tests`（他们的 Python 门） | **155 passed, 7 skipped** —— rebase 到 `bf55b0d` 后两个分支都是 |
+| `node --test sessions.test.mjs server.test.mjs` | `withhold-…` **38 pass / 0 fail**；`carry-…` **37 pass / 0 fail**（rebase 后一次绿） |
+| **他们自己的 CI**（ubuntu + Node 20，PR 触发） | **#15 success，#16 success** —— 这才是权威平台 |
+
+两个 PR 都是 `mergeable: clean`：#15 +141/-3（6 个文件），#16 +139/-0（4 个文件）。
+| 新增测试单独重跑 | 对照组 5/5 绿；问卷 3 次里 2 次绿（第 3 次是下面那个抖动） |
+| `participant_profile()` 对真实 Apex 数据 | 四种情况全对（真实问卷 / 无文件 / 只有未知字段 / 两个文件报错） |
+
+为此在本机装了 Node（**v24.20.0 + npm 11.19.0**，官方 zip，SHA-256 对过 nodejs.org 发布值，
+装在 `D:\apex-build\toolchain\nodejs`）。
+
+**一个必须记下来的坑**：他们的 JS 套件在 Windows 上本来就抖 —— 大约每两次就有一次，
+某个测试在 `persistImportedSession` 的目录 rename 上挂 `EPERM`，每次挂的还不是同一个。
+**干净的 `main` 一样复现**（三次跑分别是 3 个失败、0、0），把 `TMP` 挪到 D: 也没用。
+是 Windows 目录重命名/杀软的问题，不是代码。他们 CI 是 ubuntu + Node 20，碰不到。
+**看到红的先重跑，别当成回归。**
+
+### 9.4 权限（已解决）
+
+一开始推不上去：`FatPoDany` 对 `UOBGraduate/IBMF1` 只有 `pull`，而且仓库私有 +
+`allow_forking: false`，连 fork-PR 路线都不存在。用户找人开了写权限（现在
+`{pull: true, push: true, triage: true}`），两个分支已推送、PR 已提交。
+
+**如果以后又推不上去，先查权限，不要当成凭据问题** —— token 的 `repo`/`workflow`
+scope 一直是好的。
+
+补丁仍留在 `C:\Users\hh25303\repos\ibmf1-patches\` 作为备份，但已经过时（那是 rebase 前的版本）。
+
+### 9.5 两个 PR 的相互影响
+
+它们互相独立，但改到了三个文件的相邻位置：`CHANGELOG.md`、`import_torcs_bundle.py`、
+`sessions.test.mjs`。**先合哪个都行**，后合的那个需要小 rebase，没有逻辑冲突。
+
+## 10. 未完成 / 下一步
+
+- [x] ~~7.1 / 7.3 提 PR~~ —— **#15、#16 已提交，CI 全绿，等队友 review**
+- [ ] 确认 `tWheelState.sa` 是否可用（需要解压锁定的 TORCS 归档）
+- [x] ~~P0 适配器实现 + 测试~~ —— 见 §6 P0，端到端跑通，858 passed
+- [ ] 带视频的完整 import 路径（需要服务端 ffmpeg，本机验证不了）
+- [ ] 和队友对齐 P2 的三条上游改动

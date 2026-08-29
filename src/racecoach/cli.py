@@ -136,6 +136,35 @@ def main(argv: list[str] | None = None) -> int:
         "--into", type=Path, required=True, help="folder to pool the sessions into"
     )
 
+    export_ibmf1_cmd = commands.add_parser(
+        "export-ibmf1", help="translate one capture folder for the team's Coach server"
+    )
+    export_ibmf1_cmd.add_argument("capture_dir", type=Path)
+    export_ibmf1_cmd.add_argument(
+        "--out", type=Path, default=None, help="destination .zip (default: alongside)"
+    )
+    export_ibmf1_cmd.add_argument(
+        "--session-number",
+        type=int,
+        default=None,
+        help="this participant's Nth race, when known (the site otherwise orders by time)",
+    )
+    export_ibmf1_cmd.add_argument(
+        "--no-background",
+        action="store_true",
+        help="leave the participant's questionnaire out of the bundle",
+    )
+    export_ibmf1_cmd.add_argument(
+        "--no-video",
+        action="store_true",
+        help="leave the screen recording out, for an upload over the server's body limit",
+    )
+
+    upload_ibmf1_cmd = commands.add_parser(
+        "upload-ibmf1", help="send one exported bundle to the Coach server and wait"
+    )
+    upload_ibmf1_cmd.add_argument("archive", type=Path)
+
     study_cmd = commands.add_parser(
         "study-summary",
         help="one row per participant per phase, for a paired statistical test",
@@ -496,6 +525,43 @@ def _dispatch(args: argparse.Namespace) -> int:
             "Next: racecoach study-summary --out summary.csv "
             "(study-laps for one row per lap, study-exposure for what was read)"
         )
+        return 0
+    if args.command == "export-ibmf1":
+        from f1coach_core.ibmf1 import COACHED_PHASE, package
+
+        out = args.out or args.capture_dir.with_name(f"{args.capture_dir.name}-ibmf1.zip")
+        bundle = package(
+            args.capture_dir,
+            out,
+            session_number=args.session_number,
+            include_background=not args.no_background,
+            include_video=not args.no_video,
+        )
+        size = bundle.bytes / (1024 * 1024)
+        print(f"{bundle.participant_id}: {bundle.rows} rows -> {bundle.path} ({size:.1f} MB)")
+        print(f"  focus run {bundle.focus_run_id}, {len(bundle.runs)} run(s)")
+        print(f"  recording: {'included' if bundle.has_video else 'not included'}")
+        # Said out loud because it is the difference between a participant seeing
+        # AI coaching and not, and it is decided from the capture's phase rather
+        # than by whoever runs this command.
+        if bundle.study_arm == COACHED_PHASE:
+            print("  study arm: coached -- the site WILL offer AI coaching for this race")
+        else:
+            print(
+                f"  study arm: {bundle.study_arm} -- the site will withhold AI coaching"
+            )
+        print("Next: racecoach upload-ibmf1 " + str(bundle.path))
+        return 0
+    if args.command == "upload-ibmf1":
+        from racecoach.telemetry.ibmf1_upload import IbmF1UploadError, deliver
+
+        try:
+            delivered = deliver(args.archive)
+        except IbmF1UploadError as exc:
+            print(str(exc))
+            return 1
+        print(delivered.message)
+        print(f"Review: {delivered.review_url}")
         return 0
     if args.command == "study-summary":
         from f1coach_core.adherence import adherence_all
