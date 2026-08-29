@@ -61,3 +61,9 @@ jobs:
         with:
           name: screenshots-${{ matrix.os }}
           path: shots/*.png
+          # Two OSes x ~175 KB of PNGs on every push, and the account default
+          # keeps them for 90 days. That filled the artifact storage quota and
+          # the upload started failing outright -- the four steps above had all
+          # passed. These are looked at within a day or two of the push they
+          # came from, so a week is longer than anyone needs them for.
+          retention-days: 7
