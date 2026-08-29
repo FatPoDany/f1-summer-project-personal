@@ -72,13 +72,12 @@ def main() -> int:
         print(f"  using packaged llama-server: {llama}")
     seed_workspace()
 
+    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QSplitter
 
     from apex.app import create_app
     from apex.main_window import MainWindow
     from f1coach_core import latest_coaching_report, load_session
-
-    from PySide6.QtCore import Qt
 
     app = create_app([sys.argv[0]])
     window = MainWindow()
