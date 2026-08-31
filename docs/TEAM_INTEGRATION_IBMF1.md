@@ -331,6 +331,10 @@ Apex 写的是 `manifest.json`，不是 `session.json`。importer 允许没有�
 - **`src/racecoach/telemetry/ibmf1_upload.py`**（新增）：§3.1 的 POST + 轮询 + 退避重试。
   **token 只从 `IBMF1_UPLOAD_TOKEN` 环境变量读，仓库里没有任何位置写过它**；没设就报错并说明怎么设，
   而不是发一次匿名请求再拿 401。
+  轮询**能扛住本机网络抖动**（2026-08-31 补）：一次没到达服务器的请求不是关于 job 的回答——
+  import 在他们机器上跑，这边看不看得见都一样。实测过一次 76 MB 的包被收下、job 起来了，
+  客户端却因为一次 `getaddrinfo failed` 报了失败。现在连续 10 次不通才放弃，
+  而且放弃时说的是"**可能已经成功了，去站点看**"，不是"失败了"。
 - **CLI**：`racecoach export-ibmf1 <capture_dir> [--out] [--session-number] [--no-background] [--no-video]`
   和 `racecoach upload-ibmf1 <archive>`。
 - **`frame_index()` / `session.frames.csv`**（2026-08-31 补）：带录像时必须同行的帧索引，见 P3。

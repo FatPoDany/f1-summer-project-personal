@@ -35,6 +35,16 @@ BUSY_DELAYS_S = (4, 8, 16, 32)
 POLL_INTERVAL_S = 2.0
 JOB_TIMEOUT_S = 15 * 60
 
+# A poll can fail because this workspace briefly lost the network rather than
+# because anything happened to the race, and the pipeline runs for minutes, so
+# over one import there is real time for a DNS hiccup to land in. Measured: a
+# 76 MB bundle was accepted, its job started, and the client then died on
+# getaddrinfo while their server was still working -- reporting a failure for an
+# import that was fine. These bound how long a quiet network is tolerated before
+# the wait gives up and says it does not know.
+UNREACHABLE_LIMIT = 10
+UNREACHABLE_DELAY_S = 15.0
+
 TOKEN_ENV = "IBMF1_UPLOAD_TOKEN"
 ORIGIN_ENV = "IBMF1_UPLOAD_ORIGIN"
 REVIEW_ORIGIN_ENV = "IBMF1_REVIEW_ORIGIN"
@@ -126,7 +136,7 @@ def _request(
     except urllib.error.HTTPError as error:
         return error.code, error.read()
     except urllib.error.URLError as error:
-        raise IbmF1UploadError(
+        raise _Unreachable(
             f"Could not reach the Coach server at {url}: {error.reason}"
         ) from error
 
@@ -189,6 +199,16 @@ class _Busy(IbmF1UploadError):
     """The server is queueing; the same bundle can be offered again."""
 
 
+class _Unreachable(IbmF1UploadError):
+    """One request never reached the server, so the server said nothing.
+
+    Distinct from every other failure here, all of which are the server's own
+    answer. A caller that is waiting on work already running on their machine
+    can retry this one; it is still an IbmF1UploadError, so a caller that does
+    not care sees no change.
+    """
+
+
 def wait_for(
     endpoint: Endpoint,
     job_id: str,
@@ -197,12 +217,36 @@ def wait_for(
     sleep=time.sleep,
     now=time.monotonic,
 ) -> dict:
-    """Poll until the pipeline finishes, because until it does there is no review."""
+    """Poll until the pipeline finishes, because until it does there is no review.
+
+    A poll that never reaches them is not an answer about the job. The import is
+    running on their machine and will finish whether or not this workspace can
+    see it, so a lost request is retried rather than reported as a failed race.
+    What is not tolerated is a silence long enough that nothing can be said
+    honestly: after UNREACHABLE_LIMIT polls in a row this gives up and says the
+    race may well be stored, rather than implying it is not.
+    """
     started = now()
+    unreachable = 0
     while now() - started <= timeout_s:
-        status, raw = _request(
-            f"{endpoint.job_url.rstrip('/')}/{job_id}", headers=_headers(endpoint), timeout=30
-        )
+        try:
+            status, raw = _request(
+                f"{endpoint.job_url.rstrip('/')}/{job_id}",
+                headers=_headers(endpoint),
+                timeout=30,
+            )
+        except _Unreachable as blip:
+            unreachable += 1
+            if unreachable >= UNREACHABLE_LIMIT:
+                raise IbmF1UploadError(
+                    f"Lost contact with the Coach server for {UNREACHABLE_LIMIT} polls "
+                    f"in a row while import job {job_id} was running. It may well have "
+                    f"finished: check {endpoint.review_url} before sending the race "
+                    "again."
+                ) from blip
+            sleep(UNREACHABLE_DELAY_S)
+            continue
+        unreachable = 0
         payload = _payload(raw)
         if status == 404:
             raise IbmF1UploadError(

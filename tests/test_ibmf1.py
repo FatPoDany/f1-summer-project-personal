@@ -604,3 +604,78 @@ def test_the_review_link_points_at_the_site_not_the_host_it_was_sent_to():
     assert endpoint.import_url.startswith(ibmf1_upload.DEFAULT_ORIGIN)
     assert endpoint.review_url == "https://demo.lzqqq.org/"
     assert endpoint.review_origin != endpoint.origin
+
+
+def _offline_endpoint() -> Endpoint:
+    """Somewhere nothing is listening; every request is answered by the stub."""
+    return Endpoint(origin="http://127.0.0.1:1", token="test-key", max_upload_bytes=1)
+
+
+def test_a_poll_that_never_reached_them_is_retried_not_called_a_failure(monkeypatch):
+    """The import runs on their machine whether or not this one can see it."""
+    calls = []
+    done = {"status": "complete", "message": "Stored.", "session": {"id": "abc"}}
+
+    def flaky(url, **kwargs):
+        calls.append(url)
+        if len(calls) <= 3:
+            raise ibmf1_upload._Unreachable("getaddrinfo failed")
+        return 200, json.dumps(done).encode("utf-8")
+
+    monkeypatch.setattr(ibmf1_upload, "_request", flaky)
+
+    finished = ibmf1_upload.wait_for(
+        _offline_endpoint(), "job-1", sleep=lambda _s: None
+    )
+
+    assert finished["status"] == "complete"
+    assert len(calls) == 4
+
+
+def test_losses_that_are_not_consecutive_do_not_add_up(monkeypatch):
+    """Nine blips either side of a good poll are not ten in a row."""
+    script = (
+        [None] * 9
+        + [{"status": "processing", "message": "Staging"}]
+        + [None] * 9
+        + [{"status": "complete", "message": "Stored.", "session": {}}]
+    )
+    seen = []
+
+    def patchy(url, **kwargs):
+        step = script[len(seen)]
+        seen.append(step)
+        if step is None:
+            raise ibmf1_upload._Unreachable("blip")
+        return 200, json.dumps(step).encode("utf-8")
+
+    monkeypatch.setattr(ibmf1_upload, "_request", patchy)
+
+    finished = ibmf1_upload.wait_for(
+        _offline_endpoint(), "job-2", sleep=lambda _s: None
+    )
+
+    assert finished["status"] == "complete"
+    assert len(seen) == len(script)
+
+
+def test_a_network_that_stays_down_says_the_race_may_still_be_stored(monkeypatch):
+    """Silence is not evidence the import failed, and must not be reported as it."""
+    def down(url, **kwargs):
+        raise ibmf1_upload._Unreachable("getaddrinfo failed")
+
+    monkeypatch.setattr(ibmf1_upload, "_request", down)
+
+    with pytest.raises(IbmF1UploadError) as raised:
+        ibmf1_upload.wait_for(_offline_endpoint(), "job-7", sleep=lambda _s: None)
+
+    message = str(raised.value)
+    assert "job-7" in message
+    assert "may well have finished" in message
+    # Sent to the site to look, not to the import host, which shows nothing.
+    assert "demo.lzqqq.org" in message
+
+
+def test_an_unreachable_server_still_reads_as_an_upload_error(monkeypatch):
+    """Callers that do not distinguish the two see no change."""
+    assert issubclass(ibmf1_upload._Unreachable, IbmF1UploadError)
