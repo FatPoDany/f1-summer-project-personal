@@ -7,7 +7,7 @@ six: both projects grew out of the same 249-column TORCS exporter vocabulary,
 which is also why ``f1coach_core.torcs`` can read theirs.
 
 So this is a translation, not a second measurement. Nothing here computes a
-telemetry fact. Three kinds of work happen:
+telemetry fact. Four kinds of work happen:
 
 * four columns their pipeline reads under a different name or in a different
   unit are added from the ones the recorder actually wrote;
@@ -16,7 +16,10 @@ telemetry fact. Three kinds of work happen:
   dies at ``add_features`` -- see ``UNAVAILABLE_CHANNELS`` for why empty rather
   than absent, and why empty rather than zero;
 * one ``session.json`` is written, in their schema, from what the capture's own
-  manifest already recorded.
+  manifest already recorded;
+* one ``*.frames.csv`` index is written when a recording travels with the race,
+  because their importer refuses media without one -- see ``frame_index`` for
+  how the times in it are recovered rather than invented.
 
 What is deliberately not sent: the capture manifest, whose paths name this
 machine and its user account and whose digests describe the pre-translation
@@ -32,8 +35,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
+# The clock the recorder stamps on every sample, and the only one a capture
+# shares with a screen recording, which knows nothing of simulation time. Taken
+# from the module that already joins footage to telemetry through it rather than
+# named a second time here.
+from f1coach_core.footage import WALL_CLOCK_COLUMN
 from f1coach_core.participant import Background, load_background
 
 # Their schema, not ours. Named here so a reader can find the other end:
@@ -41,6 +50,30 @@ from f1coach_core.participant import Background, load_background
 SESSION_SCHEMA_VERSION = "ibmf1-player-session-v2"
 SESSION_NAME = "session.json"
 BACKGROUND_NAME = "participant.json"
+# Any name ending in this is the one frame index their importer will accept, and
+# it will accept only one (import_torcs_bundle.find_inputs).
+SIDECAR_NAME = "session.frames.csv"
+
+# The rate the frame index is written at, and the rate their importer is told to
+# cut frames from the recording at, which have to be the same number: their
+# ffmpeg call samples the file every 1/fps seconds from its start and names each
+# frame by its position in that sequence, and every row here claims one of those
+# positions. Ten is their own default. Apex records at 30, and indexing all of it
+# would have their server cut ~37k stills out of a twenty-minute race to answer
+# questions asked about 0.1-second windows.
+SIDECAR_FPS = 10.0
+
+# Their own index carries a re_cur_time_s beside sim_time_s, the race engine's
+# own clock. Nothing outside the simulator can read that one, so it is left out
+# rather than filled with a second copy of a time it is not.
+SIDECAR_COLUMNS = (
+    "capture_id",
+    "frame_id",
+    "image_file",
+    "sim_time_s",
+    "display_width",
+    "display_height",
+)
 
 # What their importer requires of a CSV before it will treat it as telemetry at
 # all (deploy/coach_api/import_torcs_bundle.py, REQUIRED_TELEMETRY). An Apex
@@ -127,6 +160,7 @@ class Bundle:
     focus_run_id: str
     rows: int
     has_video: bool
+    frames: int = 0
 
     @property
     def bytes(self) -> int:
@@ -190,6 +224,122 @@ def study_arm_for(phase: str | None) -> str:
     if not cleaned:
         return UNDECLARED_ARM
     return cleaned
+
+
+def frame_index(
+    frame: pd.DataFrame | None,
+    recording: dict | None,
+    *,
+    fps: float = SIDECAR_FPS,
+    capture_id: str = "",
+    display: tuple[int | None, int | None] = (None, None),
+) -> pd.DataFrame:
+    """Where each frame of the recording sits in simulation time.
+
+    Their importer will not accept media without this (``prepare_media`` raises
+    "Captured media needs a *.frames.csv sidecar"), and their review builder uses
+    it to pick the still that belongs to a coaching event, by the ``sim_time_s``
+    written here. Their own capture writes it from inside the simulator, one row
+    per rendered frame, so the time is simply known.
+
+    Apex records the window from outside and knows no simulation time at all, so
+    the times are recovered rather than invented. Three measured facts are enough:
+    the recording knows the wall clock its first frame belongs to, every
+    telemetry sample carries the wall clock it was taken at, and their importer
+    cuts frames at a fixed rate from the start of the file. Frame n is therefore
+    the instant ``started_at + n / fps``, and its simulation time is read off the
+    telemetry at that instant.
+
+    Frames outside the telemetry are left out rather than pinned to its ends. The
+    recorder starts before the first sample and stops after the last, and a row
+    claiming those frames happened at the first or last simulation instant would
+    be a measurement nobody took -- and their builder picks a frame by nearest
+    ``sim_time_s``, so such rows would compete to illustrate the opening and
+    closing events. ``frame_id`` stays the number their ffmpeg call will give the
+    frame, so leaving rows out never moves the rows that remain.
+    """
+    if not isinstance(recording, dict) or recording.get("started_at") is None:
+        raise IbmF1ExportError(
+            "This capture's manifest records no recording start, so there is no "
+            "way to say when any frame of the video was taken. Their importer "
+            "rejects a bundle whose media has no frame index, so export without "
+            "the recording (racecoach export-ibmf1 --no-video) to send the "
+            "telemetry on its own."
+        )
+    if frame is None or WALL_CLOCK_COLUMN not in frame.columns:
+        raise IbmF1ExportError(
+            f"The focus run has no {WALL_CLOCK_COLUMN} column, which is the only "
+            "clock it shares with the recording, so no frame of the video can be "
+            "placed in simulation time. Export without the recording "
+            "(racecoach export-ibmf1 --no-video) to send the telemetry on its own."
+        )
+
+    wall = pd.to_numeric(frame[WALL_CLOCK_COLUMN], errors="coerce")
+    sim = pd.to_numeric(frame.get("sim_time_s"), errors="coerce")
+    usable = wall.notna() & sim.notna()
+    clock = wall[usable].to_numpy(dtype=float)
+    times = sim[usable].to_numpy(dtype=float)
+    if clock.size == 0:
+        raise IbmF1ExportError(
+            "The focus run carries no sample with both a wall clock and a "
+            "simulation time, so the recording cannot be placed against it."
+        )
+    order = np.argsort(clock, kind="stable")
+    clock, times = clock[order], times[order]
+
+    started = float(recording["started_at"])
+    duration = float(recording.get("duration_s") or 0.0)
+    # One short of the frames ffmpeg will emit. A row naming a frame that was
+    # never cut points their builder at a file that is not there; a frame with no
+    # row is merely never chosen.
+    ids = np.arange(max(0, int(duration * fps)))
+    instants = started + ids / fps
+    inside = (instants >= clock[0]) & (instants <= clock[-1])
+    ids, instants = ids[inside], instants[inside]
+    if ids.size == 0:
+        raise IbmF1ExportError(
+            "The recording and the telemetry do not overlap in wall-clock time, "
+            "so not one frame can be given a simulation time. Check the capture "
+            "manifest's recording start, or export with --no-video."
+        )
+
+    width, height = display
+    return pd.DataFrame(
+        {
+            "capture_id": capture_id,
+            "frame_id": ids,
+            # Their importer overwrites this with exactly this name, built from
+            # frame_id. Writing it here keeps the file readable on its own.
+            "image_file": [f"torcs-0001-{int(n):08d}.png" for n in ids],
+            "sim_time_s": np.round(np.interp(instants, clock, times), 4),
+            "display_width": width,
+            "display_height": height,
+        },
+        columns=list(SIDECAR_COLUMNS),
+    )
+
+
+def _participant_id(manifest: dict) -> str:
+    """Who this race belongs to, refused early rather than half-way through.
+
+    Checked before anything is written: the session this ends up in is keyed on
+    it, and a capture without one cannot produce a bundle at all, so failing
+    after packing 70 MB of video only leaves a half-written ZIP behind.
+    """
+    participant = str(manifest.get("participant_id") or "").strip()
+    if not participant:
+        raise IbmF1ExportError(
+            "This capture records no participant id, so the site would file it "
+            "under an anonymous player with everybody else's."
+        )
+    return participant
+
+
+def _display_size(manifest: dict) -> tuple[int | None, int | None]:
+    preset = manifest.get("study_preset")
+    if not isinstance(preset, dict):
+        return (None, None)
+    return (preset.get("window_width"), preset.get("window_height"))
 
 
 def _capture_manifest(capture_dir: Path) -> dict:
@@ -288,6 +438,7 @@ def build_session(
     source_sha256: str | None,
     rows: int,
     video_file: str | None,
+    video_fps: float | None = None,
     session_number: int | None = None,
 ) -> dict:
     """The ``session.json`` their importer reads, from what the capture recorded.
@@ -297,12 +448,7 @@ def build_session(
     sequence here would order somebody's races by when they happened to be
     exported.
     """
-    participant = str(manifest.get("participant_id") or "").strip()
-    if not participant:
-        raise IbmF1ExportError(
-            "This capture records no participant id, so the site would file it "
-            "under an anonymous player with everybody else's."
-        )
+    participant = _participant_id(manifest)
     phase = manifest.get("phase")
     preset = manifest.get("study_preset") if isinstance(manifest.get("study_preset"), dict) else {}
     exported = datetime.now(UTC).isoformat(timespec="seconds")
@@ -342,6 +488,11 @@ def build_session(
         ),
         "apex_empty_columns": sorted(UNAVAILABLE_CHANNELS),
     }
+    # Only when there is a recording. Their importer reads this key as
+    # ``float(metadata.get("video_fps", 10.0))``, which a present-but-null value
+    # would turn into a TypeError rather than the default.
+    if video_fps is not None:
+        session["video_fps"] = video_fps
     if session_number is not None:
         session["session_number"] = session_number
         session["attempt"] = session_number
@@ -368,11 +519,17 @@ def package(
     do without: a bundle with no video imports as a telemetry-only race, with
     generated track keyframes in place of real ones. ``include_video=False`` is
     how an upload gets under a body limit without dropping any measurement.
+
+    A recording never travels alone. Their importer refuses media that arrives
+    without a frame index, so one is written beside it -- see ``frame_index``.
+    When the capture cannot support an honest index, this raises rather than
+    quietly sending the race without its video.
     """
     capture_dir = Path(capture_dir)
     if not capture_dir.is_dir():
         raise IbmF1ExportError(f"Not a capture folder: {capture_dir}")
     manifest = _capture_manifest(capture_dir)
+    _participant_id(manifest)
     sources = _telemetry_files(capture_dir, manifest)
 
     videos = sorted(
@@ -388,6 +545,9 @@ def package(
 
     # (source, member name, rows, digest of the bytes actually sent)
     translated: list[tuple[Path, str, int, str]] = []
+    # Kept per run while each file is open, so indexing the recording later does
+    # not mean reading an 18 MB CSV a second time.
+    clocks: dict[str, pd.DataFrame] = {}
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as archive:
@@ -397,6 +557,8 @@ def package(
                 index=False, lineterminator="\n"
             ).encode("utf-8")
             archive.writestr(source.name, payload)
+            if {WALL_CLOCK_COLUMN, "sim_time_s"} <= set(frame.columns):
+                clocks[source.name] = frame[[WALL_CLOCK_COLUMN, "sim_time_s"]].copy()
             translated.append(
                 (source, source.name, len(frame), hashlib.sha256(payload).hexdigest())
             )
@@ -416,8 +578,18 @@ def package(
         }
 
         video_name = videos[0].name if videos else None
+        frames = pd.DataFrame()
         if video_name:
+            frames = frame_index(
+                clocks.get(focus_name),
+                manifest.get("recording"),
+                capture_id=Path(focus_name).stem,
+                display=_display_size(manifest),
+            )
             archive.write(videos[0], video_name)
+            archive.writestr(
+                SIDECAR_NAME, frames.to_csv(index=False, lineterminator="\n")
+            )
 
         if include_background:
             background = _background_for(capture_dir, manifest)
@@ -436,6 +608,7 @@ def package(
             source_sha256=_digest(focus_source),
             rows=focus_rows,
             video_file=video_name,
+            video_fps=SIDECAR_FPS if video_name else None,
             session_number=session_number,
         )
         archive.writestr(
@@ -450,4 +623,5 @@ def package(
         focus_run_id=session["focus_run_id"],
         rows=focus_rows,
         has_video=video_name is not None,
+        frames=len(frames),
     )

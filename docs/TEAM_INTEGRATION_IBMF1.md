@@ -13,7 +13,9 @@ Apex 采集的原始 CSV **已经能被队友的整套服务端流水线处理**
 三段全部跑通，最后产出 **40 个 review event 的完整 review package**，并通过了 importer 的最终关卡
 （"必须存在属于真人车手的 coaching checkpoint"）。
 
-差的只有三件事：**14 个列名/单位适配、一个 `session.json`、一次上传调用。**
+差的只有四件事：**14 个列名/单位适配、一个 `session.json`、一份帧索引、一次上传调用。**
+四件都做完了，而且 **2026-08-31 已经真的传上去并被导入**（§4.5）：
+`Custom session stored — 40 checkpoints`。
 
 ## 1. 为什么会这么顺 —— 两边本来就共用一套词汇
 
@@ -51,7 +53,7 @@ Apex 采集的原始 CSV **已经能被队友的整套服务端流水线处理**
 
 ## 3. 上传契约（读自队友源码）
 
-### 3.1 HTTP 接口 **[读码]**
+### 3.1 HTTP 接口 **[实测]**（2026-08-31 真实跑通）
 
 来源：`player_kit/tools/upload_session.py`、`player_kit/config/coach-endpoint.json`
 
@@ -80,6 +82,41 @@ GET  https://upload.lzqqq.org/api/import/jobs/<job_id>
   超过约 100 MB 的 body 会被边缘直接 413。`upload.lzqqq.org` 直连源站，上限是 nginx 的 **300 MB**。
 - 判重用**整个 ZIP 的 SHA-256**（`sessions.mjs:437 findDuplicateArchive`）。改任何一个字节都会变成新场次。
 - 超限时官方客户端会自动剥掉视频重传（telemetry-only）。
+
+#### 3.1.1 两个凭据，两个头 **[实测]**
+
+`server.mjs:653 hasUploadAccess` 认两个互不相同的头，任一通过即可：
+
+```javascript
+export function hasUploadAccess(request) {
+  return validImportToken(request.headers["x-import-token"])        // IMPORT_TOKEN
+    || validPlayerUploadToken(request.headers["x-player-upload-token"]);  // PLAYER_UPLOAD_TOKEN
+}
+```
+
+**用 player token，不要用 import token。** 两者的定位和直觉相反，写在他们自己的
+`docs/deployment/MYSERVER.md` 里：
+
+| | `PLAYER_UPLOAD_TOKEN` | `IMPORT_TOKEN`（部署脚本里叫 `TORCS_IMPORT_TOKEN`） |
+|---|---|---|
+| 头 | `X-Player-Upload-Token` | `X-Import-Token` |
+| 形状 | 52 字符，`ibmf` 前缀 | 64 位十六进制 |
+| 存放 | `player_kit/config/coach-endpoint.json`，随每个安装包分发 | 服务器 `/etc/torcs-review-coach.env`，来自密钥库 |
+| 文档原话 | 第 1210 行"**this token is not a secret**" | 第 1195 行"the **production upload credential**…**Never put values in shell history, command arguments, documentation, Git, build output, or chat**" |
+
+本仓库的上传器只发 `X-Player-Upload-Token`，且只从 `IBMF1_UPLOAD_TOKEN` 环境变量取值。
+**不要把 import token 交给它**，那是拿生产密钥做一件公开凭据就能做的事。
+
+只读探针（查一个不存在的 job id，不产生任何写入）可以分辨两者：凭据不对回
+`401 {"error":"The import access key is not valid."}`，凭据对但 job 不存在回
+`404 {"error":"This import job was not found or has expired."}`。
+
+#### 3.1.2 review 链接不是上传地址 **[实测]**
+
+上传答复里没有 review 链接，要自己拼。**上传发 `upload.lzqqq.org`，看结果去
+`demo.lzqqq.org`** —— 前者不跑站点，把司机指过去只会看到空白。队友的
+`coach_config.py:100` 就是分开的：`review_url` 用 `coach_origin`，`import_url` 用 `upload_origin`。
+本仓库一开始两个都用了上传域名，2026-08-31 修正为 `DEFAULT_REVIEW_ORIGIN`。
 
 ### 3.2 ZIP 内容的硬性要求 **[读码]**
 
@@ -172,8 +209,28 @@ importer 的最终关卡 "focus_events 非空" → PASS
 ```
 
 这是 **telemetry-only 路径**（没传视频，因为本机没装 ffmpeg）。带视频的路径依赖服务端 ffmpeg +
-VMAF/SSIM 质量检查，本机验证不了。**[推断]** 视频侧应该没问题 —— 服务端对 mp4 只做 remux/重编码，
-不解析内容。
+VMAF/SSIM 质量检查，本机验证不了。
+
+> ❌ **这里原本写着一条 [推断]：「视频侧应该没问题 —— 服务端对 mp4 只做 remux/重编码，不解析内容」。
+> 2026-08-31 的真实上传证明它是错的。** 服务端确实不解析 mp4 的内容，但在碰 mp4 之前就先要一份
+> 帧索引，没有就拒掉整个 import（见 §6 P3）。留着这条记录是因为它说明了 **[推断]** 标记的用处：
+> 当时标对了，所以后来知道该去验哪一条。
+
+### 4.5 真实上传 **[实测]**（2026-08-31）
+
+第一次往生产服务器发，用的是 §3.1.1 那个 player token：
+
+| 包 | 结果 |
+|---|---|
+| `B0826-coached`，带视频，72.8 MB | 收下、job 起来、轮询拿回错误：`Captured media needs a *.frames.csv sidecar` |
+| `B0826-coached`，`--no-video`，6.2 MB | ✅ **`Custom session stored — 40 checkpoints`** |
+
+第一行虽然失败，但它把 §3.1 从 **[读码]** 变成了 **[实测]**：鉴权、`User-Agent`、
+`X-IBMF1-Ingest`、202 → 轮询 → 终态这一整条链路全部走通，失败发生在服务端的业务校验里。
+第二行是**这个项目第一次把 Apex 采集的数据真的放进队友的站点**。
+
+40 个 checkpoint 与 §4.4 本机跑出来的数量一致 —— 同一份数据、同一套流水线，
+一次在本机、一次在他们服务器上，结果对得上。
 
 ## 5. 差异清单
 
@@ -276,6 +333,8 @@ Apex 写的是 `manifest.json`，不是 `session.json`。importer 允许没有�
   而不是发一次匿名请求再拿 401。
 - **CLI**：`racecoach export-ibmf1 <capture_dir> [--out] [--session-number] [--no-background] [--no-video]`
   和 `racecoach upload-ibmf1 <archive>`。
+- **`frame_index()` / `session.frames.csv`**（2026-08-31 补）：带录像时必须同行的帧索引，见 P3。
+- **`DEFAULT_REVIEW_ORIGIN`**（2026-08-31 补）：看结果的域名和上传的域名不是一个，见 §3.1.2。
 
 放在 `f1coach_core` 是因为 AGENTS.md 规定它拥有遥测契约；上传是网络行为，归 `racecoach`。
 
@@ -324,9 +383,60 @@ Apex 写的是 `manifest.json`，不是 `session.json`。importer 允许没有�
 2. 把 `track_seg_width_m` / `track_width_m` 的命名分歧定下来，写进一份共享的字段字典。
 3. 确认 `tWheelState.sa` 是否可用；可用的话 Apex 记录器补 4 列 slip angle。
 
-### P3 — 录像对齐
+### P3 — 录像对齐 ✅ 已完成（2026-08-31）
 
-统一 frames sidecar 的格式，让 Apex 的屏幕录像也能被 Viewer 精确对齐。
+**触发它的是一次真实上传的失败。** 带视频的包传上去，服务端 job 起来了然后报
+`Captured media needs a *.frames.csv sidecar`（`import_torcs_bundle.py:489`）：
+`prepare_media` 只要发现有视频或图片而没有帧索引，就拒掉整个 import。
+
+读下来发现这条比原先估的便宜得多 **[读码]**：
+
+- `import_torcs_bundle.py:541` —— 包里没有 PNG 时，**服务端自己用 ffmpeg 从视频里按
+  `video_fps` 抽帧**，命名 `torcs-0001-%08d.png`，`-start_number 0`。所以 Apex **不需要**
+  输出 PNG 序列，只要给出一份索引。
+- `prepare_media` 对索引的硬要求只有两条：非空、有 `frame_id` 列。
+- `build_torcs_review_package.py:1465` 定义 `frame_id` 是"**Zero-based frame number**"，
+  `sim_time_s` 用来把复盘事件配到最近的一帧。
+
+于是 `f1coach_core.ibmf1.frame_index()` 写出 `session.frames.csv`：
+
+| 列 | 来源 |
+|---|---|
+| `frame_id` | 服务端 ffmpeg 会给这一帧的序号，`int(duration_s * fps)` 之内 |
+| `sim_time_s` | 由 wall clock 反查出来（见下） |
+| `image_file` | `torcs-0001-{frame_id:08d}.png`，与服务端命名一致 |
+| `capture_id` / `display_width` / `display_height` | focus run id / manifest 的 `study_preset` |
+
+不写 `re_cur_time_s`：那是 TORCS 自己的引擎时钟，模拟器外面读不到，宁可缺列也不拿另一个时间冒充。
+
+> ⚠️ **不能假设 sim_time 就是视频时间。实测这台机器上差了三倍。**
+> `B0826-coached` 这场：wall clock 跨 **1233.1 s**，而 `sim_time_s` 只跑到 **405.15 s**。
+> 机器跟不上 TORCS 时模拟时间就慢下来。如果按"第 n 帧 = sim_time n/fps"去对，
+> 最后一帧会错 800 多秒——整场复盘的画面全是错的角落。
+> 对齐必须走 `wall_clock_s`：录像知道自己第一帧的 wall clock（`manifest.recording.started_at`），
+> 每个遥测样本带着自己的 wall clock，两者一插值就得到帧的模拟时间。
+> `f1coach_core/footage.py` 早就是这么做的，常量也从那里取，不在这里重名一次。
+
+**遥测覆盖不到的帧直接不写，而不是钉到首尾。** 录像比 TORCS 早开、比它晚停，
+把开头那 34 帧说成"发生在第一个采样的时刻"是没人测过的数；而且他们的 builder 是按
+`sim_time_s` 最近来挑帧的，这种行会去争着当开场和收尾事件的配图。`frame_id` 保持
+ffmpeg 会给的真实序号，所以少写几行不会挪动剩下的行。
+
+`session.json` 同时写 `video_fps`，**必须和索引的行频一致**（服务端按它抽帧）。取
+`SIDECAR_FPS = 10.0`，是他们的默认值；Apex 录的是 30 fps，全索引会让服务端为一场
+二十分钟的比赛切出约 37000 张图，而复盘只在约 40 个事件点各取一帧。
+没有录像时**不写这个键**——他们读的是 `float(metadata.get("video_fps", 10.0))`，
+键在而值为 null 会变成 TypeError 而不是取默认值。
+
+**验证 [实测]**：真实 `B0826-coached` 导出 12331 行索引，`frame_id` 34–12364 连续，
+首尾两行的 `sim_time_s` 用独立重算对上（0.1014 / 405.0736），最大 `frame_id` 小于
+ffmpeg 会切出的 12484 帧。8 个新单元测试覆盖插值、越界剔除、`video_fps` 的有无、
+以及两种拒绝路径。
+
+**还没实测的一环**：`frame_id` ↔ `torcs-0001-%08d.png` 的对应是**读码**得到的，
+这台机器上没有 ffmpeg（只有打包进研究版的那份），没能自己抽帧核对；
+带视频的包也还没往生产服务器传过——传一次会让他们的服务器从 21 分钟的录像里切出
+约 12500 张图，值得先跟队友打个招呼。
 
 ## 7. 三个决定 —— 已定（2026-08-29）
 
@@ -478,7 +588,13 @@ scope 一直是好的。
 ## 10. 未完成 / 下一步
 
 - [x] ~~7.1 / 7.3 提 PR~~ —— **#15、#16 已提交，CI 全绿，等队友 review**
+- [x] ~~P0 适配器实现 + 测试~~ —— 见 §6 P0，端到端跑通
+- [x] ~~真实上传到 demo.lzqqq.org~~ —— 见 §4.5，telemetry-only 已 stored，40 checkpoints
+- [x] ~~P3 帧索引~~ —— 见 §6 P3，866 passed
+- [ ] **带视频的包真实上传一次** —— 索引已经写出来并按真实数据核过，但没在生产服务器上跑过。
+      传一次会让他们的服务器从 21 分钟录像里切出约 12500 张图，**先跟队友说一声**。
+- [ ] `frame_id` ↔ `torcs-0001-%08d.png` 自己抽帧核对一次（这台机器没有 ffmpeg，目前是读码）
 - [ ] 确认 `tWheelState.sa` 是否可用（需要解压锁定的 TORCS 归档）
-- [x] ~~P0 适配器实现 + 测试~~ —— 见 §6 P0，端到端跑通，858 passed
-- [ ] 带视频的完整 import 路径（需要服务端 ffmpeg，本机验证不了）
 - [ ] 和队友对齐 P2 的三条上游改动
+- [ ] 建议队友轮换 `IMPORT_TOKEN`：2026-08-31 它被贴进过对话和本机 shell 历史，
+      按 `MYSERVER.md:1201` 的要求这两处都不该出现它

@@ -1,6 +1,7 @@
 """Translating a capture for the team's Coach server, and getting it there."""
 
 import hashlib
+import io
 import json
 import threading
 import zipfile
@@ -13,6 +14,9 @@ import pytest
 from f1coach_core.ibmf1 import (
     GRAVITY_MPS2,
     REQUIRED_COLUMNS,
+    SIDECAR_COLUMNS,
+    SIDECAR_FPS,
+    SIDECAR_NAME,
     UNAVAILABLE_CHANNELS,
     Bundle,
     IbmF1ExportError,
@@ -34,6 +38,7 @@ from racecoach.telemetry.ibmf1_upload import (
 # would pass even if the translation stopped reading any of them.
 SOURCE_COLUMNS = [
     *REQUIRED_COLUMNS,
+    "wall_clock_s",
     "track_width_m",
     "accel_body_x_mps2",
     "accel_body_y_mps2",
@@ -42,10 +47,16 @@ SOURCE_COLUMNS = [
 ]
 
 
-def _frame(rows: int = 3) -> pd.DataFrame:
+# Epoch seconds, because that is what the recorder stamps. The recording in the
+# fixtures below is placed against this, the way a real one is.
+FIRST_SAMPLE_CLOCK = 1787735531.0
+
+
+def _frame(rows: int = 3, *, start_clock: float = FIRST_SAMPLE_CLOCK) -> pd.DataFrame:
     return pd.DataFrame(
         {
             "sim_time_s": [0.02 * n for n in range(rows)],
+            "wall_clock_s": [start_clock + 0.02 * n for n in range(rows)],
             "race_lap": [1] * rows,
             "speed_body_x_mps": [40.0 + n for n in range(rows)],
             "pos_x_m": [100.0 + n for n in range(rows)],
@@ -80,7 +91,21 @@ def capture(tmp_path, monkeypatch):
                 "phase": "baseline",
                 "started_at": "2026-08-26T09:12:09+00:00",
                 "finished_at": "2026-08-26T09:21:13+00:00",
-                "study_preset": {"track_id": "aalborg", "car_id": "car7-trb1", "laps": 3},
+                "study_preset": {
+                    "track_id": "aalborg",
+                    "car_id": "car7-trb1",
+                    "laps": 3,
+                    "window_width": 1280,
+                    "window_height": 720,
+                },
+                # Half a second of video over five samples: one frame of it lands
+                # inside the telemetry at the ten frames a second the index is
+                # written at, which is what makes this bundle importable at all.
+                "recording": {
+                    "path": r"C:\Users\admin\Apex\captures\session.mp4",
+                    "started_at": FIRST_SAMPLE_CLOCK - 0.02,
+                    "duration_s": 0.5,
+                },
                 "runs": [
                     {
                         "file": "human-1-1787735531-9624-1.csv",
@@ -307,6 +332,129 @@ def test_a_folder_that_is_not_a_capture_is_refused(tmp_path, monkeypatch):
         package(directory, tmp_path / "out.zip")
 
 
+# --- the frame index -------------------------------------------------------
+
+
+@pytest.fixture
+def long_capture(tmp_path, monkeypatch):
+    """Ten seconds of telemetry inside a twelve-second recording.
+
+    Long enough that the index has an interior to check, and offset so that the
+    recording starts a second before the first sample and runs on after the
+    last -- which is what a real one does, the recorder being started before
+    TORCS and stopped after it.
+    """
+    monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "ws"))
+    directory = tmp_path / "B0826-coached-20260826-095423"
+    directory.mkdir()
+    _frame(500).to_csv(directory / "human-1-1787735531-9624-1.csv", index=False)
+    (directory / "session.mp4").write_bytes(b"not really an mp4")
+    (directory / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "apex-human-capture-v1",
+                "participant_id": "B0826",
+                "phase": "coached",
+                "started_at": "2026-08-26T09:54:23+00:00",
+                "study_preset": {"window_width": 1280, "window_height": 720},
+                "runs": [{"file": "human-1-1787735531-9624-1.csv", "samples": 500}],
+                "recording": {
+                    "started_at": FIRST_SAMPLE_CLOCK - 1.0,
+                    "duration_s": 12.0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return directory
+
+
+def _index(bundle_path) -> pd.DataFrame:
+    with zipfile.ZipFile(bundle_path) as archive:
+        return pd.read_csv(io.BytesIO(archive.read(SIDECAR_NAME)))
+
+
+def test_a_recording_travels_with_the_index_their_importer_demands(capture):
+    """prepare_media raises "Captured media needs a *.frames.csv sidecar"."""
+    bundle = package(capture, capture.parent / "out.zip")
+
+    members = _members(bundle.path)
+    assert SIDECAR_NAME in members
+    # Their find_inputs refuses a bundle carrying more than one of these.
+    assert len([name for name in members if name.endswith(".frames.csv")]) == 1
+    assert list(_index(bundle.path).columns) == list(SIDECAR_COLUMNS)
+    assert bundle.frames == 1
+
+
+def test_a_frame_is_indexed_at_the_instant_the_recording_puts_it(long_capture):
+    """frame n is started_at + n/fps, and its sim time is read off the telemetry."""
+    bundle = package(long_capture, long_capture.parent / "out.zip")
+    index = _index(bundle.path)
+
+    # The recording leads the telemetry by a second, so the first frame that has
+    # any simulation time to report is the tenth at ten frames a second.
+    assert int(index["frame_id"].iloc[0]) == 10
+    assert index["sim_time_s"].iloc[0] == pytest.approx(0.0, abs=1e-3)
+    assert int(index["frame_id"].iloc[-1]) == 109
+    assert index["sim_time_s"].iloc[-1] == pytest.approx(9.9, abs=1e-3)
+    assert (index["frame_id"].diff().dropna() == 1).all()
+    assert index["sim_time_s"].is_monotonic_increasing
+
+
+def test_frames_taken_before_and_after_the_telemetry_are_left_out(long_capture):
+    """Not pinned to the first and last sample: nobody measured those instants."""
+    bundle = package(long_capture, long_capture.parent / "out.zip")
+    index = _index(bundle.path)
+
+    # 120 frames fit in twelve seconds; ten seconds of telemetry indexes 100.
+    assert len(index) == 100
+    assert bundle.frames == 100
+    # frame_id stays the number their ffmpeg call will give the frame, so the
+    # rows that remain still name files that exist.
+    assert index["image_file"].iloc[0] == "torcs-0001-00000010.png"
+    assert index["display_width"].iloc[0] == 1280
+
+
+def test_the_bundle_declares_the_rate_it_indexed_the_recording_at(long_capture):
+    """Their importer cuts frames at session.json's video_fps; the index assumes it."""
+    bundle = package(long_capture, long_capture.parent / "out.zip")
+
+    assert _session(bundle.path)["video_fps"] == SIDECAR_FPS
+
+
+def test_a_race_sent_without_its_recording_declares_no_frame_rate(capture):
+    """They read it as float(metadata.get(...)), which a null would not survive."""
+    bundle = package(capture, capture.parent / "out.zip", include_video=False)
+
+    assert "video_fps" not in _session(bundle.path)
+    assert SIDECAR_NAME not in _members(bundle.path)
+    assert bundle.frames == 0
+
+
+def test_a_recording_with_no_recorded_start_is_refused_not_sent_unindexed(capture):
+    """Sending it anyway fails their whole import, and the race with it."""
+    manifest = json.loads((capture / "manifest.json").read_text(encoding="utf-8"))
+    manifest.pop("recording")
+    (capture / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(IbmF1ExportError, match="--no-video"):
+        package(capture, capture.parent / "out.zip")
+
+
+def test_a_run_with_no_wall_clock_cannot_place_the_recording(capture):
+    """The wall clock is the only thing the two share; without it there is no map."""
+    telemetry = capture / "human-1-1787735531-9624-1.csv"
+    pd.read_csv(telemetry).drop(columns=["wall_clock_s"]).to_csv(telemetry, index=False)
+
+    with pytest.raises(IbmF1ExportError, match="wall_clock_s"):
+        package(capture, capture.parent / "out.zip")
+
+    # The measurements still travel; only the recording cannot.
+    bundle = package(capture, capture.parent / "quiet.zip", include_video=False)
+    assert bundle.has_video is False
+    assert bundle.rows == 5
+
+
 # --- delivering it ---------------------------------------------------------
 
 
@@ -433,3 +581,12 @@ def test_the_upload_host_defaults_to_the_one_that_is_not_behind_the_cdn():
 
     assert endpoint.origin == ibmf1_upload.DEFAULT_ORIGIN
     assert endpoint.import_url.endswith("/api/import")
+
+
+def test_the_review_link_points_at_the_site_not_the_host_it_was_sent_to():
+    """The import host runs no site: a driver sent there is shown nothing."""
+    endpoint = endpoint_from_env({"IBMF1_UPLOAD_TOKEN": "k"})
+
+    assert endpoint.import_url.startswith(ibmf1_upload.DEFAULT_ORIGIN)
+    assert endpoint.review_url == "https://demo.lzqqq.org/"
+    assert endpoint.review_origin != endpoint.origin
