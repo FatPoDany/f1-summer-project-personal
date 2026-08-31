@@ -58,10 +58,18 @@ SIDECAR_NAME = "session.frames.csv"
 # cut frames from the recording at, which have to be the same number: their
 # ffmpeg call samples the file every 1/fps seconds from its start and names each
 # frame by its position in that sequence, and every row here claims one of those
-# positions. Ten is their own default. Apex records at 30, and indexing all of it
-# would have their server cut ~37k stills out of a twenty-minute race to answer
-# questions asked about 0.1-second windows.
-SIDECAR_FPS = 10.0
+# positions.
+#
+# Four, not their default of ten, and the reason is their own MAX_FILES = 6000.
+# Their captures carry the stills inside the bundle, so that ceiling is also the
+# most frames their pipeline has ever been handed for one race. Apex sends a
+# recording instead and their server cuts the stills itself, which is not
+# bounded by MAX_FILES -- at ten a twenty-minute race would have them cut ~12.5k,
+# twice anything they have run on. Four keeps a race of that length under their
+# own ceiling. What is lost is resolution nobody uses: the review picks one still
+# per event, about forty of them, and a quarter of a second at this capture's
+# rate is under a tenth of a second of simulation time.
+SIDECAR_FPS = 4.0
 
 # Their own index carries a re_cur_time_s beside sim_time_s, the race engine's
 # own clock. Nothing outside the simulator can read that one, so it is left out
