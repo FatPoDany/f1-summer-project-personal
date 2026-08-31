@@ -1,7 +1,7 @@
 """Serial, evidence-audited coaching work requested by the Garage."""
 
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -17,6 +17,7 @@ from f1coach_core import (
     latest_coaching_report,
     run_audited_coaching,
 )
+from f1coach_core.features import CornerScatter, corner_scatter
 from f1coach_core.reference import CompositeReference, composite_reference
 from racecoach.granite import host as gh
 from racecoach.granite.server import GraniteServer
@@ -61,6 +62,7 @@ class _CoachingJob(QRunnable):
         *,
         provider_name: str,
         provider_factory: Callable[[], CoachProvider],
+        session_laps: Sequence[Lap] = (),
     ) -> None:
         super().__init__()
         self.signals = _JobSignals()
@@ -68,6 +70,26 @@ class _CoachingJob(QRunnable):
         self._reference = reference
         self._provider_name = provider_name
         self._provider_factory = provider_factory
+        # The laps, not the spread computed from them: measuring it is a
+        # second pass over every lap in the session, and this constructor runs
+        # on the UI thread once per lap. It is computed in ``run`` instead,
+        # where a session long enough for the cost to show is already waiting
+        # on a model that takes minutes per lap.
+        self._session_laps = tuple(session_laps)
+
+    def _scatter(self) -> CornerScatter | None:
+        """This driver's spread through the corners of the lap being coached.
+
+        Measured on this lap's own grid, never the session best's: corner names
+        come from detecting apexes on one lap, so a spread taken elsewhere
+        would raise the bar at a corner that is not the one on the card.
+        """
+        if len(self._session_laps) < 2:
+            return None
+        try:
+            return corner_scatter(list(self._session_laps), self._lap) or None
+        except (ValueError, IndexError, KeyError):
+            return None
 
     def run(self) -> None:
         try:
@@ -103,6 +125,7 @@ class _CoachingJob(QRunnable):
             self._reference,
             provider_name=self._provider_name,
             provider_factory=self._provider_factory,
+            scatter=self._scatter(),
         )
         if attempt.error is not None:
             message = attempt.error
@@ -197,6 +220,7 @@ class GarageCoachingQueue(QObject):
                 reference,
                 provider_name=self._provider_name,
                 provider_factory=self._provider_factory,
+                session_laps=session.laps,
             )
             task.signals.progress.connect(self._forward_progress)
             task.signals.done.connect(self._job_done)

@@ -184,11 +184,13 @@ class _CoachTask(QRunnable):
         reference: Lap | None,
         *,
         restore_before_run: bool = False,
+        scatter: CornerScatter | None = None,
     ) -> None:
         super().__init__()
         self.signals = _CoachSignals()
         self._provider, self._lap, self._reference = provider, lap, reference
         self._restore_before_run = restore_before_run
+        self._scatter = scatter
 
     def run(self) -> None:
         if self._restore_before_run:
@@ -210,6 +212,7 @@ class _CoachTask(QRunnable):
             provider_name=self._provider.name,
             provider_factory=lambda: self._provider,
             on_progress=self.signals.progress.emit,
+            scatter=self._scatter,
         )
         if attempt.audit_error is not None:
             print(
@@ -809,6 +812,7 @@ class CoachPanel(QWidget):
             self._lap,
             self._reference,
             restore_before_run=restore_before_run,
+            scatter=self._scatter,
         )
         task.signals.finished.connect(
             lambda report, current=task: self._task_finished(current, report)

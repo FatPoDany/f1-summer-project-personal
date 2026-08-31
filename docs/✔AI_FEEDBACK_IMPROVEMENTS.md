@@ -1416,3 +1416,106 @@ handling for participant telemetry"），工作树里只剩一个 ruff I001 的�
 
 和 §10.6、§11.6 一样没变：`opportunity_catalog` 那组阈值仍未标定，
 `brake_applications` 的数字键措辞仍是一条**教练判断**而不是测量结论，等你确认。
+
+## 15. 把天花板抬起来（2026-08-31）
+
+> 起点是队友仓库那套 AI 教练能不能接进来。读完两边的码，结论是**不接它的模型，移植它的
+> 三个机制**：队友的 coach 是 DeepSeek 云 API（`server.mjs:65`），接过来意味着参与者
+> 遥测出境，外加一个云依赖成为实验仪器的单点故障。值得拿的是它**校验数字**而不是禁止
+> 数字的做法、那套"说人话不说字段名"的措辞规则，以及跨圈的不重复。
+>
+> 另外，Apex 的采集尚未开始，所以 §10.6 当时"数据还在收，不划算"的理由也不再成立。
+
+### 15.1 §10.6 那条阻塞其实不用付它的代价
+
+§10.6 说要让 `opportunity_catalog` 认散布，就得把散布塞进 evidence packet，而 packet 是
+每份审计的匹配键，动它会让已存的分析全部失配。
+
+**不用。散布作为参数传进去就行，packet 一个字节都不动。** 关键性质是单调的：
+`bar = max(fixed, scatter) >= fixed`，所以认散布的目录永远是原目录的**子集**。
+生成时用严格的门槛，审计时不带散布用宽松的门槛照样接受同一份报告。
+这条性质有测试盯着（`test_a_card_chosen_against_the_spread_still_stands_without_it`）。
+
+代码里本来就有这个模式的先例：`CoachProvider.device` 的注释写得很清楚——
+"不属于 evidence packet，因为那个 dict 是每份审计的匹配键"。散布走同一条路，
+由 `run_audited_coaching` 设置，因为那一层握着 lap。
+
+### 15.2 卡片这一侧现在和 debrief 用同一把尺
+
+四组阈值里的第四组（`opportunity_catalog`）不再自带常量，改成读 `NOTABLE_THRESHOLDS`：
+
+| 指标 | 改前 | 改后 |
+|---|---|---|
+| `brake_point` | ref − 10 | 10（本来就一致） |
+| `min_speed` | ref − 3 | 3，**且认散布** |
+| `throttle_reapply` | ref + 15 | **10** |
+| `coast_distance` | ref + 10 | **15** |
+
+`NOTABLE_THRESHOLDS` 没有标定的五个指标（`entry_speed`、`exit_speed`、`throttle_point`、
+`full_throttle`、`exit_throttle`）保留原常量，集中在 `_UNCALIBRATED_BARS`，不再散在 lambda 里。
+
+**在 sample session 上量到的效果**（`laps[0]` 对 `laps[4]`）：卡片从 **20 张降到 17 张**，
+掉的三张**全部是 `min_speed`**（T1、T5、T8）。这正是 §10.3 的诊断——`min_speed` 的 3.0 km/h
+门槛低于这位车手自己 8 km/h 的抖动，所以它既不可能不响，又因为门槛同时是排序的除数而必然获胜。
+
+### 15.3 模板从"无条件覆盖"变成"兜底"
+
+这是这批改动里唯一改变参与者读到的**文字来源**的一条。
+
+改前：`_ground_model_prose` 在校验**之前**无条件跑，把 focus/issue/cause/action 全部换成模板。
+配合 `_require_measurement_free_prose`（prose 里出现任何数字直接判失败），
+结果就是 §1 那个结论——**模型一个字都没写到参与者眼前**，它唯一的自由度是挑哪几个 (弯, 指标)。
+
+改后：
+
+- 先用模型自己的措辞过一遍完整合同。过了就**保留模型的话**。
+- 没过才落到模板，再校验一次。**兜底路径和改前完全一样**，所以这条改动的下界就是现状：
+  最坏情况下参与者读到的和今天一模一样，不可能更差。
+- 数字校验从"一个都不许有"换成**"只能说这条 finding 自己引用的数"**：
+  value、ref、两者之差、span，以及弯名里的数字（`T3` 的 3 不是测量值）。
+  按模型自己选的精度比较，所以 7.63 写成 `7.63`、`7.6`、`8` 都算同一个主张，
+  写成别的数就是别的数——见 `supported_measurements` 和 `_quotes_a_measurement`。
+
+**差值是特意放进白名单的**：它才是这张卡真正在说的量（"这里慢了三公里"），
+而且它由两个已经对过遥测的数推出来，不是在旁边现编的。
+
+一个副作用要说清楚：**同一份报告里现在可能混着模型的话和模板的话**。改前所有 finding 都被
+压成模板，措辞相同的会合并；现在一条过了校验、一条落到模板，它们说的确实不是同一句话，
+就不再合并（`test_duplicate_mislabelled_comparison_finding_is_grounded_and_merged` 改成盯这件事）。
+
+### 15.4 措辞规则和跨圈不重复
+
+提示词（`PROMPT_VERSION` `coach-v4` → **`coach-v5`**）现在明说：可以写数字，但只能写这条
+finding 引用的；用车手的话说这个数，不要说字段名（"中段慢了三公里"，不是 "min_speed 46.2"）；
+**不要打印负数**，说差在哪一侧；每句最多一个数；不要给 packet 里没有的目标（刹车距离、
+时间收益、百分比）。后面四条是从队友的 `coachSystemPrompt` 搬来的。
+
+`prior_advice()`（`audit.py`）读同一个 session 里**其他圈**的审计记录，取每条 finding 的
+`action`，最多 6 条，塞进提示词并要求不要重复。只取 action：要求车手做的事不该重复，
+而同一个弯的 issue/cause 再说一次是合理的。
+
+**为什么这不破坏可复现性**：审计记录本来就逐字存 `"prompt"`，所以当时喂给模型的
+"已经说过的话"是留档的。而且它按圈过滤掉自己（`test_a_lap_is_never_told_what_it_was_itself_told`），
+否则重新生成会被要求"不要重复你自己"。
+
+队列那边把 laps 交给 job，散布在 **`run()` 里**算而不是构造函数里——构造函数跑在 UI 线程上、
+每圈一次；实测一次 `corner_scatter` 在 5 圈的 session 上是 27 ms，20 圈的场次总量约 2 秒，
+相对每圈几分钟的模型调用可以忽略，但放在 UI 线程上就会卡。
+
+### 15.5 验证
+
+- **红过再绿**：把模板改回无条件覆盖，`test_the_model_keeps_its_own_words_when_they_quote_its_own_evidence`
+  和那条合并测试立刻红；恢复后全绿。
+- 白名单第一版按字符串枚举写，**被自己的测试抓到一个真 bug**：`1595.0` 是被引用的精确值
+  却被拒（枚举漏了尾随零）。改成按模型选的精度做数值比较。
+- **`844 passed / 17 skipped`**（改前 827/17，新增 17 个测试）。`ruff check src tests` 干净。
+- 20→17、掉的三张全是 `min_speed`，是用发布路径跑出来的，不是估的。
+
+### 15.6 没验的一件事（要你定）
+
+**没有拿真的 Granite 跑过一次。** 模型权重只有一份，在参与者工作区
+`C:\Users\hh25303\Apex\models\` 里，规矩是不碰那个目录。所以"Granite 实际写出来的措辞
+能不能过白名单"是唯一没测的环节。
+
+它的下界是安全的（过不了就落模板，等于现状），但**上界没量过**——有可能大部分 finding 仍然
+落到模板，那这批改动实际起作用的就只剩 §15.2 的阈值收紧。要量的话，需要你点头读一次权重。

@@ -135,11 +135,34 @@ def test_validator_rejects_non_finite_evidence(summary, field, value):
 
 
 @pytest.mark.parametrize("field", ["issue", "cause", "action"])
-def test_validator_keeps_numeric_claims_inside_evidence(summary, field):
+def test_validator_refuses_a_measurement_the_finding_does_not_cite(summary, field):
     payload = valid_payload(summary)
-    payload["findings"][0][field] = "The measurement differs by 42 metres."
-    with pytest.raises(CoachingSchemaError, match="must not contain numeric values"):
+    payload["findings"][0][field] = "The measurement differs by 424242 metres."
+    with pytest.raises(CoachingSchemaError, match="not a measurement this finding cites"):
         coaching_report_from_dict(payload, summary)
+
+
+@pytest.mark.parametrize("field", ["issue", "cause", "action"])
+def test_validator_lets_a_finding_quote_the_value_it_cites(summary, field):
+    payload = valid_payload(summary)
+    cited = payload["findings"][0]["evidence"][0]
+    spoken = f"You reached {round(cited['value'], 1)} here."
+    payload["findings"][0][field] = spoken
+    report = coaching_report_from_dict(payload, summary)
+    assert getattr(report.findings[0], field) == spoken
+
+
+@pytest.mark.parametrize("field", ["issue", "cause", "action"])
+def test_validator_lets_a_finding_quote_the_gap_it_is_about(summary, field):
+    """The difference is derived from two checked numbers, not a third one."""
+    payload = valid_payload(summary)
+    cited = payload["findings"][0]["evidence"][0]
+    gap = round(abs(cited["value"] - cited["ref"]))
+    assert gap, "this fixture needs a corner where the two numbers differ"
+    spoken = f"That is {gap} away from the reference."
+    payload["findings"][0][field] = spoken
+    report = coaching_report_from_dict(payload, summary)
+    assert getattr(report.findings[0], field) == spoken
 
 
 @pytest.mark.parametrize("level", ["top", "finding", "evidence"])

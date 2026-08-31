@@ -25,6 +25,7 @@ from f1coach_core.coach import (
     CoachProvider,
     coaching_report_from_dict,
 )
+from f1coach_core.features import CornerScatter
 from f1coach_core.input_device import InputDevice, detect_input_device
 from f1coach_core.lap import NO_IDENTITY, Lap, StudyIdentity
 from f1coach_core.llm import build_coach_prompt
@@ -59,6 +60,7 @@ def run_audited_coaching(
     provider_name: str,
     provider_factory: Callable[[], CoachProvider],
     on_progress: Callable[[str], None] | None = None,
+    scatter: CornerScatter | None = None,
 ) -> AuditedCoachingAttempt:
     """Build, validate, and audit one report through a shared trusted path.
 
@@ -80,12 +82,19 @@ def run_audited_coaching(
     error: str | None = None
     try:
         summary = evidence_for(lap, reference)
-        prompt = build_coach_prompt(summary)
+        told = prior_advice(lap)
+        prompt = build_coach_prompt(summary, scatter, told)
         provider = provider_factory()
         # Set here rather than asked of the factory: the factory belongs to the
         # caller and knows about servers and endpoints, while the device is a
         # property of this lap, which is held here.
         provider.device = device.kind
+        # Same reason as the device, and the same route: the spread through a
+        # corner is a property of this session, which is held here and nowhere
+        # below. Without it the cards would go on using a bar this driver's own
+        # lap-to-lap movement clears without meaning anything.
+        provider.scatter = scatter
+        provider.prior_advice = told
         report = provider.generate(summary, on_progress=progress)
     except Exception as exc:  # provider and imported telemetry are trust boundaries
         error = str(exc)
@@ -123,6 +132,55 @@ def coaching_audit_dir(lap_source: str | Path | None) -> Path:
         if parent.is_dir() and parent.is_relative_to(sessions_root()):
             return parent / AUDIT_DIR_NAME
     return workspace_root() / AUDIT_DIR_NAME
+
+
+PRIOR_ADVICE_LIMIT = 6
+
+
+def prior_advice(lap: Lap, *, limit: int = PRIOR_ADVICE_LIMIT) -> tuple[str, ...]:
+    """What this driver has already been told, on the other laps of this run.
+
+    A session is coached lap by lap, and a participant reads the laps in a row.
+    Without this the same instruction arrives on every screen, because the same
+    corner really is the biggest difference every time -- the advice is correct
+    and reading it five times still teaches nothing the first one did not.
+
+    Only the action is taken: what the driver was asked to do is the thing that
+    must not repeat, while an issue and a cause may legitimately be restated
+    about the same corner. Newest first and capped, because this rides in the
+    prompt of a small local model whose context is the scarce resource here.
+    """
+    directory = coaching_audit_dir(lap.source)
+    if not directory.is_dir():
+        return ()
+    seen: dict[str, None] = {}
+    for path in sorted(directory.glob("*.json"), reverse=True):
+        if len(seen) >= limit:
+            break
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(record, dict) or record.get("ok") is not True:
+            continue
+        if record.get("lap") == lap.source.stem:  # this lap, not another
+            continue
+        report = record.get("report")
+        findings = report.get("findings") if isinstance(report, dict) else None
+        if not isinstance(findings, list):
+            continue
+        for finding in findings:
+            if not isinstance(finding, dict):
+                continue
+            action = finding.get("action")
+            evidence = finding.get("evidence")
+            corner = None
+            if isinstance(evidence, list) and evidence and isinstance(evidence[0], dict):
+                corner = evidence[0].get("corner")
+            if isinstance(action, str) and action.strip() and len(seen) < limit:
+                where = f"{corner}: " if isinstance(corner, str) and corner else ""
+                seen.setdefault(f"{where}{action.strip()}")
+    return tuple(seen)
 
 
 def write_coaching_audit(

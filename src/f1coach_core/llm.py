@@ -1,6 +1,7 @@
 """Evidence-grounded prompt, JSON Schema, extraction, and response validation."""
 
 import json
+from collections.abc import Sequence
 
 from f1coach_core.coach import (
     EVIDENCE_METRICS,
@@ -12,9 +13,10 @@ from f1coach_core.coach import (
     coaching_report_from_dict,
     opportunity_catalog,
 )
+from f1coach_core.features import CornerScatter
 from f1coach_core.guidance import guidance_for
 
-PROMPT_VERSION = "coach-v4"
+PROMPT_VERSION = "coach-v5"
 
 _METRIC_HELP = {
     "brake_point": "first rising crossing of 20% brake on the approach",
@@ -51,6 +53,14 @@ corner zones that crossed a deterministic technique review threshold. In this
 mode, the `ref` field is that code-stamped review threshold, not another lap
 and not an optimal target. Do not claim a lap-time loss or improvement."""
 
+_ALREADY_SAID = """
+You have already told this driver the following, earlier in this same run:
+{advice}
+
+Do not repeat advice they have had. If the corner you would name is one of
+those, either say what is different about it this time or choose another.
+"""
+
 _INSTRUCTIONS = """\
 You are IBM Granite 4.1 acting as a racing driver coach. Use ONLY the
 deterministic telemetry evidence below.
@@ -60,25 +70,32 @@ deterministic telemetry evidence below.
 A missing value means the event was not detected; never infer it.
 
 For each finding, choose exactly one focus: braking, cornering, or throttle.
-The issue, cause, and action must be concise and actionable. Do not put numeric
-values in those prose fields; all numbers belong only in evidence citations.
+The issue, cause, and action must be concise and actionable.
 Every citation must copy metric, corner, value, ref, unit, and span_m exactly;
 never invent values. Never invent corners, measurements, causes, vehicle
 behaviour, or a racing line.
+
+You MAY put a number in the prose, but only a number this finding cites: a
+value, a ref, or the difference between them, rounded if you like. Any other
+number is refused and your sentence is thrown away. Say what a number means in
+a driver's words, never the name of the field it came from: "three km/h slower
+through the middle", not "min_speed 46.2". Never print a field name, and never
+print a negative number -- say which way the difference goes instead. At most
+one number per sentence, and only where it sharpens the point.
 
 Metric definitions:
 {metric_help}
 
 Evidence packet:
 {summary}
-
+{already_said}
 Return ONLY a JSON object, without markdown, with this shape:
 
 {{"findings": [
   {{"focus": "<braking|cornering|throttle>",
-    "issue": "<corner and the main opportunity, without measurements>",
-    "cause": "<difference directly supported by cited metrics, without measurements>",
-    "action": "<one concrete technique to try, without measurements>",
+    "issue": "<corner and the main opportunity>",
+    "cause": "<difference directly supported by cited metrics>",
+    "action": "<one concrete technique to try>",
     "evidence": [
       {{"metric": "<available metric>", "corner": "<available corner>",
         "value": <exact driver value>, "ref": <exact reference value>,
@@ -92,6 +109,8 @@ Rules:
 - Use each (corner, metric) citation at most once across the entire response.
 - Group citations for the same metric and technique into one finding; never repeat a finding.
 - Recommend only differences supported by the cited measurements.
+- Never state a target the packet does not contain: no braking distance,
+  time gain, or percentage to aim for.
 - If the evidence packet has no corners, return {{"findings": []}}.
 """
 
@@ -114,8 +133,15 @@ def _prompt_summary(evidence_summary: dict) -> dict:
     }
 
 
-def build_coach_prompt(evidence_summary: dict) -> str:
-    metrics = {name: _METRIC_HELP[name] for _, name in opportunity_catalog(evidence_summary)}
+def build_coach_prompt(
+    evidence_summary: dict,
+    scatter: CornerScatter | None = None,
+    prior_advice: Sequence[str] = (),
+) -> str:
+    metrics = {
+        name: _METRIC_HELP[name]
+        for _, name in opportunity_catalog(evidence_summary, scatter)
+    }
     context = {
         "single_lap": _SINGLE_LAP_CONTEXT,
         "composite": _COMPOSITE_CONTEXT,
@@ -124,6 +150,13 @@ def build_coach_prompt(evidence_summary: dict) -> str:
         context=context,
         metric_help=json.dumps(metrics, indent=2),
         summary=json.dumps(_prompt_summary(evidence_summary), indent=2),
+        already_said=(
+            _ALREADY_SAID.format(
+                advice="\n".join(f"- {line}" for line in prior_advice)
+            )
+            if prior_advice
+            else ""
+        ),
     )
 
 
@@ -140,9 +173,11 @@ def _citation_schema(citation: dict) -> dict:
     }
 
 
-def build_coach_response_format(evidence_summary: dict) -> dict:
+def build_coach_response_format(
+    evidence_summary: dict, scatter: CornerScatter | None = None
+) -> dict:
     """Strict OpenAI-compatible JSON Schema with only real citations allowed."""
-    citations = list(opportunity_catalog(evidence_summary).values())
+    citations = list(opportunity_catalog(evidence_summary, scatter).values())
     citation_items = (
         {"oneOf": [_citation_schema(citation) for citation in citations]}
         if citations
@@ -238,6 +273,7 @@ def report_from_llm_text(
     evidence_summary: dict | None = None,
     *,
     device: str = "",
+    scatter: CornerScatter | None = None,
 ) -> CoachingReport:
     """Parse model output, stamp provenance, and publish only grounded findings.
 
@@ -246,6 +282,15 @@ def report_from_llm_text(
     are merged, and an invalid finding is isolated so it cannot suppress valid
     siblings. Every finding that survives still passes the complete strict
     contract and exact evidence check.
+
+    The model keeps its own words when they survive that contract, and is
+    replaced by the metric's template when they do not. It used to be replaced
+    either way: the templates ran before the check, so the check could only
+    ever see prose the model had not written, and no sentence a participant
+    read had come from the model at all. Which of the two a finding used is not
+    stored, because it does not need to be -- a stored finding whose wording is
+    the template for its own metric, device and mode is one that fell back, and
+    ``guidance_for`` still answers that question for any audit on disk.
     """
     data = extract_json_object(text)
     findings = data.get("findings")
@@ -256,29 +301,42 @@ def report_from_llm_text(
             {"findings": findings, "model": model, "prompt_version": PROMPT_VERSION},
             evidence_summary,
             opportunities_only=True,
+            scatter=scatter,
         )
 
     accepted: list[dict] = []
     claim_indexes: dict[tuple[str, str, str, str], int] = {}
     used_citations: set[tuple[str, str]] = set()
     first_rejection: CoachingSchemaError | None = None
+
+    def check(finding: dict) -> None:
+        coaching_report_from_dict(
+            {
+                "findings": [finding],
+                "model": model,
+                "prompt_version": PROMPT_VERSION,
+            },
+            evidence_summary,
+            opportunities_only=True,
+            scatter=scatter,
+        )
+
     for raw in findings:
         candidate = _without_repeated_citations(raw, used_citations)
-        _ground_model_prose([candidate], evidence_summary, device)
+        # A model asked how sure it is will answer, and the answer measures
+        # nothing. Dropped before either path, so it can never reach an audit
+        # record and be read back later as though something had computed it.
+        candidate.pop("confidence", None)
         try:
-            coaching_report_from_dict(
-                {
-                    "findings": [candidate],
-                    "model": model,
-                    "prompt_version": PROMPT_VERSION,
-                },
-                evidence_summary,
-                opportunities_only=True,
-            )
-        except CoachingSchemaError as exc:
-            if first_rejection is None:
-                first_rejection = exc
-            continue
+            check(candidate)
+        except CoachingSchemaError:
+            _ground_model_prose([candidate], evidence_summary, device)
+            try:
+                check(candidate)
+            except CoachingSchemaError as exc:
+                if first_rejection is None:
+                    first_rejection = exc
+                continue
 
         claim = (
             candidate["focus"],
@@ -306,6 +364,7 @@ def report_from_llm_text(
         {"findings": accepted, "model": model, "prompt_version": PROMPT_VERSION},
         evidence_summary,
         opportunities_only=True,
+        scatter=scatter,
     )
 
 
