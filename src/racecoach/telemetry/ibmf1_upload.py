@@ -24,6 +24,12 @@ DEFAULT_ORIGIN = "https://upload.lzqqq.org"
 IMPORT_PATH = "/api/import"
 JOB_PATH = "/api/import/jobs"
 
+# Where a stored race is read, which is not where it was sent. The import host
+# runs no site: a driver pointed at it is shown nothing. Their own player kit
+# keeps the two apart the same way -- player_kit/tools/coach_config.py builds its
+# review_url from coach_origin and its import_url from upload_origin.
+DEFAULT_REVIEW_ORIGIN = "https://demo.lzqqq.org"
+
 DEFAULT_MAX_UPLOAD_MB = 300  # nginx's limit on that host
 BUSY_DELAYS_S = (4, 8, 16, 32)
 POLL_INTERVAL_S = 2.0
@@ -31,6 +37,7 @@ JOB_TIMEOUT_S = 15 * 60
 
 TOKEN_ENV = "IBMF1_UPLOAD_TOKEN"
 ORIGIN_ENV = "IBMF1_UPLOAD_ORIGIN"
+REVIEW_ORIGIN_ENV = "IBMF1_REVIEW_ORIGIN"
 MAX_UPLOAD_ENV = "IBMF1_MAX_UPLOAD_MB"
 
 
@@ -53,6 +60,7 @@ class Endpoint:
     origin: str
     token: str
     max_upload_bytes: int
+    review_origin: str = DEFAULT_REVIEW_ORIGIN
 
     @property
     def import_url(self) -> str:
@@ -61,6 +69,10 @@ class Endpoint:
     @property
     def job_url(self) -> str:
         return f"{self.origin.rstrip('/')}{JOB_PATH}"
+
+    @property
+    def review_url(self) -> str:
+        return f"{self.review_origin.rstrip('/')}/"
 
 
 def endpoint_from_env(environ: dict[str, str] | None = None) -> Endpoint:
@@ -81,6 +93,7 @@ def endpoint_from_env(environ: dict[str, str] | None = None) -> Endpoint:
         origin=(environ.get(ORIGIN_ENV) or DEFAULT_ORIGIN).strip(),
         token=token,
         max_upload_bytes=int(limit_mb * 1024 * 1024),
+        review_origin=(environ.get(REVIEW_ORIGIN_ENV) or DEFAULT_REVIEW_ORIGIN).strip(),
     )
 
 
@@ -234,14 +247,14 @@ def deliver(
             continue
         if accepted.get("duplicate"):
             return Delivered(
-                review_url=endpoint.origin,
+                review_url=endpoint.review_url,
                 duplicate=True,
                 message="This race is already on the Coach site; nothing was sent twice.",
                 session=accepted.get("session") or {},
             )
         finished = wait_for(endpoint, str(accepted["job_id"]))
         return Delivered(
-            review_url=endpoint.origin,
+            review_url=endpoint.review_url,
             duplicate=False,
             message=str(finished.get("message") or "The race is stored and ready to review."),
             session=finished.get("session") if isinstance(finished.get("session"), dict) else {},

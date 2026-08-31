@@ -540,7 +540,10 @@ def _dispatch(args: argparse.Namespace) -> int:
         size = bundle.bytes / (1024 * 1024)
         print(f"{bundle.participant_id}: {bundle.rows} rows -> {bundle.path} ({size:.1f} MB)")
         print(f"  focus run {bundle.focus_run_id}, {len(bundle.runs)} run(s)")
-        print(f"  recording: {'included' if bundle.has_video else 'not included'}")
+        if bundle.has_video:
+            print(f"  recording: included, {bundle.frames} frames indexed")
+        else:
+            print("  recording: not included")
         # Said out loud because it is the difference between a participant seeing
         # AI coaching and not, and it is decided from the capture's phase rather
         # than by whoever runs this command.
