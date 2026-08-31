@@ -3,6 +3,7 @@
 import hashlib
 import io
 import json
+import math
 import threading
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -98,12 +99,13 @@ def capture(tmp_path, monkeypatch):
                     "window_width": 1280,
                     "window_height": 720,
                 },
-                # Half a second of video over five samples: one frame of it lands
-                # inside the telemetry at the ten frames a second the index is
-                # written at, which is what makes this bundle importable at all.
+                # Half a second of video over five samples of telemetry. The
+                # lead is one frame at whatever rate the index is written at, so
+                # frame 1 lands exactly on the first sample and this stays
+                # importable whatever SIDECAR_FPS becomes.
                 "recording": {
                     "path": r"C:\Users\admin\Apex\captures\session.mp4",
-                    "started_at": FIRST_SAMPLE_CLOCK - 0.02,
+                    "started_at": FIRST_SAMPLE_CLOCK - 1 / SIDECAR_FPS,
                     "duration_s": 0.5,
                 },
                 "runs": [
@@ -369,6 +371,14 @@ def long_capture(tmp_path, monkeypatch):
     return directory
 
 
+# long_capture's shape, in the terms the index is built from, so that these
+# expectations follow SIDECAR_FPS rather than being rewritten whenever it moves.
+LEAD_S = 1.0  # the recording starts this far ahead of the first sample
+TELEMETRY_SPAN_S = 0.02 * 499  # 500 samples, 0.02 s apart
+FIRST_INDEXED = math.ceil(LEAD_S * SIDECAR_FPS)
+LAST_INDEXED = math.floor((LEAD_S + TELEMETRY_SPAN_S) * SIDECAR_FPS)
+
+
 def _index(bundle_path) -> pd.DataFrame:
     with zipfile.ZipFile(bundle_path) as archive:
         return pd.read_csv(io.BytesIO(archive.read(SIDECAR_NAME)))
@@ -391,12 +401,14 @@ def test_a_frame_is_indexed_at_the_instant_the_recording_puts_it(long_capture):
     bundle = package(long_capture, long_capture.parent / "out.zip")
     index = _index(bundle.path)
 
-    # The recording leads the telemetry by a second, so the first frame that has
-    # any simulation time to report is the tenth at ten frames a second.
-    assert int(index["frame_id"].iloc[0]) == 10
+    # The recording leads the telemetry by a second, so the first frame with any
+    # simulation time to report is the one a second into the file.
+    assert int(index["frame_id"].iloc[0]) == FIRST_INDEXED
     assert index["sim_time_s"].iloc[0] == pytest.approx(0.0, abs=1e-3)
-    assert int(index["frame_id"].iloc[-1]) == 109
-    assert index["sim_time_s"].iloc[-1] == pytest.approx(9.9, abs=1e-3)
+    assert int(index["frame_id"].iloc[-1]) == LAST_INDEXED
+    assert index["sim_time_s"].iloc[-1] == pytest.approx(
+        LAST_INDEXED / SIDECAR_FPS - LEAD_S, abs=1e-3
+    )
     assert (index["frame_id"].diff().dropna() == 1).all()
     assert index["sim_time_s"].is_monotonic_increasing
 
@@ -406,12 +418,14 @@ def test_frames_taken_before_and_after_the_telemetry_are_left_out(long_capture):
     bundle = package(long_capture, long_capture.parent / "out.zip")
     index = _index(bundle.path)
 
-    # 120 frames fit in twelve seconds; ten seconds of telemetry indexes 100.
-    assert len(index) == 100
-    assert bundle.frames == 100
+    # Twelve seconds of video, ten of telemetry: the frames of the other two
+    # seconds are not rows here.
+    assert len(index) == LAST_INDEXED - FIRST_INDEXED + 1
+    assert len(index) < int(12.0 * SIDECAR_FPS)
+    assert bundle.frames == len(index)
     # frame_id stays the number their ffmpeg call will give the frame, so the
     # rows that remain still name files that exist.
-    assert index["image_file"].iloc[0] == "torcs-0001-00000010.png"
+    assert index["image_file"].iloc[0] == f"torcs-0001-{FIRST_INDEXED:08d}.png"
     assert index["display_width"].iloc[0] == 1280
 
 
