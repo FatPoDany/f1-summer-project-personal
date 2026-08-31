@@ -15,7 +15,7 @@ jobs:
     env:
       QT_QPA_PLATFORM: offscreen
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # RUNNER_TEMP keeps the test workspace out of the checkout. It has to be
       # set here rather than in the job's env block: the runner context is not
@@ -24,7 +24,7 @@ jobs:
         shell: bash
         run: echo "APEX_WORKSPACE=$RUNNER_TEMP/apex-workspace" >> "$GITHUB_ENV"
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -57,7 +57,7 @@ jobs:
       - name: Render Garage + Analysis screenshots
         run: python scripts/screenshot.py shots
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: screenshots-${{ matrix.os }}
           path: shots/*.png
