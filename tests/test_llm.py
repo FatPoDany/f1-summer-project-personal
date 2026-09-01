@@ -274,18 +274,9 @@ def test_duplicate_mislabelled_comparison_finding_is_grounded_and_merged():
         evidence_summary=comparison,
     )
 
-    # The two correctly-labelled findings keep the model's own sentence, so
-    # they are the same claim and merge. The mislabelled one is corrected to
-    # braking by the template, and the template is a different sentence -- it
-    # merges with findings the template also wrote, never with the model's.
-    # Before the model's words could survive at all, every finding here was
-    # rewritten to the same three sentences and all three merged into one.
-    assert len(report.findings) == 2
-    assert [finding.focus for finding in report.findings] == ["braking", "braking"]
-    assert [item.corner for item in report.findings[0].evidence] == ["T5", "T7"]
-    assert [item.corner for item in report.findings[1].evidence] == ["T1"]
-    assert report.findings[0].issue == "Review this corner."
-    assert report.findings[1].issue != "Review this corner."
+    assert len(report.findings) == 1
+    assert report.findings[0].focus == "braking"
+    assert [item.corner for item in report.findings[0].evidence] == ["T5", "T1", "T7"]
 
 
 def test_fabricated_sibling_does_not_suppress_grounded_findings():
@@ -413,39 +404,27 @@ def _one_brake_point_finding(comparison, prose):
     }
 
 
-def test_the_model_keeps_its_own_words_when_they_quote_its_own_evidence():
-    """The point of the whole numeric check: a sentence that survives it.
+def test_the_model_s_own_wording_never_reaches_a_card():
+    """The model chooses the corner; the template says the words.
 
-    Before this the templates ran ahead of the check, so no sentence a
-    participant read had been written by the model -- it only ever chose which
-    corner to talk about.
+    Letting its prose through when it cited its own numbers was implemented
+    and measured against the real weights, and it is deliberately not what
+    happens: across five laps the model's words reached a card zero times out
+    of eight, and the one finding that would have gone up verbatim described
+    braking earlier than the reference as braking later and advised braking
+    earlier still. Checking that a number is cited is not checking that the
+    sentence around it is true, so the sentence is never the model's -- while
+    the finding itself, and the difference it rests on, still reach the screen.
     """
     session = load_sample_session()
     comparison = build_evidence_summary(session.laps[0], session.laps[4])
     citation, raw = _one_brake_point_finding(comparison, "PLACEHOLDER")
+    # A number the finding really does cite, so nothing but the decision above
+    # keeps this sentence off the card: a check on where numbers come from
+    # would pass it.
     gap = round(abs(citation["value"] - citation["ref"]))
-    spoken = f"You brake about {gap} metres early here."
-    raw["findings"][0]["issue"] = spoken
-
-    report = report_from_llm_text(
-        json.dumps(raw), model="granite-test", evidence_summary=comparison
-    )
-
-    assert report.findings[0].issue == spoken
-
-
-def test_a_number_the_finding_cannot_cite_costs_the_sentence_not_the_finding():
-    """The fallback is the template, not silence.
-
-    A finding refused outright would take a real, cited difference off the
-    screen because of how it was worded. The measurement is what the card is
-    for; the wording is what there is a template for.
-    """
-    session = load_sample_session()
-    comparison = build_evidence_summary(session.laps[0], session.laps[4])
-    citation, raw = _one_brake_point_finding(
-        comparison, "You brake 424242 metres early here."
-    )
+    assert gap, "this fixture needs a corner where the two numbers differ"
+    raw["findings"][0]["issue"] = f"You brake about {gap} metres early here."
 
     report = report_from_llm_text(
         json.dumps(raw), model="granite-test", evidence_summary=comparison
@@ -454,4 +433,4 @@ def test_a_number_the_finding_cannot_cite_costs_the_sentence_not_the_finding():
     assert len(report.findings) == 1
     assert [item.corner for item in report.findings[0].evidence] == [citation["corner"]]
     assert report.findings[0].issue == guidance_for("brake_point").issue
-    assert "424242" not in report.findings[0].issue
+    assert str(gap) not in report.findings[0].issue

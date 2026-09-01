@@ -70,18 +70,11 @@ deterministic telemetry evidence below.
 A missing value means the event was not detected; never infer it.
 
 For each finding, choose exactly one focus: braking, cornering, or throttle.
-The issue, cause, and action must be concise and actionable.
+The issue, cause, and action must be concise and actionable. Do not put numeric
+values in those prose fields; all numbers belong only in evidence citations.
 Every citation must copy metric, corner, value, ref, unit, and span_m exactly;
 never invent values. Never invent corners, measurements, causes, vehicle
 behaviour, or a racing line.
-
-You MAY put a number in the prose, but only a number this finding cites: a
-value, a ref, or the difference between them, rounded if you like. Any other
-number is refused and your sentence is thrown away. Say what a number means in
-a driver's words, never the name of the field it came from: "three km/h slower
-through the middle", not "min_speed 46.2". Never print a field name, and never
-print a negative number -- say which way the difference goes instead. At most
-one number per sentence, and only where it sharpens the point.
 
 Metric definitions:
 {metric_help}
@@ -93,9 +86,9 @@ Return ONLY a JSON object, without markdown, with this shape:
 
 {{"findings": [
   {{"focus": "<braking|cornering|throttle>",
-    "issue": "<corner and the main opportunity>",
-    "cause": "<difference directly supported by cited metrics>",
-    "action": "<one concrete technique to try>",
+    "issue": "<corner and the main opportunity, without measurements>",
+    "cause": "<difference directly supported by cited metrics, without measurements>",
+    "action": "<one concrete technique to try, without measurements>",
     "evidence": [
       {{"metric": "<available metric>", "corner": "<available corner>",
         "value": <exact driver value>, "ref": <exact reference value>,
@@ -109,8 +102,6 @@ Rules:
 - Use each (corner, metric) citation at most once across the entire response.
 - Group citations for the same metric and technique into one finding; never repeat a finding.
 - Recommend only differences supported by the cited measurements.
-- Never state a target the packet does not contain: no braking distance,
-  time gain, or percentage to aim for.
 - If the evidence packet has no corners, return {{"findings": []}}.
 """
 
@@ -283,14 +274,15 @@ def report_from_llm_text(
     siblings. Every finding that survives still passes the complete strict
     contract and exact evidence check.
 
-    The model keeps its own words when they survive that contract, and is
-    replaced by the metric's template when they do not. It used to be replaced
-    either way: the templates ran before the check, so the check could only
-    ever see prose the model had not written, and no sentence a participant
-    read had come from the model at all. Which of the two a finding used is not
-    stored, because it does not need to be -- a stored finding whose wording is
-    the template for its own metric, device and mode is one that fell back, and
-    ``guidance_for`` still answers that question for any audit on disk.
+    The templates run before the check and not as a fallback behind it, so no
+    sentence a participant reads is the model's. Letting the model keep words
+    that passed the contract was tried and measured against the real weights:
+    across five laps its prose reached a card zero times out of eight, and the
+    one finding that would have gone up verbatim had the sign backwards --
+    1775 m of brake point against a 1795 m reference is braking earlier, it
+    called that later, and it advised braking earlier still. A contract that
+    checks whether a number is cited does not check whether the sentence around
+    it is true. See docs/AI_FEEDBACK_IMPROVEMENTS.md 15.6.
     """
     data = extract_json_object(text)
     findings = data.get("findings")
@@ -308,35 +300,24 @@ def report_from_llm_text(
     claim_indexes: dict[tuple[str, str, str, str], int] = {}
     used_citations: set[tuple[str, str]] = set()
     first_rejection: CoachingSchemaError | None = None
-
-    def check(finding: dict) -> None:
-        coaching_report_from_dict(
-            {
-                "findings": [finding],
-                "model": model,
-                "prompt_version": PROMPT_VERSION,
-            },
-            evidence_summary,
-            opportunities_only=True,
-            scatter=scatter,
-        )
-
     for raw in findings:
         candidate = _without_repeated_citations(raw, used_citations)
-        # A model asked how sure it is will answer, and the answer measures
-        # nothing. Dropped before either path, so it can never reach an audit
-        # record and be read back later as though something had computed it.
-        candidate.pop("confidence", None)
+        _ground_model_prose([candidate], evidence_summary, device)
         try:
-            check(candidate)
-        except CoachingSchemaError:
-            _ground_model_prose([candidate], evidence_summary, device)
-            try:
-                check(candidate)
-            except CoachingSchemaError as exc:
-                if first_rejection is None:
-                    first_rejection = exc
-                continue
+            coaching_report_from_dict(
+                {
+                    "findings": [candidate],
+                    "model": model,
+                    "prompt_version": PROMPT_VERSION,
+                },
+                evidence_summary,
+                opportunities_only=True,
+                scatter=scatter,
+            )
+        except CoachingSchemaError as exc:
+            if first_rejection is None:
+                first_rejection = exc
+            continue
 
         claim = (
             candidate["focus"],

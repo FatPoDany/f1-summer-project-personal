@@ -21,7 +21,6 @@ same interface (plus streaming).
 """
 
 import math
-import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -185,60 +184,22 @@ def _number(value, where: str) -> float:
     return number
 
 
-_NUMBER_IN_PROSE = re.compile(r"\d+(?:\.\d+)?")
+def _require_measurement_free_prose(value: str, where: str) -> None:
+    """Keep every numeric claim inside a citation, where it can be fact-checked.
 
-
-def supported_measurements(evidence: list["Evidence"]) -> set[float]:
-    """The numbers a finding is allowed to say, from the evidence it cites.
-
-    Both measured numbers, the gap between them, and the span the reader can
-    zoom to. The gap is included because it is the quantity the finding is
-    actually about -- "three km/h slower here" is the sentence a driver needs,
-    and it is derived from two numbers already checked against the telemetry,
-    not invented beside them.
-
-    Digits inside a corner label are allowed too: a corner called T3 is not a
-    measurement, and refusing it would only teach the model to avoid naming
-    the place it is talking about.
+    A whitelist was tried here instead: a finding could say any number it cited,
+    compared at the precision it chose. It worked, and it was still the wrong
+    rule. Checking that a number is cited is not checking that the sentence
+    around it is true, and five laps against the real model produced a finding
+    that cited brake_point 1775 m against a 1795 m reference -- braking earlier
+    -- described that as "later than the reference", and advised braking earlier
+    still. Every number in it was correct and cited. The templates below cannot
+    make that mistake, so the prose is theirs and the digits stay in evidence.
     """
-    allowed: set[float] = set()
-    for item in evidence:
-        allowed.update((item.value, item.ref, item.value - item.ref, *item.span))
-        allowed.update(float(found) for found in _NUMBER_IN_PROSE.findall(item.corner))
-    return {number for number in allowed} | {abs(number) for number in allowed}
-
-
-def _quotes_a_measurement(token: str, allowed: set[float]) -> bool:
-    """Whether a number written in prose is one of the measurements.
-
-    Compared at the precision the model chose, so 7.63 may be written "7.63",
-    "7.6" or "8" and all three are the same claim about the same telemetry.
-    Rounding is the only freedom: a number that is not one of these at any
-    precision is a different number, whatever it is near.
-    """
-    try:
-        spoken = float(token)
-    except ValueError:  # a number too long for a float is not one of ours
-        return False
-    places = len(token.partition(".")[2])
-    return any(round(candidate, places) == spoken for candidate in allowed)
-
-
-def _require_supported_measurements(value: str, where: str, allowed: set[float]) -> None:
-    """Let a finding quote its own evidence, and nothing else.
-
-    This replaced a rule that banned every digit from prose. That rule did keep
-    numbers honest, but it also meant no sentence the model wrote could carry
-    the size of what it had found, which is most of what makes coaching worth
-    reading -- so the sentences were overwritten by templates and the model's
-    only remaining job was choosing which corner to talk about. Checking a
-    number against the citation costs the same guarantee and keeps the sentence.
-    """
-    for token in _NUMBER_IN_PROSE.findall(value):
-        _require(
-            _quotes_a_measurement(token, allowed),
-            f"{where} says {token}, which is not a measurement this finding cites",
-        )
+    _require(
+        not any(character.isdigit() for character in value),
+        f"{where} must not contain numeric values; put measurements in evidence",
+    )
 
 
 def coachable_corners(evidence_summary: dict) -> list[dict]:
@@ -450,6 +411,7 @@ def coaching_report_from_dict(
                 isinstance(raw.get(key), str) and raw[key].strip(),
                 f"{where}.{key} must be a non-empty string",
             )
+            _require_measurement_free_prose(raw[key], f"{where}.{key}")
         confidence = None
         if "confidence" in raw:
             confidence = _number(raw["confidence"], f"{where}.confidence")
@@ -523,9 +485,6 @@ def coaching_report_from_dict(
             )
         if grounded is not None:
             _require(cites_focus, f"{where} must cite at least one {focus} metric")
-        allowed = supported_measurements(evidence)
-        for key in ("issue", "cause", "action"):
-            _require_supported_measurements(raw[key], f"{where}.{key}", allowed)
         findings.append(
             Finding(
                 focus=focus,
