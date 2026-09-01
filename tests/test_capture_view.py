@@ -35,15 +35,22 @@ def torcs_binary(tmp_path) -> Path:
 
 @pytest.fixture
 def study_preset(tmp_path) -> TorcsStudyPreset:
+    """The shipped default, spelled the way human_capture spells it.
+
+    It said g-track-1 and five laps long after the default became aalborg and
+    three, which is harmless on its own and not harmless next to a second
+    fixture: a test that switched to the speedway preset and looked for
+    "g-track-1" in the summary was reading a string the default already had.
+    """
     race_config = tmp_path / "apexstudy.xml"
     race_config.write_text("<params name='Apex Study v1'/>", encoding="utf-8")
     return TorcsStudyPreset(
         preset_id="apex-study-v1",
         display_name="Apex Study v1",
-        track_id="g-track-1",
+        track_id="aalborg",
         track_category="road",
         car_id="car7-trb1",
-        laps=5,
+        laps=3,
         race_config=race_config,
     )
 
@@ -58,7 +65,7 @@ def speedway_preset(tmp_path) -> TorcsStudyPreset:
         track_id="g-track-1",
         track_category="road",
         car_id="car7-trb1",
-        laps=5,
+        laps=3,
         race_config=race_config,
     )
 
@@ -94,9 +101,9 @@ def test_guide_requires_pseudonym_readiness_and_simulator_before_starting(
     assert "No terminal" in view._intro.text()
     assert view._phase.currentData() == "baseline"
     assert "Ready" in view._simulator_status.text()
-    assert "g-track-1" in view._preset_summary.text()
+    assert "aalborg" in view._preset_summary.text()
     assert "car7-trb1" in view._preset_summary.text()
-    assert "5 laps" in view._preset_summary.text()
+    assert "3 laps" in view._preset_summary.text()
     assert not view._start_button.isEnabled()
 
     view._participant_id.setText("Alice Smith")
@@ -274,10 +281,10 @@ def test_missing_study_preset_disables_start_with_facilitator_message(
     preset = TorcsStudyPreset(
         preset_id="apex-study-v1",
         display_name="Apex Study v1",
-        track_id="g-track-1",
+        track_id="aalborg",
         track_category="road",
         car_id="car7-trb1",
-        laps=5,
+        laps=3,
         race_config=tmp_path / "missing.xml",
     )
     view = CaptureGuideView(torcs_binary=torcs_binary, study_preset=preset)
@@ -469,10 +476,13 @@ def test_the_chosen_circuit_is_the_one_the_race_is_started_on(
     assert view._setup_page.preset.isEnabled() is True
     assert view._current_config().preset == study_preset
 
+    assert "aalborg" in view._preset_summary.text()
+
     view._setup_page.preset.setCurrentIndex(1)
 
     assert view._current_config().preset == speedway_preset
     assert "g-track-1" in view._preset_summary.text()
+    assert "aalborg" not in view._preset_summary.text()
 
 
 def test_a_circuit_this_build_cannot_open_is_reported_before_the_race_starts(

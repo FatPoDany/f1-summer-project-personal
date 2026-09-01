@@ -88,8 +88,9 @@ class CaptureSetupPage(QWidget):
         self.preset_summary.setWordWrap(True)
         self.preset_summary.setAccessibleName("Assigned track, car, and lap count")
         preset_help = QLabel(
-            "Apex locks this setup for the whole session and opens the race directly. "
-            "Keep every run by one participant on the same track."
+            "Apex opens this race directly; the participant selects nothing in TORCS. "
+            "Use the same track for every run by one participant — a baseline and a "
+            "coached run on different tracks cannot be compared."
         )
         preset_help.setWordWrap(True)
         preset_help.setStyleSheet(f"color: {theme.TEXT_DIM};")
