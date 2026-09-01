@@ -53,6 +53,8 @@ apex  # choose Collect Data; no terminal or CSV handling after launch
 - `src/apex/capture_task.py` — cancellable background simulator lifecycle
 - `integrations/torcs-1.3.9/overlay/src/drivers/human/` — native CSV recorder
 - `integrations/torcs-1.3.9/overlay/src/raceman/apexstudy.xml` — versioned study preset
+- `integrations/torcs-1.3.9/overlay/src/raceman/apexstudyspeedway.xml` — the same preset on
+  `g-track-1`, for races that pool with the other half of the project
 - `integrations/torcs-1.3.9/patches/graphical-race.patch` — pinned GUI auto-start entry
 - `integrations/torcs-1.3.9/patches/` — minimal pinned-source integration patch
 - `tests/test_human_capture.py` — Python behavior tests
@@ -142,3 +144,10 @@ compatible with bounded filenames and buffered output.
 - `aalborg`, `car7-trb1`, and three laps are the current development defaults for
   the controlled launch. The final study preset remains subject to the internal
   pilot and supervisor-approved protocol; changing it requires a new preset id.
+- A second preset, `apex-study-speedway-v1`, offers `g-track-1` under otherwise
+  identical conditions, because the other half of this project is frozen on that
+  circuit and absolute lap times cannot be pooled across two tracks. It is
+  assigned per participant, not per session: a participant's baseline and their
+  coached run must be on the same circuit or the comparison between them
+  measures the track. Recorded in the manifest like any other preset, so a
+  stored race always says which circuit produced it.

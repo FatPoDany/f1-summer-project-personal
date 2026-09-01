@@ -1,6 +1,7 @@
 """Presentation-only pages used by the human telemetry collection guide."""
 
 import os
+from collections.abc import Sequence
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -24,13 +25,15 @@ class CaptureSetupPage(QWidget):
     def __init__(
         self,
         torcs_binary: Path,
-        study_preset: TorcsStudyPreset,
+        study_presets: Sequence[TorcsStudyPreset],
         *,
         session_issue: str | None = None,
     ) -> None:
         super().__init__()
+        if not study_presets:
+            raise ValueError("at least one study preset is required")
         self.torcs_binary = torcs_binary
-        self.study_preset = study_preset
+        self.study_presets = tuple(study_presets)
         self.session_issue = session_issue
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 4, 0, 0)
@@ -71,18 +74,27 @@ class CaptureSetupPage(QWidget):
 
         preset_group = QGroupBox("Assigned driving setup")
         preset_layout = QVBoxLayout(preset_group)
-        self.preset_summary = QLabel(
-            f"{study_preset.display_name}  ·  "
-            f"{study_preset.track_id} ({study_preset.track_category})  ·  "
-            f"{study_preset.car_id}  ·  {study_preset.laps} laps"
-        )
+        # Assigned per participant, not per session: a participant's baseline and
+        # their coached run have to be on the same circuit or the comparison
+        # between them measures the track. The selector exists so a whole
+        # participant can be run on the circuit the other half of the project
+        # uses, not so a facilitator can vary it mid-study.
+        self.preset = QComboBox()
+        for preset in self.study_presets:
+            self.preset.addItem(f"{preset.display_name} — {preset.track_id}", preset.preset_id)
+        self.preset.setAccessibleName("Assigned track")
+        self.preset.setEnabled(len(self.study_presets) > 1)
+        self.preset_summary = QLabel()
         self.preset_summary.setWordWrap(True)
         self.preset_summary.setAccessibleName("Assigned track, car, and lap count")
         preset_help = QLabel(
-            "Apex locks this setup for every participant and opens the race directly."
+            "Apex locks this setup for the whole session and opens the race directly. "
+            "Keep every run by one participant on the same track."
         )
         preset_help.setWordWrap(True)
         preset_help.setStyleSheet(f"color: {theme.TEXT_DIM};")
+        if self.preset.isEnabled():
+            preset_layout.addWidget(self.preset)
         preset_layout.addWidget(self.preset_summary)
         preset_layout.addWidget(preset_help)
 
@@ -95,7 +107,11 @@ class CaptureSetupPage(QWidget):
         self.simulator_help.setStyleSheet(f"color: {theme.TEXT_DIM};")
         simulator_layout.addWidget(self.simulator_status)
         simulator_layout.addWidget(self.simulator_help)
-        self._render_simulator_status()
+        # After the status labels exist: choosing a track re-renders both the
+        # summary and the readiness line, since a build can ship one preset's
+        # race config without the other's.
+        self.preset.currentIndexChanged.connect(self._render_preset)
+        self._render_preset()
 
         readiness_group = QGroupBox("Before opening the simulator")
         readiness_layout = QVBoxLayout(readiness_group)
@@ -128,6 +144,15 @@ class CaptureSetupPage(QWidget):
         layout.addLayout(buttons)
 
     @property
+    def study_preset(self) -> TorcsStudyPreset:
+        """The assignment the facilitator has chosen."""
+        chosen = self.preset.currentData()
+        for preset in self.study_presets:
+            if preset.preset_id == chosen:
+                return preset
+        return self.study_presets[0]
+
+    @property
     def simulator_ready(self) -> bool:
         return (
             self.torcs_binary.is_file()
@@ -135,6 +160,15 @@ class CaptureSetupPage(QWidget):
             and self.study_preset.race_config.is_file()
             and self.session_issue is None
         )
+
+    def _render_preset(self) -> None:
+        preset = self.study_preset
+        self.preset_summary.setText(
+            f"{preset.display_name}  ·  "
+            f"{preset.track_id} ({preset.track_category})  ·  "
+            f"{preset.car_id}  ·  {preset.laps} laps"
+        )
+        self._render_simulator_status()
 
     def show_message(self, text: str, *, error: bool = False) -> None:
         self.form_error.setText(text)
@@ -182,14 +216,19 @@ class CaptureDrivePage(QWidget):
         )
         detail.setWordWrap(True)
         detail.setStyleSheet(f"color: {theme.TEXT_DIM};")
+        # The first line names the assignment, which is chosen on the page
+        # before this one, so it is written at launch rather than at build.
+        self.loaded = QLabel()
+        self.loaded.setWordWrap(True)
+        self.show_preset(study_preset)
         instructions = (
-            f"1. Apex loaded {study_preset.track_id} with {study_preset.car_id} automatically.",
             "2. Use the connected input device; no track or car selection is required.",
             "3. Complete the familiarisation or measured laps for this phase.",
             "4. Exit TORCS when finished; do not search for or move any CSV files.",
         )
         guide = QGroupBox("Driving guide")
         guide_layout = QVBoxLayout(guide)
+        guide_layout.addWidget(self.loaded)
         for instruction in instructions:
             label = QLabel(instruction)
             label.setWordWrap(True)
@@ -205,6 +244,11 @@ class CaptureDrivePage(QWidget):
         layout.addWidget(self.status)
         layout.addStretch(1)
         layout.addWidget(self.stop_button)
+
+    def show_preset(self, study_preset: TorcsStudyPreset) -> None:
+        self.loaded.setText(
+            f"1. Apex loaded {study_preset.track_id} with {study_preset.car_id} automatically."
+        )
 
 
 class CaptureCompletePage(QWidget):

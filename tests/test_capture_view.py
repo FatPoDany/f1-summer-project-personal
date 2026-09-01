@@ -48,6 +48,21 @@ def study_preset(tmp_path) -> TorcsStudyPreset:
     )
 
 
+@pytest.fixture
+def speedway_preset(tmp_path) -> TorcsStudyPreset:
+    race_config = tmp_path / "apexstudyspeedway.xml"
+    race_config.write_text("<params name='Apex Study Speedway v1'/>", encoding="utf-8")
+    return TorcsStudyPreset(
+        preset_id="apex-study-speedway-v1",
+        display_name="Apex Study v1 on CG Speedway",
+        track_id="g-track-1",
+        track_category="road",
+        car_id="car7-trb1",
+        laps=5,
+        race_config=race_config,
+    )
+
+
 def make_ready(view: CaptureGuideView) -> None:
     view._participant_id.setText("P001")
     for check in view._readiness_checks:
@@ -426,3 +441,54 @@ def test_the_facilitator_can_record_a_control_run_without_the_command_line(
     make_ready(view)
     view._phase.setCurrentIndex(2)
     assert view._current_config().phase == "control"
+
+
+def test_one_preset_leaves_nothing_to_choose(qtbot, torcs_binary, study_preset):
+    """A build with a single assignment must not show a selector with one row."""
+    view = CaptureGuideView(torcs_binary=torcs_binary, study_preset=study_preset)
+    qtbot.addWidget(view)
+    make_ready(view)
+
+    assert view._setup_page.preset.isEnabled() is False
+    assert view._setup_page.preset.isVisibleTo(view._setup_page) is False
+    assert view._current_config().preset == study_preset
+
+
+def test_the_chosen_circuit_is_the_one_the_race_is_started_on(
+    qtbot, torcs_binary, study_preset, speedway_preset, monkeypatch
+):
+    """The preset is recorded into the manifest, so picking the wrong one
+    mislabels every row of the capture."""
+    monkeypatch.setattr(
+        "apex.capture_view.study_presets", lambda binary: (study_preset, speedway_preset)
+    )
+    view = CaptureGuideView(torcs_binary=torcs_binary)
+    qtbot.addWidget(view)
+    make_ready(view)
+
+    assert view._setup_page.preset.isEnabled() is True
+    assert view._current_config().preset == study_preset
+
+    view._setup_page.preset.setCurrentIndex(1)
+
+    assert view._current_config().preset == speedway_preset
+    assert "g-track-1" in view._preset_summary.text()
+
+
+def test_a_circuit_this_build_cannot_open_is_reported_before_the_race_starts(
+    qtbot, tmp_path, torcs_binary, study_preset, speedway_preset, monkeypatch
+):
+    """A partial install can hold one preset's race config and not the other's."""
+    speedway_preset.race_config.unlink()
+    monkeypatch.setattr(
+        "apex.capture_view.study_presets", lambda binary: (study_preset, speedway_preset)
+    )
+    view = CaptureGuideView(torcs_binary=torcs_binary)
+    qtbot.addWidget(view)
+    make_ready(view)
+    assert view._start_button.isEnabled() is True
+
+    view._setup_page.preset.setCurrentIndex(1)
+
+    assert view._start_button.isEnabled() is False
+    assert "not available" in view._simulator_status.text()
