@@ -14,6 +14,9 @@ from racecoach.telemetry.human_capture import (
     ManagedTorcsRunner,
     TorcsStudyPreset,
     capture_human_runs,
+    default_study_preset,
+    study_preset_by_id,
+    study_presets,
 )
 from racecoach.telemetry.run_store import list_runs, load_run
 from racecoach.telemetry.torcs_runtime import torcs_data_root, torcs_launch_cwd
@@ -251,6 +254,44 @@ def test_study_preset_rejects_unsafe_or_impossible_values(tmp_path, field, value
 
     with pytest.raises(ValueError, match=field.replace("_", " ")):
         TorcsStudyPreset(**values)
+
+
+def test_both_circuits_are_assignable_and_aalborg_is_still_the_default(torcs_binary):
+    presets = study_presets(torcs_binary)
+
+    assert [preset.track_id for preset in presets] == ["aalborg", "g-track-1"]
+    assert default_study_preset(torcs_binary) == presets[0]
+    assert [preset.race_config.name for preset in presets] == [
+        "apexstudy.xml",
+        "apexstudyspeedway.xml",
+    ]
+
+
+def test_choosing_a_circuit_changes_the_circuit_and_nothing_else(torcs_binary):
+    """Otherwise a change of track is a change of several conditions at once."""
+    aalborg, speedway = study_presets(torcs_binary)
+    varies = {"preset_id", "display_name", "track_id", "race_config"}
+
+    same = {
+        field: value
+        for field, value in aalborg.to_dict().items()
+        if field not in varies
+    }
+    assert same == {
+        field: value
+        for field, value in speedway.to_dict().items()
+        if field not in varies
+    }
+    assert same["car_id"] == "car7-trb1"
+    assert same["laps"] == 3
+
+
+def test_a_preset_this_build_does_not_have_is_an_error_not_a_substitution(torcs_binary):
+    """Substituting the default would relabel a race as driven somewhere it was not."""
+    assert study_preset_by_id(torcs_binary, "apex-study-speedway-v1").track_id == "g-track-1"
+
+    with pytest.raises(ValueError, match="unknown study preset"):
+        study_preset_by_id(torcs_binary, "apex-study-monaco-v9")
 
 
 def test_study_preset_requires_xml_and_cannot_be_overridden_by_torcs_args(

@@ -209,9 +209,12 @@ registration in a background task, then opens complete laps in the Garage. A
 packaged study build can place `torcs-runtime/` beside the Apex executable; the
 application discovers it automatically without participant configuration.
 
-For the desktop path, Apex uses graphical `-R` to open the versioned
-`apexstudy.xml` directly: one normal Human driver, `g-track-1`, and five laps.
-The assignment is shown before Start and frozen into the capture manifest, so a
+For the desktop path, Apex uses graphical `-R` to open a versioned race manager
+directly: one normal Human driver, three laps, and `car7-trb1` from the human
+driver profile. `apexstudy.xml` is `aalborg` and is the default;
+`apexstudyspeedway.xml` is `g-track-1`, for races meant to pool with the other
+half of this project, and differs in nothing but the track. The assignment is
+chosen and shown before Start and frozen into the capture manifest, so a
 participant does not select a driver, track, car, or lap count in TORCS.
 Standard `-r` keeps its original console/headless meaning for automation.
 

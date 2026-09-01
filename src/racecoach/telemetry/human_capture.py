@@ -224,25 +224,89 @@ class HumanCaptureResult:
     run_dirs: tuple[Path, ...]
 
 
-def default_study_preset(torcs_binary: str | Path) -> TorcsStudyPreset:
-    """The fixed assignment every participant drives.
+# The car is not chosen here. TORCS reads it from the human driver's own
+# profile (overlay/src/drivers/human/human.xml), which is one file for the whole
+# install, so every preset drives the same car and this field records that fact
+# rather than deciding it. Changing car per preset means writing that profile at
+# launch, the way screen.xml and graph.xml are written; nothing needs it yet.
+STUDY_CAR_ID = "car7-trb1"
+
+
+def _study_preset(
+    torcs_binary: str | Path,
+    *,
+    preset_id: str,
+    display_name: str,
+    track_id: str,
+    race_config_name: str,
+) -> TorcsStudyPreset:
+    return TorcsStudyPreset(
+        preset_id=preset_id,
+        display_name=display_name,
+        track_id=track_id,
+        track_category="road",
+        car_id=STUDY_CAR_ID,
+        laps=3,
+        race_config=torcs_raceman_dir(torcs_binary) / race_config_name,
+    )
+
+
+def study_presets(torcs_binary: str | Path) -> tuple[TorcsStudyPreset, ...]:
+    """Every assignment a facilitator may pick, the default first.
 
     aalborg rather than the speedway it started on: a comparative study is judged
     on more than lap time, and CG Speedway 1 has enough asphalt run-off that a
     participant measured 14 m outside the track edge still collected no damage at
     all. A narrower circuit with the barrier closer makes a mistake register as
     something, which is what gives the incident count any power to discriminate.
+
+    CG Speedway is offered alongside it because the other half of this project
+    is frozen on that circuit -- 77 of its 77 stored races -- and absolute lap
+    times cannot be pooled across two tracks. Its median best lap there is
+    43.41 s against 126.15 s on aalborg, on a lap only 1.27x shorter: the
+    difference is difficulty, not distance. A shared track is necessary for
+    pooling and not sufficient, since laps and opponents still differ; what it
+    buys is a comparison that is about the driver rather than the circuit.
+
+    Everything except the track is identical between the two, so choosing one
+    changes one thing.
     """
-    race_config = torcs_raceman_dir(torcs_binary) / "apexstudy.xml"
-    return TorcsStudyPreset(
-        preset_id="apex-study-v1",
-        display_name="Apex Study v1",
-        track_id="aalborg",
-        track_category="road",
-        car_id="car7-trb1",
-        laps=3,
-        race_config=race_config,
+    return (
+        _study_preset(
+            torcs_binary,
+            preset_id="apex-study-v1",
+            display_name="Apex Study v1",
+            track_id="aalborg",
+            race_config_name="apexstudy.xml",
+        ),
+        _study_preset(
+            torcs_binary,
+            preset_id="apex-study-speedway-v1",
+            display_name="Apex Study v1 on CG Speedway",
+            track_id="g-track-1",
+            race_config_name="apexstudyspeedway.xml",
+        ),
     )
+
+
+def default_study_preset(torcs_binary: str | Path) -> TorcsStudyPreset:
+    """The assignment a participant drives unless a facilitator picks another."""
+    return study_presets(torcs_binary)[0]
+
+
+def study_preset_by_id(torcs_binary: str | Path, preset_id: str) -> TorcsStudyPreset:
+    """One assignment by the id a capture recorded.
+
+    An unknown id is an error rather than a fall back to the default: a manifest
+    naming a preset this build does not have describes a race driven under
+    conditions this build cannot reproduce, and silently substituting another
+    would relabel it.
+    """
+    for preset in study_presets(torcs_binary):
+        if preset.preset_id == preset_id:
+            return preset
+    known = ", ".join(preset.preset_id for preset in study_presets(torcs_binary))
+    raise ValueError(f"unknown study preset {preset_id!r}; this build has {known}")
 
 
 def human_captures_root() -> Path:

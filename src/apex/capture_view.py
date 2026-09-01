@@ -27,7 +27,7 @@ from racecoach.telemetry.human_capture import (
     HumanCaptureResult,
     TorcsStudyPreset,
     capture_human_runs,
-    default_study_preset,
+    study_presets,
 )
 from racecoach.telemetry.torcs_runtime import default_torcs_binary, graphical_session_issue
 
@@ -137,7 +137,11 @@ class CaptureGuideView(QWidget):
         # it, and a test that hangs on a dialog teaches nothing.
         self._ask_background = ask_background or _prompt_for_background
         self._torcs_binary = Path(torcs_binary or default_torcs_binary())
-        self._study_preset = study_preset or default_study_preset(self._torcs_binary)
+        # One preset injected pins the view to it; otherwise the facilitator
+        # picks from what this build ships, with the default first.
+        self._study_presets = (
+            (study_preset,) if study_preset is not None else study_presets(self._torcs_binary)
+        )
         # Capture must be runnable even while a slow model or clip worker is
         # occupying the application's global pool.
         self._pool = QThreadPool(self)
@@ -172,10 +176,10 @@ class CaptureGuideView(QWidget):
         self._pages = QStackedWidget()
         self._setup_page = CaptureSetupPage(
             self._torcs_binary,
-            self._study_preset,
+            self._study_presets,
             session_issue=graphical_session_issue(),
         )
-        self._drive_page = CaptureDrivePage(self._study_preset)
+        self._drive_page = CaptureDrivePage(self._study_presets[0])
         self._complete_page = CaptureCompletePage()
         self._bind_page_controls()
         for page in (self._setup_page, self._drive_page, self._complete_page):
@@ -215,6 +219,9 @@ class CaptureGuideView(QWidget):
         self._open_results_button = self._complete_page.open_results_button
         self._package_button = self._complete_page.package_button
         self._participant_id.textChanged.connect(self._update_start_state)
+        # Choosing a track can change whether the race is startable at all: a
+        # build missing one preset's race config still has the other's.
+        self._setup_page.preset.currentIndexChanged.connect(self._update_start_state)
         for check in self._readiness_checks:
             check.toggled.connect(self._update_start_state)
         self._start_button.clicked.connect(self.start_capture)
@@ -236,6 +243,7 @@ class CaptureGuideView(QWidget):
             return
         self._ask_background_once(config.participant_id)
         self._show_form_message("")
+        self._drive_page.show_preset(config.preset or self._study_presets[0])
         self._pages.setCurrentWidget(self._drive_page)
         self._drive_status.setText("Launching TORCS… recording starts with the Human driver.")
         self._stop_button.setEnabled(True)
@@ -371,6 +379,10 @@ class CaptureGuideView(QWidget):
 
     def _is_current(self, token: object) -> bool:
         return self._task is not None and token is self._task.token
+
+    @property
+    def _study_preset(self) -> TorcsStudyPreset:
+        return self._setup_page.study_preset
 
     def _current_config(self) -> HumanCaptureConfig:
         return HumanCaptureConfig(
