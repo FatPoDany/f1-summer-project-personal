@@ -124,6 +124,80 @@ def test_the_window_stops_inside_the_stretch_it_describes():
     assert window.to_wall_clock <= float(inside["wall_clock_s"].iloc[-1]) + 1e-6
 
 
+# --- the race standing still while the recorder does not --------------------
+
+
+def paused_frame(rows: int = 500, at: int = 250, pause_s: float = 30.0):
+    """Telemetry whose wall clock jumps while its simulation clock does not."""
+    sim = [0.02 * n for n in range(rows)]
+    wall = [1_700_000_000.0 + t + (pause_s if n >= at else 0.0) for n, t in enumerate(sim)]
+    return pd.DataFrame({"sim_time_s": sim, "wall_clock_s": wall})
+
+
+def test_a_pause_is_the_span_between_the_samples_that_bracket_it():
+    found = footage.stalls(paused_frame())
+
+    assert len(found) == 1
+    assert found[0].from_wall_clock == pytest.approx(1_700_000_000.0 + 4.98)
+    assert found[0].to_wall_clock == pytest.approx(1_700_000_000.0 + 35.0)
+
+
+def test_a_machine_running_slow_is_not_mistaken_for_a_pause():
+    """The dead time is what counts, and a slow race accrues it a frame at a time.
+
+    Thresholding the wall clock alone would cut a struggling machine's race to
+    pieces. Comparing the two clocks does not: half speed for a minute is still
+    only 0.02 s of dead time between any two samples.
+    """
+    n = 500
+    sim = [0.02 * k for k in range(n)]
+    frame = pd.DataFrame(
+        {"sim_time_s": sim, "wall_clock_s": [1_700_000_000.0 + 2 * t for t in sim]}
+    )
+
+    assert footage.stalls(frame) == ()
+
+
+def test_a_capture_without_both_clocks_reports_no_pause_rather_than_guessing():
+    frame = paused_frame().drop(columns=["sim_time_s"])
+
+    assert footage.stalls(frame) == ()
+
+
+def test_a_recording_with_nothing_cut_out_is_one_segment_of_itself():
+    segments = footage.segments_of(1_700_000_000.0, 42.0)
+
+    assert len(segments) == 1
+    assert segments[0].at_file_s == 0.0
+    assert segments[0].from_wall_clock == 1_700_000_000.0
+    assert segments[0].seconds == pytest.approx(42.0)
+
+
+def test_cutting_a_pause_out_packs_what_is_left_end_to_end():
+    """The second stretch starts where the first stops, not where it was recorded."""
+    started = 1_700_000_000.0
+    segments = footage.segments_of(started, 42.0, footage.stalls(paused_frame()))
+
+    assert len(segments) == 2
+    assert segments[0].at_file_s == pytest.approx(0.0)
+    assert segments[0].seconds == pytest.approx(4.98)
+    # 30 seconds later in the race, 4.98 seconds later in the file.
+    assert segments[1].at_file_s == pytest.approx(4.98)
+    assert segments[1].from_wall_clock == pytest.approx(started + 35.0)
+    assert segments[1].seconds == pytest.approx(42.0 - 35.0)
+
+
+def test_a_pause_still_running_when_the_recorder_stopped_leaves_no_tail():
+    """No segment is invented for time the file does not have."""
+    started = 1_700_000_000.0
+    still_going = footage.Window(from_wall_clock=started + 10.0, to_wall_clock=started + 99.0)
+
+    segments = footage.segments_of(started, 42.0, (still_going,))
+
+    assert len(segments) == 1
+    assert segments[0].seconds == pytest.approx(10.0)
+
+
 def test_a_cut_clip_reaches_the_player_as_a_path(qtbot, tmp_path, monkeypatch):
     """The pane kept the clip it was handed, and it has to be the clip.
 

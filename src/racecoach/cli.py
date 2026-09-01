@@ -542,6 +542,14 @@ def _dispatch(args: argparse.Namespace) -> int:
         print(f"  focus run {bundle.focus_run_id}, {len(bundle.runs)} run(s)")
         if bundle.has_video:
             print(f"  recording: included, {bundle.frames} frames indexed")
+            if bundle.paused_s:
+                # Worth saying out loud: it is the difference between the file
+                # that was recorded and the file that was sent, and a researcher
+                # comparing the two sizes should not have to guess why.
+                print(
+                    f"  paused mid-race: {bundle.paused_s:.0f} s of menu cut out"
+                    " before packing"
+                )
         else:
             print("  recording: not included")
         # Said out loud because it is the difference between a participant seeing

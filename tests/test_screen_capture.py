@@ -259,6 +259,80 @@ def test_a_failed_cut_says_what_ffmpeg_said(ffmpeg, tmp_path):
         sc.cut_clip(recording, 1100.0, 1108.0, tmp_path / "clip.mp4", runner=runner)
 
 
+def _wrote(command):
+    Path(command[command.index("-y") + 1]).write_bytes(b"cut")
+    return subprocess.CompletedProcess(command, 0, b"", b"")
+
+
+def test_the_stretches_left_after_a_pause_are_joined_back_together(ffmpeg, tmp_path):
+    """Two takes out of one file, played one after the other."""
+    captured = {}
+
+    def runner(command, **kwargs):
+        captured["command"] = command
+        return _wrote(command)
+
+    sc.condense(
+        tmp_path / "session.mp4",
+        tmp_path / "cut.mp4",
+        ((0.0, 162.08), (990.14, 1248.2)),
+        runner=runner,
+    )
+
+    graph = captured["command"][captured["command"].index("-filter_complex") + 1]
+    assert "trim=start=0.000:end=162.080" in graph
+    assert "trim=start=990.140:end=1248.200" in graph
+    assert "concat=n=2:v=1:a=0" in graph
+    assert captured["command"][captured["command"].index("-map") + 1] == "[cut]"
+
+
+def test_a_recording_with_one_stretch_left_is_not_asked_to_join_anything(ffmpeg, tmp_path):
+    captured = {}
+
+    def runner(command, **kwargs):
+        captured["command"] = command
+        return _wrote(command)
+
+    sc.condense(tmp_path / "session.mp4", tmp_path / "cut.mp4", ((0.0, 30.0),), runner=runner)
+
+    graph = captured["command"][captured["command"].index("-filter_complex") + 1]
+    assert "concat" not in graph
+    assert captured["command"][captured["command"].index("-map") + 1] == "[keep0]"
+
+
+def test_cutting_re_encodes_because_a_copy_can_only_cut_on_a_keyframe(ffmpeg, tmp_path):
+    """A stream copy would leave a group of pictures of menu behind it."""
+    captured = {}
+
+    def runner(command, **kwargs):
+        captured["command"] = command
+        return _wrote(command)
+
+    sc.condense(tmp_path / "session.mp4", tmp_path / "cut.mp4", ((0.0, 30.0),), runner=runner)
+
+    assert captured["command"][captured["command"].index("-c:v") + 1] == "libx264"
+    assert "copy" not in captured["command"]
+
+
+def test_a_recording_with_nothing_left_of_it_is_refused(ffmpeg, tmp_path):
+    with pytest.raises(sc.RecordingError, match="Nothing of that recording"):
+        sc.condense(tmp_path / "session.mp4", tmp_path / "cut.mp4", (), runner=lambda *a, **k: None)
+
+
+def test_an_interrupted_condense_leaves_nothing_under_the_finished_name(ffmpeg, tmp_path):
+    destination = tmp_path / "cut.mp4"
+
+    def runner(command, **kwargs):
+        Path(command[command.index("-y") + 1]).write_bytes(b"half a file")
+        return subprocess.CompletedProcess(command, 255, b"", b"Interrupted")
+
+    with pytest.raises(sc.RecordingError, match="Interrupted"):
+        sc.condense(tmp_path / "session.mp4", destination, ((0.0, 30.0),), runner=runner)
+
+    assert not destination.exists()
+    assert list(tmp_path.glob("*.part.mp4")) == []
+
+
 def test_a_recording_survives_being_written_to_a_manifest_and_read_back(tmp_path):
     """The clips are cut long after the session, from whatever was recorded then."""
     original = sc.Recording(tmp_path / "s.mp4", started_at=1234.5, duration_s=60.25)
