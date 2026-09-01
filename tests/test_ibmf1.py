@@ -21,7 +21,9 @@ from f1coach_core.ibmf1 import (
     UNAVAILABLE_CHANNELS,
     Bundle,
     IbmF1ExportError,
+    declared_arm,
     package,
+    player_key_for,
     study_arm_for,
     to_ibmf1_columns,
 )
@@ -201,7 +203,12 @@ def test_only_a_coached_phase_is_declared_coachable(phase, arm):
 
 
 def test_a_capture_with_no_phase_still_declares_an_arm(capture):
-    """An absent arm is the one value their server reads as "coaching is fine"."""
+    """A race that recorded no phase still says so, rather than saying nothing.
+
+    Their server no longer reads the arm at all -- coaching waits on a Dashboard
+    assignment -- but a null here would leave a researcher assigning a race with
+    no record of what it was driven under.
+    """
     manifest = json.loads((capture / "manifest.json").read_text())
     del manifest["phase"]
     (capture / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -217,6 +224,19 @@ def test_a_baseline_race_is_not_sent_as_coachable(capture):
 
     assert bundle.study_arm == "baseline"
     assert _session(bundle.path)["attempt_label"] == "baseline"
+
+
+def test_the_key_a_researcher_must_assign_is_derived_the_way_their_site_derives_it():
+    """Their playerKey() lower-cases a display name and prefixes it with "name:"."""
+    assert player_key_for("B0826") == "name:b0826"
+    assert player_key_for("Ana Lopez") == "name:ana lopez"
+
+
+def test_a_packed_bundle_can_be_asked_what_arm_it_declared(capture):
+    """The upload reply cannot say: their public view withholds the arm on purpose."""
+    bundle = package(capture, capture.parent / "out.zip")
+
+    assert declared_arm(bundle.path) == ("baseline", bundle.participant_id)
 
 
 # --- what ends up in the bundle -------------------------------------------

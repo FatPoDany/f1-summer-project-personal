@@ -35,6 +35,7 @@ measurement rather than anything the Coach server can use.
 import hashlib
 import json
 import tempfile
+import unicodedata
 import zipfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -154,13 +155,25 @@ VIDEO_SUFFIXES = frozenset({".mp4", ".mov", ".mkv", ".avi"})
 ARRIVING_ENCODING = "utf-8-sig"
 
 # The one phase that may see coaching. Everything else -- control, baseline, and
-# anything a future preset introduces -- is sent through as-is, which their
-# server withholds coaching from, because it recognises only "coached" and
-# refuses arms it does not know. Getting this wrong in the safe direction costs
-# a participant a review they could have had; getting it wrong in the other
-# direction unblinds them and silently ends the comparison.
+# anything a future preset introduces -- is sent through as-is.
+#
+# What this field decides changed under them on 2026-08-31, when their PR #15
+# landed: it is now recorded, not obeyed. deploy/coach_api/sessions.mjs gates
+# coaching on ``server_study_arm``, which only a researcher can set from the
+# Operations Dashboard, and session_store.py strips that key out of anything a
+# bundle carries. Every imported race fails closed, so an Apex upload gets no
+# coaching at all until its participant is assigned there, whatever is declared
+# here. Declaring "coached" can therefore no longer unblind anyone on its own --
+# but it is still the record of what the race was actually driven under, and the
+# assignment a researcher makes is meant to agree with it.
 COACHED_PHASE = "coached"
 UNDECLARED_ARM = "unknown"
+
+# How their site keys a player for that assignment, from ``playerKey()`` in
+# deploy/coach_api/sessions.mjs: a present display_name wins over player_id and
+# is normalised NFKC, then lower-cased. Apex sends the participant pseudonym in
+# both fields, so the display_name branch is always the one that runs.
+PLAYER_KEY_PREFIX = "name:"
 
 
 class IbmF1ExportError(RuntimeError):
@@ -231,15 +244,42 @@ def to_ibmf1_columns(frame: pd.DataFrame) -> pd.DataFrame:
     return pd.concat([frame, pd.DataFrame(added, index=frame.index)], axis=1)
 
 
+def player_key_for(participant_id: str) -> str:
+    """The key their Operations Dashboard assigns a study arm against.
+
+    Printed rather than sent: nothing in a bundle can set an assignment. It is
+    here so a researcher is told which row to click instead of having to guess
+    how their site derived a key from the pseudonym Apex sent.
+    """
+    return PLAYER_KEY_PREFIX + unicodedata.normalize("NFKC", participant_id).lower()
+
+
+def declared_arm(archive: str | Path) -> tuple[str, str]:
+    """The arm and participant a packed bundle declares, read back from the ZIP.
+
+    The server's reply says nothing about the arm -- their public session view
+    withholds it on purpose, so that opening the site cannot unblind anybody --
+    which leaves the bundle itself as the only place to read what was sent.
+    """
+    with zipfile.ZipFile(archive) as stored:
+        session = json.loads(stored.read(SESSION_NAME).decode("utf-8"))
+    arm = str(session.get("study_arm") or UNDECLARED_ARM)
+    return arm, str(session.get("player_id") or "")
+
+
 def study_arm_for(phase: str | None) -> str:
     """Which study group to declare, from the phase the capture recorded.
 
-    Only a coached phase is declared coachable. A baseline run is driven before
-    any coaching exists for that participant and a control run must never see
-    any, so both go over under their own name, which their server does not
-    recognise and therefore withholds coaching from. A capture that recorded no
-    phase declares an arm explicitly rather than declaring none: an absent arm
-    is the one value their server reads as "coaching is fine".
+    A baseline run is driven before any coaching exists for that participant and
+    a control run must never see any, so both go over under their own name. A
+    capture that recorded no phase declares an arm explicitly rather than
+    declaring none, so that a researcher assigning the race is never shown a
+    blank where the reason for the assignment should be.
+
+    None of these values grants or withholds anything by itself: their server
+    reads the arm into the catalog and then gates coaching on a Dashboard
+    assignment instead. What is written here is the claim the assignment is
+    meant to match, not the assignment.
     """
     cleaned = (phase or "").strip().casefold()
     if not cleaned:

@@ -548,6 +548,31 @@ paused mid-race: 828 s of menu cut out before packing
 
 ---
 
+### P5 — 说清楚"声明分组"不等于"拿到辅导" ✅ 已完成（2026-09-01）
+
+PR #15 合并之后（见 §11.2），源码里三处注释和一行 CLI 输出变成了**假的**：
+
+| 位置 | 原来写的 | 事实 |
+|---|---|---|
+| `ibmf1.py` `COACHED_PHASE` 注释 | 服务器"只认 coached，不认识的组名一律拦下" | 它现在两个都不看，只看 Dashboard 指派 |
+| `ibmf1.py` `study_arm_for()` docstring | "没声明 arm 是服务器唯一会当成可以辅导的值" | 没声明同样 fail closed |
+| `cli.py` export 输出 | `study arm: coached -- the site WILL offer AI coaching for this race` | **不会**，除非先指派 |
+
+三处都改了。CLI 现在把研究者要做的那一步直接打出来：
+
+```
+  study arm: coached -- declared, but not yet granted
+    assign this participant on their Operations Dashboard: name:b0826 -> coached
+    until that is done the site withholds coaching from this race
+```
+
+`upload-ibmf1` 传完之后也会再说一次 —— 那才是它开始要紧的时刻。
+分组是从 ZIP 里的 `session.json` 读回来的，不是从服务器响应：
+他们的 `publicSessionView` **故意**不返回 `study_arm`，
+因为把每场比赛的分组公开给访客等于用这道闸门要保护的页面把实验揭盲了。
+
+新增 `player_key_for()` / `declared_arm()` 两个函数 + 2 条测试。
+
 ## 7. 三个决定 —— 已定（2026-08-29）
 
 > 三条都由用户拍板了，结论写在每节开头。7.1 和 7.3 已经写成给队友仓库的两个 PR，见 §10。
@@ -697,7 +722,7 @@ scope 一直是好的。
 
 ## 10. 未完成 / 下一步
 
-- [x] ~~7.1 / 7.3 提 PR~~ —— **#15、#16 已提交，CI 全绿，等队友 review**
+- [x] ~~7.1 / 7.3 提 PR~~ —— **#15 已合并**（`872dbe2`）；**#16 仍未合并**，`origin/carry-participant-questionnaire` 还在，0 条评论
 - [x] ~~P0 适配器实现 + 测试~~ —— 见 §6 P0，端到端跑通
 - [x] ~~真实上传到 demo.lzqqq.org~~ —— 见 §4.5，telemetry-only 已 stored，40 checkpoints
 - [x] ~~P3 帧索引~~ —— 见 §6 P3，866 passed
@@ -706,11 +731,115 @@ scope 一直是好的。
 - [x] ~~`frame_id` ↔ `torcs-0001-%08d.png` 自己抽帧核对~~ —— 见 §6 P4，用研究版自带的
       `Apex/ffmpeg/ffmpeg.exe` 实测：1681 帧、`torcs-0001-00000000.png` 起，命名与数量都对上
 - [x] ~~剪掉录像里的暂停~~ —— 见 §6 P4，5 场里 3 场受影响
-- [ ] **把已经传上去的那场重传** —— 服务器上现在那份仍然是 1248 秒、2/3 是暂停菜单的版本，
-      索引里 3312 行指着冻结画面。重传要么会撞 409（ZIP SHA-256 变了，应该不会），
-      要么会多出一场，需要和队友说一声删掉旧的
+- [x] ~~PR #15 被队友 review 并合并~~ —— `872dbe2`，2026-08-31 22:53 BST，
+      合并版比我提的更严格（闸门改成只认 Dashboard 指派，见 §11.2）
+- [x] ~~队友删掉了那场有暂停的旧上传~~ —— 2026-09-01 查 `/api/dashboard`：
+      24 个玩家 / 77 场，`B0826` 已不在其中
+- [x] ~~源码里关于"声明分组就能拿到辅导"的说法全部更正~~ —— 见 §6 P5
+- [ ] **把剪好的那场重传** —— 旧的已被队友删掉，所以不会撞 409，也不会多出一场。
+      传完之后**必须**在 Operations Dashboard 把 `name:b0826` 指派成 `coached`，
+      否则网站上不会有 coach 按钮（见 §11.3）
 - [ ] 另外两场有暂停的采集（`B0826-baseline` 25.8%、`C0826-baseline` 49.7%）尚未导出上传
 - [ ] 确认 `tWheelState.sa` 是否可用（需要解压锁定的 TORCS 归档）
 - [ ] 和队友对齐 P2 的三条上游改动
 - [ ] 建议队友轮换 `IMPORT_TOKEN`：2026-08-31 它被贴进过对话和本机 shell 历史，
       按 `MYSERVER.md:1201` 的要求这两处都不该出现它
+
+## 11. 队友的收集设计，和 PR #15 合并之后的闸门（2026-09-01）
+
+### 11.1 队友口述的收集方式
+
+> 下发两个类型的安装包（Windows / macOS 双版）。
+> 随机选取一定玩家发放**无 AI coach 版**的 TORCS 打包程序，仅收集他们的比赛 performance 数据；
+> 另一批玩家发放**含 AI coach 版**，收集表现数据的同时收集遥测数据，
+> 并在每一场比赛结束后自动弹出 AI coach 窗口，让 player 在看完分析之后继续下一场。
+
+对上我们这边：
+
+| 队友那边 | Apex 这边 | 是否对得上 |
+|---|---|---|
+| 无 coach 版 → `study_arm: control` | `phase: control` / `baseline` → 同名上传 | ✅ 词汇一致 |
+| 含 coach 版 → `study_arm: coached` | `phase: coached` | ✅ |
+| 对照组只收 performance | Apex 永远收全量遥测 | ⚠️ 见 11.4 |
+| 每场赛后自动弹 coach 窗口 | Apex 有自己的 debrief | 两条独立回路，不冲突 |
+
+### 11.2 PR #15 已合并 —— 分组闸门搬到了服务端
+
+`872dbe2`（2026-08-31 22:53 BST）合并了 `withhold-coaching-from-control-arm`。
+合并版本比我提的那版**更严格**，队友自己又加了一层：
+
+```js
+// deploy/coach_api/sessions.mjs
+export function coachingAllowed(session) {
+  if (!session || session.kind !== "imported") return true;
+  const arm = cleanText(session.server_study_arm, 40)?.toLocaleLowerCase("en-US");
+  return arm === "coached";
+}
+```
+
+关键在 `server_study_arm`：它**只**来自 `study_assignments` 这张新表，
+只能由研究者带 research key `PUT /study/assignments/<playerKey>` 写入；
+`session_store.py:332` 还会把这个键从任何存进来的记录里**主动抹掉**。
+也就是说 —— **包里声明的 `study_arm` 不再是闸门，只是一条记录。**
+
+队友写在源码注释里的理由是对的：*"The installer metadata is not an assignment:
+every current package can report 'coached', so trusting it would silently put
+unassigned and control participants into the intervention."*
+
+### 11.3 对 Apex 的后果：默认是**没有辅导**，而不是有
+
+Apex 上传的每一场都是 `kind: "imported"`，所以合并之后：
+
+- **control / baseline 场次** → 拿不到辅导 ✅ 正是我们想要的（fail closed）
+- **coached 场次** → **也拿不到辅导** ❌ —— 除非研究者先在 Operations Dashboard
+  把这个参与者指派成 `coached`
+
+8-31 那次上传能出 AI 反馈，是因为它发生在 #15 部署之前。**同一个包今天再传一次，
+网站上不会有 coach 按钮。**
+
+这条已经在 Apex 侧修掉了（见 §6 P5）：`export-ibmf1` 和 `upload-ibmf1` 现在会直接把
+要点的那一行 key 打出来，形如 `name:b0826`（他们的 `playerKey()` 优先取 display_name，
+NFKC 归一后小写；Apex 两个字段填的是同一个化名，所以走的一定是 display_name 那条分支）。
+
+### 11.4 对照组的数据形状不一样
+
+队友的对照组安装包**只收 performance**，Apex 的对照组采集**永远带全量遥测**。
+这不构成揭盲（闸门在服务端，遥测本身不显示辅导），但分析时要知道：
+`study_arm: control` 的场次里，Apex 来源的会比队友来源的多出整套 50 Hz 遥测和录像。
+**不打算改** —— 少收数据换不到任何东西，多收的部分对分析只多不少。
+
+### 11.5 队友那边还有一个 bug：Dashboard 会推荐**反过来**的分组
+
+`studyGroup()` 在没有服务端指派时，只看"这个玩家有没有被辅导过"来给建议：
+
+```js
+return {
+  status: coachingNotes > 0 ? "coached_observed" : "control_candidate",
+  recommendation: coachingNotes > 0 ? "coached" : "control",
+  basis: coachingNotes > 0 ? "observed_ai_exposure" : "no_ai_exposure",
+  ...
+};
+```
+
+**它从头到尾没看 `session.study_arm`** —— 而那个字段就在同一个记录上，
+`import_torcs_bundle.py` 刚在 #15 里把它存进去的。
+
+后果：一场**刚导入的 coached 比赛**，`coaching_analysis_count` 必然是 0
+（还没人点过 coach，何况现在闸门关着点不了），于是 Dashboard 建议 **`control`**。
+研究者照着自己看板的建议点下去，就把 coached 参与者永久指派进了对照组 ——
+**正是 #15 要防的那个方向**。
+
+这对队友自己的 player kit 数据一样成立：站上现在 24 个玩家 77 场，
+`coaching_notes = 0` 的玩家全部会被建议成 `control`，不管他们装的是哪个版本的安装包。
+
+修法见 §11.6，已提 PR。
+
+### 11.6 PR：让建议读包里声明的分组
+
+分支 `suggest-the-arm-the-package-declared`，改 `sessions.mjs` 的 `studyGroup()` 一处：
+没有服务端指派时，**优先采信包声明的 arm**，basis 记为 `declared_by_package`；
+包也没声明才退回原来的"看有没有被辅导过"。
+
+刻意**不**动 `coachingAllowed()`：包声明的分组仍然一票不算，
+`server_study_arm` 仍然是唯一的闸门，队友"installer metadata is not an assignment"
+这条原则完全保留。改的只是**给研究者看的建议**从"猜错"变成"猜对"。
