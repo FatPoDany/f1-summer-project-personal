@@ -413,10 +413,15 @@ Apex 写的是 `manifest.json`，不是 `session.json`。importer 允许没有�
 
 不写 `re_cur_time_s`：那是 TORCS 自己的引擎时钟，模拟器外面读不到，宁可缺列也不拿另一个时间冒充。
 
-> ⚠️ **不能假设 sim_time 就是视频时间。实测这台机器上差了三倍。**
-> `B0826-coached` 这场：wall clock 跨 **1233.1 s**，而 `sim_time_s` 只跑到 **405.15 s**。
-> 机器跟不上 TORCS 时模拟时间就慢下来。如果按"第 n 帧 = sim_time n/fps"去对，
-> 最后一帧会错 800 多秒——整场复盘的画面全是错的角落。
+> ⚠️ **不能假设 sim_time 就是视频时间。`B0826-coached` 这场差了 828 秒。**
+> wall clock 跨 **1233.1 s**，而 `sim_time_s` 只跑到 **405.1 s**。
+> 如果按"第 n 帧 = sim_time n/fps"去对，最后一帧会错 800 多秒——整场复盘的画面全是错的角落。
+>
+> **更正（2026-08-31）**：本文档此前把这 828 秒记成"机器跟不上 TORCS，模拟时间慢了三倍"。
+> **那是错的**，逐圈量过：这台机器跑 TORCS 是 **1.000x 实时**。828 秒全部来自**一次暂停**
+> ——参与者在第 2 圈按了 Esc，停在 `Race Stopped` 菜单上 13 分 48 秒，
+> 期间 `sim_time_s` 只前进了 0.020 s（一个模拟步），而录像一直在录那张静止的菜单。
+> 见 §6 P4。
 > 对齐必须走 `wall_clock_s`：录像知道自己第一帧的 wall clock（`manifest.recording.started_at`），
 > 每个遥测样本带着自己的 wall clock，两者一插值就得到帧的模拟时间。
 > `f1coach_core/footage.py` 早就是这么做的，常量也从那里取，不在这里重名一次。
@@ -435,7 +440,7 @@ ffmpeg 会给的真实序号，所以少写几行不会挪动剩下的行。
 > Apex 传的是录像、由服务端自己切图，不受 `MAX_FILES` 约束——按 10 fps，一场二十分钟的
 > 比赛会让他们切出约 12500 张，是他们跑过的任何东西的两倍。4 fps 让同样长度的比赛落在
 > 他们自己的信封里（4994 张）。丢掉的是没人用的分辨率：复盘每个事件只取一帧、总共约 40 帧，
-> 而 0.25 秒的间隔在这场采集的时间尺度上不到 0.1 秒模拟时间（见上面那条三倍漂移）。
+> 而 0.25 秒的间隔对一场 405 秒的比赛来说足够细。
 
 **验证 [实测]**：真实 `B0826-coached` 导出 **4932 行**索引，`frame_id` 14–4945 连续，
 首尾两行的 `sim_time_s` 用独立重算对上（0.2429 / 404.8821），最大 `frame_id` 小于
@@ -464,6 +469,109 @@ ffmpeg -i session.mp4 -vf fps=4 -start_number 0 torcs-0001-%08d.png
 ```
 
 所以"0 行指向不存在的文件"成立的前提是这条命令的输出建模正确。**没证的只剩 ffmpeg 自己的行为。**
+
+### P4 — 剪掉暂停 ✅ 已完成（2026-08-31）
+
+**用户看队友网站上的视频时发现的**：传上去的录像里有一大段游戏暂停界面，整个视频被拉长。
+
+**量出来的**（`sim_time_s` 与 `wall_clock_s` 逐样本比对，5 场 handover 全扫）：
+
+| 采集 | 录像时长 | 比赛时长 | 暂停次数 | 死时间 | 占录像 |
+|---|---|---|---|---|---|
+| `0823-baseline` | 382.1 s | 364.5 s | 0 | 0 s | 0.0% |
+| `B0826-baseline` | 540.8 s | 384.5 s | 2 | 139.4 s | **25.8%** |
+| `B0826-coached` | 1248.5 s | 405.1 s | 1 | 828.1 s | **66.3%** |
+| `C0826-baseline` | 742.0 s | 354.9 s | 1 | 369.1 s | **49.7%** |
+| `C0826-control` | 381.4 s | 361.0 s | 0 | 0 s | 0.0% |
+
+**五场里三场有暂停，不是个例。** 已经传上服务器的那场（`B0826-coached`）是最严重的一场：
+参与者在第 2 圈按 Esc 停在 `Race Stopped` 菜单上 **13 分 48 秒**，`sim_time_s` 期间只走了
+0.020 s。这同时造成两个后果：
+
+1. **视频**：2/3 的时长是一张静止的菜单截图。
+2. **帧索引**：4932 行里 **3312 行（67%）**挤在 0.02 秒的模拟时间窗口里。他们的 review
+   builder 是按 `sim_time_s` 最近挑帧的，所以模拟时间 158.8 s 附近的任何 coaching 事件，
+   配图都会是暂停菜单。
+
+**怎么判定是暂停而不是机器慢**（`f1coach_core/footage.py: stalls`）：看的是**死时间**
+`Δwall − Δsim` 而不是 `Δwall` 本身。录像器每个模拟步都写一行遥测，所以机器慢只会产生
+大量小间隔，永远不会在两个**相邻样本**之间产生秒级的空档；只有模拟器停了才会。
+阈值 2.0 s：对这 5 场采集，它抓到全部暂停、放过全部卡顿（最大的一次卡顿 0.6 s）。
+
+**怎么剪**（`racecoach/telemetry/screen_capture.py: condense`）：`trim` + `concat` 滤镜图，
+重编码而不是 `-c copy`——流拷贝只能在关键帧上切，会留下最多一整个 GOP 的菜单，
+更糟的是会让剪口之后的每一帧都和索引声称的时间对不上。
+
+**帧索引跟着改**（`f1coach_core/footage.py: Segment` / `segments_of`）：剪过之后
+"文件时间"不再等于"录像开始以来的时间"。`segments_of` 给出文件里每一段的
+`(在文件中的位置, 那一刻的 wall clock, 时长)`，`frame_index` 用它把每帧还原回墙钟，
+再插值出模拟时间。**不剪的比赛走的是同一条路径**（一段覆盖全片），代码没有分叉。
+
+**采集原件不动。** 剪的是为上传做的副本（临时目录），磁盘上的 `session.mp4` 保持原样。
+
+**实测（真实 `B0826-coached` 重新导出）**：
+
+```
+recording: included, 1620 frames indexed
+paused mid-race: 828 s of menu cut out before packing
+```
+
+| | 修复前 | 修复后 |
+|---|---|---|
+| 视频时长 | 1248.2 s | **420.1 s** |
+| 视频体积 | 70.9 MB | 58.4 MB |
+| 包体积 | 72.8 MiB | **61.9 MiB** |
+| 索引行数 | 4932 | **1620** |
+| 挤在冻结瞬间 ±0.05 s 的行 | **3312** | **0** |
+| 行间模拟时间间隔（中位） | — | 0.2494 s（= 1/4 fps ✓） |
+| 服务端要抽的帧数 | 4994 | **1681** |
+
+本地剪一次约 **30 秒** CPU（1280×720、21 分钟、`-preset veryfast`）。
+
+**这条同时把两个一直"读码未实测"的点关掉了 [实测]**，因为研究版里那份 ffmpeg
+（`Apex/ffmpeg/ffmpeg.exe`）就能用：
+
+- 他们的 `ffmpeg -i session.mp4 -vf fps=4 -start_number 0 torcs-0001-%08d.png` 对剪后的
+  视频**实际**产出 **1681 帧**，命名从 `torcs-0001-00000000.png` 起——和索引里
+  `image_file` 写的完全一致，最大 `frame_id` 1633 < 1681，没有一行指向不存在的文件。
+- **独立交叉验证**：索引说 `frame_id 1600` 是模拟时间 396.702 s，遥测在那一刻是
+  第 3 圈、46 km/h；把那一帧抽出来看，HUD 显示 `Laps: 3 / 3`、码表 `46`。
+
+**注意：原片是可变帧率。** gdigrab 名义 30 fps，实际 33172 帧 / 1248.2 s = **26.58 fps**。
+所以剪切**不能**用 `setpts=N/FRAME_RATE/TB` 重打时间戳——那会把丢帧的段落加速播放
+（第一次试的结果是 345 s 而不是 420 s）。`trim`+`concat` 保留原始 PTS 间距。
+
+**测试**：新增 18 条（footage 7、screen_capture 5、ibmf1 6），全套 **887 passed**。
+两条关键断言在关掉修复后确实变红：索引行间隔塌成 0.0001 s，以及索引指向文件里不存在的帧。
+
+**未做**：录像头尾（进入比赛前的菜单、冲线后的结算画面）没有剪，只剪比赛中的暂停。
+
+---
+
+### P5 — 说清楚"声明分组"不等于"拿到辅导" ✅ 已完成（2026-09-01）
+
+PR #15 合并之后（见 §11.2），源码里三处注释和一行 CLI 输出变成了**假的**：
+
+| 位置 | 原来写的 | 事实 |
+|---|---|---|
+| `ibmf1.py` `COACHED_PHASE` 注释 | 服务器"只认 coached，不认识的组名一律拦下" | 它现在两个都不看，只看 Dashboard 指派 |
+| `ibmf1.py` `study_arm_for()` docstring | "没声明 arm 是服务器唯一会当成可以辅导的值" | 没声明同样 fail closed |
+| `cli.py` export 输出 | `study arm: coached -- the site WILL offer AI coaching for this race` | **不会**，除非先指派 |
+
+三处都改了。CLI 现在把研究者要做的那一步直接打出来：
+
+```
+  study arm: coached -- declared, but not yet granted
+    assign this participant on their Operations Dashboard: name:b0826 -> coached
+    until that is done the site withholds coaching from this race
+```
+
+`upload-ibmf1` 传完之后也会再说一次 —— 那才是它开始要紧的时刻。
+分组是从 ZIP 里的 `session.json` 读回来的，不是从服务器响应：
+他们的 `publicSessionView` **故意**不返回 `study_arm`，
+因为把每场比赛的分组公开给访客等于用这道闸门要保护的页面把实验揭盲了。
+
+新增 `player_key_for()` / `declared_arm()` 两个函数 + 2 条测试。
 
 ## 7. 三个决定 —— 已定（2026-08-29）
 
@@ -614,15 +722,199 @@ scope 一直是好的。
 
 ## 10. 未完成 / 下一步
 
-- [x] ~~7.1 / 7.3 提 PR~~ —— **#15、#16 已提交，CI 全绿，等队友 review**
+- [x] ~~7.1 / 7.3 提 PR~~ —— **#15 已合并**（`872dbe2`）；**#16 仍未合并**，`origin/carry-participant-questionnaire` 还在，0 条评论
 - [x] ~~P0 适配器实现 + 测试~~ —— 见 §6 P0，端到端跑通
 - [x] ~~真实上传到 demo.lzqqq.org~~ —— 见 §4.5，telemetry-only 已 stored，40 checkpoints
 - [x] ~~P3 帧索引~~ —— 见 §6 P3，866 passed
-- [ ] **带视频的包真实上传一次** —— 本地已用他们的 `find_inputs` + `prepare_media` 跑通，
-      4 fps 下服务端要切 4994 张图，在他们自己的 `MAX_FILES` 6000 以内
-- [ ] `frame_id` ↔ `torcs-0001-%08d.png` 自己抽帧核对一次（这台机器没有 ffmpeg，
-      目前是读码 + 按他们的命令建模）
+- [x] ~~带视频的包真实上传一次~~ —— 2026-08-31 `complete 100% :: Custom session stored`，
+      40 checkpoints（与 telemetry-only 那次一致），服务端耗时约 50 分钟、存 118 MB
+- [x] ~~`frame_id` ↔ `torcs-0001-%08d.png` 自己抽帧核对~~ —— 见 §6 P4，用研究版自带的
+      `Apex/ffmpeg/ffmpeg.exe` 实测：1681 帧、`torcs-0001-00000000.png` 起，命名与数量都对上
+- [x] ~~剪掉录像里的暂停~~ —— 见 §6 P4，5 场里 3 场受影响
+- [x] ~~PR #15 被队友 review 并合并~~ —— `872dbe2`，2026-08-31 22:53 BST，
+      合并版比我提的更严格（闸门改成只认 Dashboard 指派，见 §11.2）
+- [x] ~~队友删掉了那场有暂停的旧上传~~ —— 2026-09-01 查 `/api/dashboard`：
+      24 个玩家 / 77 场，`B0826` 已不在其中
+- [x] ~~源码里关于"声明分组就能拿到辅导"的说法全部更正~~ —— 见 §6 P5
+- [x] ~~把剪好的那场重传~~ —— 2026-09-01 08:45Z 完成，session
+      `666e10069c0f5557126e05d5cde25b24b2a3e4a566f456e9fc5b443610491299`，
+      40 个 checkpoint，`best_lap 126.152 s / top 215.27 km/h / 3 圈 / P1`
+- [ ] **在 Operations Dashboard 把 `name:b0826` 指派成 `coached`** —— 没做这一步
+      网站上就没有 coach 按钮（见 §11.3）。需要 research key，只能由队友或持 key 的人操作
+- [ ] 只传了 coached 这一场，所以这个参与者没有可比的前一场，`improvement` 是
+      `insufficient_data`；要补就把 `B0826-baseline` 也传上去
+- [ ] 另外两场有暂停的采集（`B0826-baseline` 25.8%、`C0826-baseline` 49.7%）尚未导出上传
 - [ ] 确认 `tWheelState.sa` 是否可用（需要解压锁定的 TORCS 归档）
 - [ ] 和队友对齐 P2 的三条上游改动
 - [ ] 建议队友轮换 `IMPORT_TOKEN`：2026-08-31 它被贴进过对话和本机 shell 历史，
       按 `MYSERVER.md:1201` 的要求这两处都不该出现它
+
+## 11. 队友的收集设计，和 PR #15 合并之后的闸门（2026-09-01）
+
+### 11.1 队友口述的收集方式
+
+> 下发两个类型的安装包（Windows / macOS 双版）。
+> 随机选取一定玩家发放**无 AI coach 版**的 TORCS 打包程序，仅收集他们的比赛 performance 数据；
+> 另一批玩家发放**含 AI coach 版**，收集表现数据的同时收集遥测数据，
+> 并在每一场比赛结束后自动弹出 AI coach 窗口，让 player 在看完分析之后继续下一场。
+
+对上我们这边：
+
+| 队友那边 | Apex 这边 | 是否对得上 |
+|---|---|---|
+| 无 coach 版 → `study_arm: control` | `phase: control` / `baseline` → 同名上传 | ✅ 词汇一致 |
+| 含 coach 版 → `study_arm: coached` | `phase: coached` | ✅ |
+| 对照组只收 performance | Apex 永远收全量遥测 | ⚠️ 见 11.4 |
+| 每场赛后自动弹 coach 窗口 | Apex 有自己的 debrief | 两条独立回路，不冲突 |
+
+### 11.2 PR #15 已合并 —— 分组闸门搬到了服务端
+
+`872dbe2`（2026-08-31 22:53 BST）合并了 `withhold-coaching-from-control-arm`。
+合并版本比我提的那版**更严格**，队友自己又加了一层：
+
+```js
+// deploy/coach_api/sessions.mjs
+export function coachingAllowed(session) {
+  if (!session || session.kind !== "imported") return true;
+  const arm = cleanText(session.server_study_arm, 40)?.toLocaleLowerCase("en-US");
+  return arm === "coached";
+}
+```
+
+关键在 `server_study_arm`：它**只**来自 `study_assignments` 这张新表，
+只能由研究者带 research key `PUT /study/assignments/<playerKey>` 写入；
+`session_store.py:332` 还会把这个键从任何存进来的记录里**主动抹掉**。
+也就是说 —— **包里声明的 `study_arm` 不再是闸门，只是一条记录。**
+
+队友写在源码注释里的理由是对的：*"The installer metadata is not an assignment:
+every current package can report 'coached', so trusting it would silently put
+unassigned and control participants into the intervention."*
+
+### 11.3 对 Apex 的后果：默认是**没有辅导**，而不是有
+
+Apex 上传的每一场都是 `kind: "imported"`，所以合并之后：
+
+- **control / baseline 场次** → 拿不到辅导 ✅ 正是我们想要的（fail closed）
+- **coached 场次** → **也拿不到辅导** ❌ —— 除非研究者先在 Operations Dashboard
+  把这个参与者指派成 `coached`
+
+8-31 那次上传能出 AI 反馈，是因为它发生在 #15 部署之前。**同一个包今天再传一次，
+网站上不会有 coach 按钮。**
+
+这条已经在 Apex 侧修掉了（见 §6 P5）：`export-ibmf1` 和 `upload-ibmf1` 现在会直接把
+要点的那一行 key 打出来，形如 `name:b0826`（他们的 `playerKey()` 优先取 display_name，
+NFKC 归一后小写；Apex 两个字段填的是同一个化名，所以走的一定是 display_name 那条分支）。
+
+### 11.4 对照组的数据形状不一样
+
+队友的对照组安装包**只收 performance**，Apex 的对照组采集**永远带全量遥测**。
+这不构成揭盲（闸门在服务端，遥测本身不显示辅导），但分析时要知道：
+`study_arm: control` 的场次里，Apex 来源的会比队友来源的多出整套 50 Hz 遥测和录像。
+**不打算改** —— 少收数据换不到任何东西，多收的部分对分析只多不少。
+
+### 11.5 队友那边还有一个 bug：Dashboard 会推荐**反过来**的分组
+
+`studyGroup()` 在没有服务端指派时，只看"这个玩家有没有被辅导过"来给建议：
+
+```js
+return {
+  status: coachingNotes > 0 ? "coached_observed" : "control_candidate",
+  recommendation: coachingNotes > 0 ? "coached" : "control",
+  basis: coachingNotes > 0 ? "observed_ai_exposure" : "no_ai_exposure",
+  ...
+};
+```
+
+**它从头到尾没看 `session.study_arm`** —— 而那个字段就在同一个记录上，
+`import_torcs_bundle.py` 刚在 #15 里把它存进去的。
+
+后果：一场**刚导入的 coached 比赛**，`coaching_analysis_count` 必然是 0
+（还没人点过 coach，何况现在闸门关着点不了），于是 Dashboard 建议 **`control`**。
+研究者照着自己看板的建议点下去，就把 coached 参与者永久指派进了对照组 ——
+**正是 #15 要防的那个方向**。
+
+这对队友自己的 player kit 数据一样成立：站上现在 24 个玩家 77 场，
+`coaching_notes = 0` 的玩家全部会被建议成 `control`，不管他们装的是哪个版本的安装包。
+
+修法见 §11.6，已提 PR。
+
+### 11.6 PR #23：让建议读包里声明的分组
+
+<https://github.com/UOBGraduate/IBMF1/pull/23> —— 分支 `suggest-the-arm-the-package-declared`，改 `sessions.mjs` 的 `studyGroup()` 一处：
+没有服务端指派时，**优先采信包声明的 arm**，basis 记为 `declared_by_package`；
+包也没声明才退回原来的"看有没有被辅导过"。
+
+刻意**不**动 `coachingAllowed()`：包声明的分组仍然一票不算，
+`server_study_arm` 仍然是唯一的闸门，队友"installer metadata is not an assignment"
+这条原则完全保留。改的只是**给研究者看的建议**从"猜错"变成"猜对"。
+
+## 12. 两边跑的不是同一条赛道（2026-09-01）
+
+队友说他采集的数据全是 `g-track-1`。核对了线上 `/api/dashboard` 的 77 场：**77/77 都是
+`g-track-1`**，没有例外。而 Apex 的冻结预设是 `aalborg`。
+
+| | 队友 `ibmf1-practice-v5` | Apex `apex-study-v1` |
+|---|---|---|
+| 赛道 | `g-track-1`（CG Speedway number 1），road | `aalborg`，road |
+| 圈数 | 2 | 3 |
+| 车 | `car1-trb1` | `car7-trb1` |
+| 对手 | human + 3 robots | 同为 human + robots |
+| 冻结方式 | `practice.xml` + `verify_player_payload.py` 校验安装包里确实只有这条赛道 | `apexstudy.xml` |
+
+### 12.1 差多少（实测）
+
+队友那 77 场 vs Apex `B0826-coached`：
+
+| 指标 | `g-track-1`（n=77，中位数） | `aalborg`（B0826） | 倍数 |
+|---|---|---|---|
+| 最快圈 | **43.41 s**（38.00 – 76.00） | **126.15 s** | **2.9×** |
+| 平均完成圈 | 46.91 s | 135.03 s | 2.9× |
+| 最高速 | **250.03 km/h**（241 – 259） | **215.27 km/h** | 0.86× |
+| 单圈长度 | ≈ 2.06 km | ≈ 2.62 km | 1.27× |
+| 每场时长 | 101.10 s | 405.13 s | 4.0× |
+| 完成圈数 | 1 或 2（24 场只跑完 1 圈） | 3 | — |
+
+**赛道只长 1.27 倍，圈速却慢 2.9 倍** —— 差的不是长度是难度。CG Speedway 快而开阔，
+Aalborg 弯多而紧，最高速反过来低 14% 正好印证这一点。
+
+### 12.2 结论：绝对指标不能混在一起统计
+
+`best_lap_time_s`、`mean_completed_lap_time_s`、`top_speed_kmh`、`distance_raced_m`、
+`sim_duration_s`、`finish_position`、`completed_laps` —— 这些跨两个来源**都不可比**。
+
+**但管线本身没坏。** `g-track-1` 只硬编码在他们的**安装包打包/校验**里
+（`verify_player_payload.py`、`pack_session.py` 的默认值），导入和 review 那条链路完全
+不认赛道，keyframe 是从遥测几何画的。9-01 那次上传实测：`track: "aalborg"` 正常入库，
+40 个 checkpoint，成绩摘要全对。
+
+**真正可比的是"同一个人自己的进步"**，而这恰好就是这个实验要测的东西 ——
+AI coaching 的效果是参与者相对自己的变化，不是绝对圈速。前提是这个差值本身可比。
+
+### 12.3 为此给队友提的第二个 PR（#24）
+
+他们的 `improvementFrom()` 拿玩家上一场直接相减，**从来不检查是不是同一条赛道**，
+然后把结果当 "N s faster" 印在看板上。他们全站单赛道所以至今没错过，
+但一旦第二条赛道出现就会错：同一个人从 CG Speedway 换到 Aalborg，
+看板会显示 **"82.8 s slower"** 外加一个 `slower` 徽章。
+
+PR #24 做两件事：
+1. 赛道变了就 `comparable: false`、所有差值置 null、标签显示 "Different track"
+   （没声明赛道的老数据照旧比较 —— 那是字段存在之前导入的全部比赛）；
+2. 加 `best_lap_gain_pct` / `mean_lap_gain_pct`。**百分比是唯一能跨赛道汇总的形式** ——
+   126 秒的圈快 5 秒和 43 秒的圈快 5 秒不是一回事，把两者平均等于在测赛道而不是在测辅导。
+   绝对秒数保留不动，那是车手认得的量。
+
+`trend` 的 ±0.05 s 阈值同样是赛道尺度相关的（占 CG Speedway 一圈 0.12%、Aalborg 一圈
+0.04%），**刻意没动** —— 改"多少算进步"是研究决定，不是 bug 修复。
+
+### 12.4 待你决定：Apex 要不要换到 `g-track-1`
+
+这是研究设计问题，不是技术问题，所以没有替你决定。两边的理由：
+
+**换过去** —— 77 场 vs 5 场，绝对指标直接可比，样本池合成一个；队友的安装包是刻意冻结在
+这条赛道上的（`verify_player_payload.py` 专门校验这件事）。代价：已采的 5 场变成单独一层。
+
+**不换** —— Aalborg 弯多，每圈能产出的辅导素材大约是 CG Speedway 的三倍（126 s vs 43 s），
+对"AI coaching 有没有用"这个问题本身更有信息量；Apex 跑 3 圈也比 2 圈多一圈数据。
+代价：跨来源只能比百分比，不能比秒数 —— 而 #24 合并之后这条路是通的。
+

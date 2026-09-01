@@ -393,6 +393,85 @@ def cut_clip(
     return destination
 
 
+def condense(
+    source: str | Path,
+    destination: str | Path,
+    keep: tuple[tuple[float, float], ...],
+    *,
+    runner=subprocess.run,
+) -> Path:
+    """Write out only the stretches of a recording worth keeping, end to end.
+
+    A participant who opens the pause menu leaves the recorder running against a
+    still picture, and on this study's captures that was a quarter, a half and
+    two thirds of three of the five files. Cutting those spans out is not
+    tidying: a review site given the whole file shows minutes of a menu, and the
+    frame index over it spends most of its rows on one frozen instant.
+
+    Re-encoded rather than stream-copied, for the same reason ``cut_clip`` is: a
+    copy can only cut on a keyframe, so it would leave up to a whole group of
+    pictures of pause menu behind and, worse, put every later frame at a
+    different time from the one the index claims for it.
+
+    The spans are offsets into ``source``, in order and not overlapping. What
+    comes back is a file whose own clock runs from zero across their total
+    length -- see ``f1coach_core.footage.segments_of`` for reading a wall clock
+    back off it.
+    """
+    binary = ffmpeg_binary()
+    if binary is None:
+        raise RecordingError("No ffmpeg with this install, so nothing can be cut out.")
+    if not keep:
+        raise RecordingError("Nothing of that recording was kept, so there is no file to write.")
+
+    trims = [
+        f"[0:v]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS[keep{n}]"
+        for n, (start, end) in enumerate(keep)
+    ]
+    graph = ";".join(trims)
+    output = f"[keep{len(keep) - 1}]"
+    if len(keep) > 1:
+        joined = "".join(f"[keep{n}]" for n in range(len(keep)))
+        graph = f"{graph};{joined}concat=n={len(keep)}:v=1:a=0[cut]"
+        output = "[cut]"
+
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    # Beside the file and moved into place when ffmpeg is done, so an
+    # interrupted cut cannot be mistaken for a finished one. See cut_clip.
+    partial = destination.with_name(f"{destination.stem}.part{destination.suffix}")
+    command = [
+        str(binary),
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(source),
+        "-filter_complex",
+        graph,
+        "-map",
+        output,
+        "-c:v",
+        "libx264",
+        "-preset",
+        PRESET,
+        "-crf",
+        str(CRF),
+        "-pix_fmt",
+        "yuv420p",
+        "-an",  # the recording has no audio, and the study is not about sound
+        "-y",
+        str(partial),
+    ]
+    completed = runner(command, capture_output=True, **_no_console_window())
+    if completed.returncode != 0 or not partial.is_file():
+        partial.unlink(missing_ok=True)
+        detail = (getattr(completed, "stderr", b"") or b"").decode("utf-8", "replace")
+        raise RecordingError(f"Could not cut the recording down: {detail.strip()[:200]}")
+    os.replace(partial, destination)
+    return destination
+
+
 def _why(process) -> str:
     """Whatever ffmpeg said on its way out, trimmed to something readable."""
     stream = getattr(process, "stderr", None)

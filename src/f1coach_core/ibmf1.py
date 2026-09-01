@@ -7,7 +7,7 @@ six: both projects grew out of the same 249-column TORCS exporter vocabulary,
 which is also why ``f1coach_core.torcs`` can read theirs.
 
 So this is a translation, not a second measurement. Nothing here computes a
-telemetry fact. Four kinds of work happen:
+telemetry fact. Five kinds of work happen:
 
 * four columns their pipeline reads under a different name or in a different
   unit are added from the ones the recorder actually wrote;
@@ -19,7 +19,11 @@ telemetry fact. Four kinds of work happen:
   manifest already recorded;
 * one ``*.frames.csv`` index is written when a recording travels with the race,
   because their importer refuses media without one -- see ``frame_index`` for
-  how the times in it are recovered rather than invented.
+  how the times in it are recovered rather than invented;
+* a recording that ran on through a pause menu is cut back to the race before it
+  is packed, because a participant's break is not footage of driving and their
+  review site would otherwise be given minutes of a still picture -- see
+  ``_without_pauses``.
 
 What is deliberately not sent: the capture manifest, whose paths name this
 machine and its user account and whose digests describe the pre-translation
@@ -30,6 +34,8 @@ measurement rather than anything the Coach server can use.
 
 import hashlib
 import json
+import tempfile
+import unicodedata
 import zipfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -42,7 +48,12 @@ import pandas as pd
 # shares with a screen recording, which knows nothing of simulation time. Taken
 # from the module that already joins footage to telemetry through it rather than
 # named a second time here.
-from f1coach_core.footage import WALL_CLOCK_COLUMN
+from f1coach_core.footage import (
+    WALL_CLOCK_COLUMN,
+    Segment,
+    segments_of,
+    stalls,
+)
 from f1coach_core.participant import Background, load_background
 
 # Their schema, not ours. Named here so a reader can find the other end:
@@ -144,13 +155,25 @@ VIDEO_SUFFIXES = frozenset({".mp4", ".mov", ".mkv", ".avi"})
 ARRIVING_ENCODING = "utf-8-sig"
 
 # The one phase that may see coaching. Everything else -- control, baseline, and
-# anything a future preset introduces -- is sent through as-is, which their
-# server withholds coaching from, because it recognises only "coached" and
-# refuses arms it does not know. Getting this wrong in the safe direction costs
-# a participant a review they could have had; getting it wrong in the other
-# direction unblinds them and silently ends the comparison.
+# anything a future preset introduces -- is sent through as-is.
+#
+# What this field decides changed under them on 2026-08-31, when their PR #15
+# landed: it is now recorded, not obeyed. deploy/coach_api/sessions.mjs gates
+# coaching on ``server_study_arm``, which only a researcher can set from the
+# Operations Dashboard, and session_store.py strips that key out of anything a
+# bundle carries. Every imported race fails closed, so an Apex upload gets no
+# coaching at all until its participant is assigned there, whatever is declared
+# here. Declaring "coached" can therefore no longer unblind anyone on its own --
+# but it is still the record of what the race was actually driven under, and the
+# assignment a researcher makes is meant to agree with it.
 COACHED_PHASE = "coached"
 UNDECLARED_ARM = "unknown"
+
+# How their site keys a player for that assignment, from ``playerKey()`` in
+# deploy/coach_api/sessions.mjs: a present display_name wins over player_id and
+# is normalised NFKC, then lower-cased. Apex sends the participant pseudonym in
+# both fields, so the display_name branch is always the one that runs.
+PLAYER_KEY_PREFIX = "name:"
 
 
 class IbmF1ExportError(RuntimeError):
@@ -169,6 +192,9 @@ class Bundle:
     rows: int
     has_video: bool
     frames: int = 0
+    # Wall clock cut out of the recording before it was packed, so a caller can
+    # say what was removed rather than only that the file got smaller.
+    paused_s: float = 0.0
 
     @property
     def bytes(self) -> int:
@@ -218,15 +244,42 @@ def to_ibmf1_columns(frame: pd.DataFrame) -> pd.DataFrame:
     return pd.concat([frame, pd.DataFrame(added, index=frame.index)], axis=1)
 
 
+def player_key_for(participant_id: str) -> str:
+    """The key their Operations Dashboard assigns a study arm against.
+
+    Printed rather than sent: nothing in a bundle can set an assignment. It is
+    here so a researcher is told which row to click instead of having to guess
+    how their site derived a key from the pseudonym Apex sent.
+    """
+    return PLAYER_KEY_PREFIX + unicodedata.normalize("NFKC", participant_id).lower()
+
+
+def declared_arm(archive: str | Path) -> tuple[str, str]:
+    """The arm and participant a packed bundle declares, read back from the ZIP.
+
+    The server's reply says nothing about the arm -- their public session view
+    withholds it on purpose, so that opening the site cannot unblind anybody --
+    which leaves the bundle itself as the only place to read what was sent.
+    """
+    with zipfile.ZipFile(archive) as stored:
+        session = json.loads(stored.read(SESSION_NAME).decode("utf-8"))
+    arm = str(session.get("study_arm") or UNDECLARED_ARM)
+    return arm, str(session.get("player_id") or "")
+
+
 def study_arm_for(phase: str | None) -> str:
     """Which study group to declare, from the phase the capture recorded.
 
-    Only a coached phase is declared coachable. A baseline run is driven before
-    any coaching exists for that participant and a control run must never see
-    any, so both go over under their own name, which their server does not
-    recognise and therefore withholds coaching from. A capture that recorded no
-    phase declares an arm explicitly rather than declaring none: an absent arm
-    is the one value their server reads as "coaching is fine".
+    A baseline run is driven before any coaching exists for that participant and
+    a control run must never see any, so both go over under their own name. A
+    capture that recorded no phase declares an arm explicitly rather than
+    declaring none, so that a researcher assigning the race is never shown a
+    blank where the reason for the assignment should be.
+
+    None of these values grants or withholds anything by itself: their server
+    reads the arm into the catalog and then gates coaching on a Dashboard
+    assignment instead. What is written here is the claim the assignment is
+    meant to match, not the assignment.
     """
     cleaned = (phase or "").strip().casefold()
     if not cleaned:
@@ -241,6 +294,7 @@ def frame_index(
     fps: float = SIDECAR_FPS,
     capture_id: str = "",
     display: tuple[int | None, int | None] = (None, None),
+    segments: tuple[Segment, ...] | None = None,
 ) -> pd.DataFrame:
     """Where each frame of the recording sits in simulation time.
 
@@ -265,6 +319,11 @@ def frame_index(
     ``sim_time_s``, so such rows would compete to illustrate the opening and
     closing events. ``frame_id`` stays the number their ffmpeg call will give the
     frame, so leaving rows out never moves the rows that remain.
+
+    ``segments`` says which stretches of the recording the shipped file actually
+    holds, for a file that had its pauses cut out. Without it the file is taken
+    to be the recording as it was made, which is the same answer for a race
+    nobody paused.
     """
     if not isinstance(recording, dict) or recording.get("started_at") is None:
         raise IbmF1ExportError(
@@ -297,11 +356,22 @@ def frame_index(
 
     started = float(recording["started_at"])
     duration = float(recording.get("duration_s") or 0.0)
+    if segments is None:
+        segments = segments_of(started, duration)
+    at_file = np.array([part.at_file_s for part in segments], dtype=float)
+    from_clock = np.array([part.from_wall_clock for part in segments], dtype=float)
     # One short of the frames ffmpeg will emit. A row naming a frame that was
     # never cut points their builder at a file that is not there; a frame with no
     # row is merely never chosen.
-    ids = np.arange(max(0, int(duration * fps)))
-    instants = started + ids / fps
+    ids = np.arange(max(0, int(sum(part.seconds for part in segments) * fps)))
+    at = ids / fps
+    # Which stretch of the recording each frame came from, and so which wall
+    # clock to read it against. Once a pause has been cut out, how far into the
+    # file a frame sits is no longer how long after the recorder started it was
+    # taken, and every frame past the cut would otherwise be handed an instant
+    # minutes too early.
+    part_of = np.searchsorted(at_file, at, side="right") - 1
+    instants = from_clock[part_of] + (at - at_file[part_of])
     inside = (instants >= clock[0]) & (instants <= clock[-1])
     ids, instants = ids[inside], instants[inside]
     if ids.size == 0:
@@ -507,6 +577,56 @@ def build_session(
     return session
 
 
+def _without_pauses(
+    video: Path, recording, frame, into: Path
+) -> tuple[Path, tuple[Segment, ...] | None, float]:
+    """The recording with its pause menus cut out, and where its frames now sit.
+
+    A participant who opens the pause menu stops the race but not the recorder,
+    so the file carries a still picture for as long as they were away. Sending
+    that is worse than untidy: their review builder picks the frame nearest a
+    coaching event, and every one of those still frames claims the instant the
+    race stopped, so an event near it is illustrated with a menu.
+
+    The original capture is never touched. What is cut is a copy made for the
+    upload, in ``into``, and the segments returned are how to read a wall clock
+    back off it.
+    """
+    if not isinstance(recording, dict) or recording.get("started_at") is None:
+        return video, None, 0.0  # frame_index refuses this, with a better message
+    if frame is None or WALL_CLOCK_COLUMN not in frame.columns:
+        return video, None, 0.0  # likewise
+    paused = stalls(frame)
+    if not paused:
+        return video, None, 0.0
+
+    started = float(recording["started_at"])
+    duration = float(recording.get("duration_s") or 0.0)
+    segments = segments_of(started, duration, paused)
+    keep = tuple(
+        (
+            part.from_wall_clock - started,
+            part.from_wall_clock - started + part.seconds,
+        )
+        for part in segments
+    )
+    paused_s = sum(window.seconds for window in paused)
+
+    from racecoach.telemetry.screen_capture import RecordingError, condense
+
+    try:
+        cut = condense(video, into / video.name, keep)
+    except RecordingError as why:
+        raise IbmF1ExportError(
+            f"This race was paused for {paused_s:.0f} s and the recording ran "
+            "through it, so most of the video is a menu and most of the frame "
+            "index would point at it. Cutting that out needs ffmpeg, which this "
+            f"install could not use: {why}. Point APEX_FFMPEG at an ffmpeg, or "
+            "export without the recording (racecoach export-ibmf1 --no-video)."
+        ) from why
+    return cut, segments, paused_s
+
+
 def package(
     capture_dir: str | Path,
     destination: str | Path,
@@ -532,6 +652,10 @@ def package(
     without a frame index, so one is written beside it -- see ``frame_index``.
     When the capture cannot support an honest index, this raises rather than
     quietly sending the race without its video.
+
+    A recording is also cut back to the race before it is packed, if the
+    participant paused part way through -- see ``_without_pauses``. The capture
+    on disk is never touched; what is cut is the copy that gets uploaded.
     """
     capture_dir = Path(capture_dir)
     if not capture_dir.is_dir():
@@ -558,7 +682,10 @@ def package(
     clocks: dict[str, pd.DataFrame] = {}
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as archive:
+    paused_s = 0.0
+    with tempfile.TemporaryDirectory(prefix="ibmf1-export-") as scratch, zipfile.ZipFile(
+        destination, "w", zipfile.ZIP_DEFLATED
+    ) as archive:
         for source in sources:
             frame = pd.read_csv(source, encoding=ARRIVING_ENCODING)
             payload = to_ibmf1_columns(frame).to_csv(
@@ -588,13 +715,20 @@ def package(
         video_name = videos[0].name if videos else None
         frames = pd.DataFrame()
         if video_name:
+            recording = manifest.get("recording")
+            sending, segments, paused_s = _without_pauses(
+                videos[0], recording, clocks.get(focus_name), Path(scratch)
+            )
             frames = frame_index(
                 clocks.get(focus_name),
-                manifest.get("recording"),
+                recording,
                 capture_id=Path(focus_name).stem,
                 display=_display_size(manifest),
+                segments=segments,
             )
-            archive.write(videos[0], video_name)
+            # Under the name the capture gave it either way: what travels is one
+            # recording of one race, whether or not a pause was taken out of it.
+            archive.write(sending, video_name)
             archive.writestr(
                 SIDECAR_NAME, frames.to_csv(index=False, lineterminator="\n")
             )
@@ -632,4 +766,5 @@ def package(
         rows=focus_rows,
         has_video=video_name is not None,
         frames=len(frames),
+        paused_s=paused_s,
     )

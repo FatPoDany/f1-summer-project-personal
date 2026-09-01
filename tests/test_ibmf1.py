@@ -21,12 +21,14 @@ from f1coach_core.ibmf1 import (
     UNAVAILABLE_CHANNELS,
     Bundle,
     IbmF1ExportError,
+    declared_arm,
     package,
+    player_key_for,
     study_arm_for,
     to_ibmf1_columns,
 )
 from f1coach_core.participant import Background, save_background
-from racecoach.telemetry import ibmf1_upload
+from racecoach.telemetry import ibmf1_upload, screen_capture
 from racecoach.telemetry.ibmf1_upload import (
     Endpoint,
     IbmF1UploadError,
@@ -201,7 +203,12 @@ def test_only_a_coached_phase_is_declared_coachable(phase, arm):
 
 
 def test_a_capture_with_no_phase_still_declares_an_arm(capture):
-    """An absent arm is the one value their server reads as "coaching is fine"."""
+    """A race that recorded no phase still says so, rather than saying nothing.
+
+    Their server no longer reads the arm at all -- coaching waits on a Dashboard
+    assignment -- but a null here would leave a researcher assigning a race with
+    no record of what it was driven under.
+    """
     manifest = json.loads((capture / "manifest.json").read_text())
     del manifest["phase"]
     (capture / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -217,6 +224,19 @@ def test_a_baseline_race_is_not_sent_as_coachable(capture):
 
     assert bundle.study_arm == "baseline"
     assert _session(bundle.path)["attempt_label"] == "baseline"
+
+
+def test_the_key_a_researcher_must_assign_is_derived_the_way_their_site_derives_it():
+    """Their playerKey() lower-cases a display name and prefixes it with "name:"."""
+    assert player_key_for("B0826") == "name:b0826"
+    assert player_key_for("Ana Lopez") == "name:ana lopez"
+
+
+def test_a_packed_bundle_can_be_asked_what_arm_it_declared(capture):
+    """The upload reply cannot say: their public view withholds the arm on purpose."""
+    bundle = package(capture, capture.parent / "out.zip")
+
+    assert declared_arm(bundle.path) == ("baseline", bundle.participant_id)
 
 
 # --- what ends up in the bundle -------------------------------------------
@@ -467,6 +487,134 @@ def test_a_run_with_no_wall_clock_cannot_place_the_recording(capture):
     bundle = package(capture, capture.parent / "quiet.zip", include_video=False)
     assert bundle.has_video is False
     assert bundle.rows == 5
+
+
+# --- the race the participant paused ---------------------------------------
+
+PAUSE_S = 30.0  # long enough to be a pause menu, not a stutter
+TAIL_S = 1.02  # the recorder runs on after TORCS, the way it really does
+CUT_MP4 = b"the recording with its pause taken out"
+
+
+@pytest.fixture
+def paused_capture(tmp_path, monkeypatch):
+    """long_capture's shape, with the participant away from the wheel in the middle.
+
+    The wall clock jumps thirty seconds between two consecutive samples while
+    the simulation clock steps once: TORCS stopped, and the recorder outside it
+    did not.
+    """
+    monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "ws"))
+    directory = tmp_path / "B0826-coached-20260826-095423"
+    directory.mkdir()
+    frame = _frame(500)
+    frame["wall_clock_s"] = [
+        FIRST_SAMPLE_CLOCK + 0.02 * n + (PAUSE_S if n >= 250 else 0.0) for n in range(500)
+    ]
+    frame.to_csv(directory / "human-1-1787735531-9624-1.csv", index=False)
+    (directory / "session.mp4").write_bytes(b"not really an mp4")
+    (directory / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "apex-human-capture-v1",
+                "participant_id": "B0826",
+                "phase": "coached",
+                "started_at": "2026-08-26T09:54:23+00:00",
+                "study_preset": {"window_width": 1280, "window_height": 720},
+                "runs": [{"file": "human-1-1787735531-9624-1.csv", "samples": 500}],
+                "recording": {
+                    "started_at": FIRST_SAMPLE_CLOCK - LEAD_S,
+                    "duration_s": LEAD_S + PAUSE_S + TELEMETRY_SPAN_S + TAIL_S,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return directory
+
+
+@pytest.fixture
+def cutter(monkeypatch):
+    """Stands in for ffmpeg, and remembers what it was asked to keep."""
+    asked: dict = {}
+
+    def condense(source, destination, keep, **kwargs):
+        asked["source"] = Path(source)
+        asked["keep"] = keep
+        Path(destination).write_bytes(CUT_MP4)
+        return Path(destination)
+
+    monkeypatch.setattr(screen_capture, "condense", condense)
+    return asked
+
+
+def _video(bundle_path) -> bytes:
+    with zipfile.ZipFile(bundle_path) as archive:
+        return archive.read("session.mp4")
+
+
+def test_the_pause_is_cut_out_of_the_recording_before_it_is_sent(paused_capture, cutter):
+    """Under its own name still: it is one recording of one race either way."""
+    bundle = package(paused_capture, paused_capture.parent / "out.zip")
+
+    assert bundle.paused_s == pytest.approx(PAUSE_S, abs=0.05)
+    assert _video(bundle.path) == CUT_MP4
+    # The stretches kept are offsets into the file, either side of the pause.
+    assert cutter["keep"][0] == pytest.approx((0.0, LEAD_S + 4.98))
+    assert cutter["source"].name == "session.mp4"
+
+
+def test_the_capture_on_disk_is_left_as_it_was_recorded(paused_capture, cutter):
+    """Cutting is for the upload. The measurement keeps its original."""
+    package(paused_capture, paused_capture.parent / "out.zip")
+
+    assert (paused_capture / "session.mp4").read_bytes() == b"not really an mp4"
+
+
+def test_no_row_of_the_index_lands_on_the_frozen_picture(paused_capture, cutter):
+    """The defect this fixes: two thirds of a real index crowded onto one instant.
+
+    Their review builder picks the frame nearest a coaching event by sim_time_s,
+    so rows crowded on the instant the race stopped would illustrate events
+    around it with a pause menu. A frame every quarter second of racing, evenly,
+    is what a cut recording indexes to.
+    """
+    bundle = package(paused_capture, paused_capture.parent / "out.zip")
+
+    steps = _index(bundle.path)["sim_time_s"].diff().dropna()
+    assert steps.min() == pytest.approx(1 / SIDECAR_FPS, abs=0.03)
+    assert steps.max() == pytest.approx(1 / SIDECAR_FPS, abs=0.03)
+
+
+def test_the_index_never_names_a_frame_the_cut_file_does_not_have(paused_capture, cutter):
+    """A row for a frame that was never cut points their builder at nothing.
+
+    Measured against the recording's original length the index runs on past the
+    end of the file, over the frames the pause used to occupy and the cut has
+    taken away.
+    """
+    bundle = package(paused_capture, paused_capture.parent / "out.zip")
+
+    left_of_the_file = LEAD_S + TELEMETRY_SPAN_S + TAIL_S  # the pause is gone
+    assert _index(bundle.path)["frame_id"].max() < left_of_the_file * SIDECAR_FPS
+
+
+def test_a_race_nobody_paused_is_sent_exactly_as_it_was_recorded(long_capture, cutter):
+    """No pause, no re-encode: most races cost nothing to send."""
+    bundle = package(long_capture, long_capture.parent / "out.zip")
+
+    assert cutter == {}
+    assert bundle.paused_s == 0.0
+    assert _video(bundle.path) == b"not really an mp4"
+
+
+def test_a_paused_race_is_refused_rather_than_sent_as_minutes_of_menu(
+    paused_capture, monkeypatch
+):
+    monkeypatch.setattr(screen_capture, "ffmpeg_binary", lambda: None)
+
+    with pytest.raises(IbmF1ExportError, match="--no-video"):
+        package(paused_capture, paused_capture.parent / "out.zip")
 
 
 # --- delivering it ---------------------------------------------------------
