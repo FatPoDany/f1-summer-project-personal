@@ -254,7 +254,7 @@ try {
 
     # A second, separate script carries the bulk game data. Despite the name,
     # setup_win32_generic.bat installs no tracks and no car models at all: it
-    # never mentions g-track-1 and never touches data\cars. Without this call the
+    # never mentions a study track and never touches data\cars. Without this call the
     # build still succeeds and still produces an installer -- it is simply an
     # installer whose TORCS cannot load the study's track or car.
     & cmd /c "setup_win32-data-from-CVS_generic.bat $RuntimeDirName"
@@ -286,7 +286,7 @@ if ($LASTEXITCODE -ne 0) {
 Write-Step 'Installing the Apex race-manager presets'
 $racemanDir = Join-Path $RuntimeDir 'config\raceman'
 New-Item -ItemType Directory -Force -Path $racemanDir | Out-Null
-foreach ($preset in @('apexstudy.xml', 'apexrobotstudy.xml')) {
+foreach ($preset in @('apexstudy.xml', 'apexstudyspeedway.xml', 'apexrobotstudy.xml')) {
     $source = Join-Path $SourceDir "src\raceman\$preset"
     if (-not (Test-Path -LiteralPath $source)) { throw "Overlay preset missing: $source" }
     Copy-Item -LiteralPath $source -Destination (Join-Path $racemanDir $preset) -Force
@@ -296,12 +296,19 @@ foreach ($preset in @('apexstudy.xml', 'apexrobotstudy.xml')) {
 # was built. Binaries alone passed this gate once while the runtime held no
 # tracks and no cars, which would only have surfaced as a participant staring at
 # a simulator that cannot start the race.
+# Both circuits, because both are assignable. This list named only g-track-1
+# for as long as that was the study's track, and went on naming only g-track-1
+# after the study moved to aalborg, so the gate would have passed a runtime that
+# could not open the race anybody actually drove.
 $required = @(
     'wtorcs.exe',
     'drivers\human\human.dll',
     'drivers\berniw\berniw.dll',
     'config\raceman\apexstudy.xml',
+    'config\raceman\apexstudyspeedway.xml',
     'config\raceman\apexrobotstudy.xml',
+    'tracks\road\aalborg\aalborg.xml',
+    'tracks\road\aalborg\aalborg.acc',
     'tracks\road\g-track-1\g-track-1.xml',
     'tracks\road\g-track-1\g-track-1.acc',
     'cars\car7-trb1\car7-trb1.xml',

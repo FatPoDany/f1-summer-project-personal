@@ -11,11 +11,13 @@ EXPECTED_SHA256="f9c69e86d290295467451b01d7838d85005ba613644a6fe8a3f85a7c6a03cd4
 PATCH_FILE="${SCRIPT_DIR}/patches/graphical-race.patch"
 SCREEN_PATCH_FILE="${SCRIPT_DIR}/patches/screen-size-init.patch"
 PRESET_FILE="${SCRIPT_DIR}/overlay/src/raceman/apexstudy.xml"
+SPEEDWAY_PRESET_FILE="${SCRIPT_DIR}/overlay/src/raceman/apexstudyspeedway.xml"
 
 [[ -f "${ARCHIVE}" ]] || { echo "TORCS archive not found: ${ARCHIVE}" >&2; exit 2; }
 [[ -f "${PATCH_FILE}" ]] || { echo "Graphical race patch not found: ${PATCH_FILE}" >&2; exit 1; }
 [[ -f "${SCREEN_PATCH_FILE}" ]] || { echo "Screen size patch not found: ${SCREEN_PATCH_FILE}" >&2; exit 1; }
 [[ -f "${PRESET_FILE}" ]] || { echo "Study preset not found: ${PRESET_FILE}" >&2; exit 1; }
+[[ -f "${SPEEDWAY_PRESET_FILE}" ]] || { echo "Study preset not found: ${SPEEDWAY_PRESET_FILE}" >&2; exit 1; }
 
 actual_sha256="$(sha256sum "${ARCHIVE}" | awk '{print $1}')"
 if [[ "${actual_sha256}" != "${EXPECTED_SHA256}" ]]; then
@@ -59,11 +61,33 @@ grep -q 'GfScrWidth = xw;' "${screen_source}"
 grep -q 'GfScrHeight = yw;' "${screen_source}"
 grep -q 'APEX_TORCS_LOCAL_DIR' "${launcher}"
 
-grep -q '<params name="Apex Study v1"' "${PRESET_FILE}"
-grep -q '<attstr name="name" val="g-track-1"/>' "${PRESET_FILE}"
-grep -q '<attstr name="category" val="road"/>' "${PRESET_FILE}"
-grep -q '<attnum name="laps" val="5"/>' "${PRESET_FILE}"
-grep -q '<attstr name="module" val="human"/>' "${PRESET_FILE}"
-[[ "$(grep -c '<attstr name="module"' "${PRESET_FILE}")" -eq 1 ]]
+# Both assignable presets, and the track each one is supposed to open. These
+# checks asserted g-track-1 and five laps for as long as this file existed --
+# through the move to aalborg and the drop to three laps -- so they passed while
+# describing a preset that had not been shipped for weeks. A contract test that
+# cannot fail is not a contract test.
+check_preset() {
+    local file="$1" name="$2" track="$3"
+    grep -q "<params name=\"${name}\"" "${file}"
+    grep -q "<attstr name=\"name\" val=\"${track}\"/>" "${file}"
+    grep -q '<attstr name="category" val="road"/>' "${file}"
+    grep -q '<attnum name="laps" val="3"/>' "${file}"
+    grep -q '<attstr name="module" val="human"/>' "${file}"
+    # Human-only. A robot in the grid is a different race, and the study's
+    # finish position stops meaning what every stored session means by it.
+    [[ "$(grep -c '<attstr name="module"' "${file}")" -eq 1 ]]
+}
+
+check_preset "${PRESET_FILE}" "Apex Study v1" "aalborg"
+check_preset "${SPEEDWAY_PRESET_FILE}" "Apex Study Speedway v1" "g-track-1"
+
+# The two differ in exactly one thing. Anything else drifting between them makes
+# a change of track a change of several conditions at once, and the comparison
+# between a participant's races stops being about the track.
+diff <(sed -e 's/Apex Study Speedway v1/Apex Study v1/' \
+           -e 's/ on CG Speedway number 1//' \
+           -e 's/val="g-track-1"/val="aalborg"/' \
+           -e '/^ *<!--/,/-->$/d' "${SPEEDWAY_PRESET_FILE}" | tr -d '\r') \
+     <(sed -e '/^ *<!--/,/-->$/d' "${PRESET_FILE}" | tr -d '\r')
 
 echo "Graphical study preset source contract passed"
