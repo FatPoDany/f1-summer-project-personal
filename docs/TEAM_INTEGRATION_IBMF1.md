@@ -736,9 +736,13 @@ scope 一直是好的。
 - [x] ~~队友删掉了那场有暂停的旧上传~~ —— 2026-09-01 查 `/api/dashboard`：
       24 个玩家 / 77 场，`B0826` 已不在其中
 - [x] ~~源码里关于"声明分组就能拿到辅导"的说法全部更正~~ —— 见 §6 P5
-- [ ] **把剪好的那场重传** —— 旧的已被队友删掉，所以不会撞 409，也不会多出一场。
-      传完之后**必须**在 Operations Dashboard 把 `name:b0826` 指派成 `coached`，
-      否则网站上不会有 coach 按钮（见 §11.3）
+- [x] ~~把剪好的那场重传~~ —— 2026-09-01 08:45Z 完成，session
+      `666e10069c0f5557126e05d5cde25b24b2a3e4a566f456e9fc5b443610491299`，
+      40 个 checkpoint，`best_lap 126.152 s / top 215.27 km/h / 3 圈 / P1`
+- [ ] **在 Operations Dashboard 把 `name:b0826` 指派成 `coached`** —— 没做这一步
+      网站上就没有 coach 按钮（见 §11.3）。需要 research key，只能由队友或持 key 的人操作
+- [ ] 只传了 coached 这一场，所以这个参与者没有可比的前一场，`improvement` 是
+      `insufficient_data`；要补就把 `B0826-baseline` 也传上去
 - [ ] 另外两场有暂停的采集（`B0826-baseline` 25.8%、`C0826-baseline` 49.7%）尚未导出上传
 - [ ] 确认 `tWheelState.sa` 是否可用（需要解压锁定的 TORCS 归档）
 - [ ] 和队友对齐 P2 的三条上游改动
@@ -834,12 +838,83 @@ return {
 
 修法见 §11.6，已提 PR。
 
-### 11.6 PR：让建议读包里声明的分组
+### 11.6 PR #23：让建议读包里声明的分组
 
-分支 `suggest-the-arm-the-package-declared`，改 `sessions.mjs` 的 `studyGroup()` 一处：
+<https://github.com/UOBGraduate/IBMF1/pull/23> —— 分支 `suggest-the-arm-the-package-declared`，改 `sessions.mjs` 的 `studyGroup()` 一处：
 没有服务端指派时，**优先采信包声明的 arm**，basis 记为 `declared_by_package`；
 包也没声明才退回原来的"看有没有被辅导过"。
 
 刻意**不**动 `coachingAllowed()`：包声明的分组仍然一票不算，
 `server_study_arm` 仍然是唯一的闸门，队友"installer metadata is not an assignment"
 这条原则完全保留。改的只是**给研究者看的建议**从"猜错"变成"猜对"。
+
+## 12. 两边跑的不是同一条赛道（2026-09-01）
+
+队友说他采集的数据全是 `g-track-1`。核对了线上 `/api/dashboard` 的 77 场：**77/77 都是
+`g-track-1`**，没有例外。而 Apex 的冻结预设是 `aalborg`。
+
+| | 队友 `ibmf1-practice-v5` | Apex `apex-study-v1` |
+|---|---|---|
+| 赛道 | `g-track-1`（CG Speedway number 1），road | `aalborg`，road |
+| 圈数 | 2 | 3 |
+| 车 | `car1-trb1` | `car7-trb1` |
+| 对手 | human + 3 robots | 同为 human + robots |
+| 冻结方式 | `practice.xml` + `verify_player_payload.py` 校验安装包里确实只有这条赛道 | `apexstudy.xml` |
+
+### 12.1 差多少（实测）
+
+队友那 77 场 vs Apex `B0826-coached`：
+
+| 指标 | `g-track-1`（n=77，中位数） | `aalborg`（B0826） | 倍数 |
+|---|---|---|---|
+| 最快圈 | **43.41 s**（38.00 – 76.00） | **126.15 s** | **2.9×** |
+| 平均完成圈 | 46.91 s | 135.03 s | 2.9× |
+| 最高速 | **250.03 km/h**（241 – 259） | **215.27 km/h** | 0.86× |
+| 单圈长度 | ≈ 2.06 km | ≈ 2.62 km | 1.27× |
+| 每场时长 | 101.10 s | 405.13 s | 4.0× |
+| 完成圈数 | 1 或 2（24 场只跑完 1 圈） | 3 | — |
+
+**赛道只长 1.27 倍，圈速却慢 2.9 倍** —— 差的不是长度是难度。CG Speedway 快而开阔，
+Aalborg 弯多而紧，最高速反过来低 14% 正好印证这一点。
+
+### 12.2 结论：绝对指标不能混在一起统计
+
+`best_lap_time_s`、`mean_completed_lap_time_s`、`top_speed_kmh`、`distance_raced_m`、
+`sim_duration_s`、`finish_position`、`completed_laps` —— 这些跨两个来源**都不可比**。
+
+**但管线本身没坏。** `g-track-1` 只硬编码在他们的**安装包打包/校验**里
+（`verify_player_payload.py`、`pack_session.py` 的默认值），导入和 review 那条链路完全
+不认赛道，keyframe 是从遥测几何画的。9-01 那次上传实测：`track: "aalborg"` 正常入库，
+40 个 checkpoint，成绩摘要全对。
+
+**真正可比的是"同一个人自己的进步"**，而这恰好就是这个实验要测的东西 ——
+AI coaching 的效果是参与者相对自己的变化，不是绝对圈速。前提是这个差值本身可比。
+
+### 12.3 为此给队友提的第二个 PR（#24）
+
+他们的 `improvementFrom()` 拿玩家上一场直接相减，**从来不检查是不是同一条赛道**，
+然后把结果当 "N s faster" 印在看板上。他们全站单赛道所以至今没错过，
+但一旦第二条赛道出现就会错：同一个人从 CG Speedway 换到 Aalborg，
+看板会显示 **"82.8 s slower"** 外加一个 `slower` 徽章。
+
+PR #24 做两件事：
+1. 赛道变了就 `comparable: false`、所有差值置 null、标签显示 "Different track"
+   （没声明赛道的老数据照旧比较 —— 那是字段存在之前导入的全部比赛）；
+2. 加 `best_lap_gain_pct` / `mean_lap_gain_pct`。**百分比是唯一能跨赛道汇总的形式** ——
+   126 秒的圈快 5 秒和 43 秒的圈快 5 秒不是一回事，把两者平均等于在测赛道而不是在测辅导。
+   绝对秒数保留不动，那是车手认得的量。
+
+`trend` 的 ±0.05 s 阈值同样是赛道尺度相关的（占 CG Speedway 一圈 0.12%、Aalborg 一圈
+0.04%），**刻意没动** —— 改"多少算进步"是研究决定，不是 bug 修复。
+
+### 12.4 待你决定：Apex 要不要换到 `g-track-1`
+
+这是研究设计问题，不是技术问题，所以没有替你决定。两边的理由：
+
+**换过去** —— 77 场 vs 5 场，绝对指标直接可比，样本池合成一个；队友的安装包是刻意冻结在
+这条赛道上的（`verify_player_payload.py` 专门校验这件事）。代价：已采的 5 场变成单独一层。
+
+**不换** —— Aalborg 弯多，每圈能产出的辅导素材大约是 CG Speedway 的三倍（126 s vs 43 s），
+对"AI coaching 有没有用"这个问题本身更有信息量；Apex 跑 3 圈也比 2 圈多一圈数据。
+代价：跨来源只能比百分比，不能比秒数 —— 而 #24 合并之后这条路是通的。
+
