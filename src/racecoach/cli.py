@@ -527,7 +527,7 @@ def _dispatch(args: argparse.Namespace) -> int:
         )
         return 0
     if args.command == "export-ibmf1":
-        from f1coach_core.ibmf1 import COACHED_PHASE, package
+        from f1coach_core.ibmf1 import COACHED_PHASE, package, player_key_for
 
         out = args.out or args.capture_dir.with_name(f"{args.capture_dir.name}-ibmf1.zip")
         bundle = package(
@@ -553,17 +553,25 @@ def _dispatch(args: argparse.Namespace) -> int:
         else:
             print("  recording: not included")
         # Said out loud because it is the difference between a participant seeing
-        # AI coaching and not, and it is decided from the capture's phase rather
-        # than by whoever runs this command.
+        # AI coaching and not. The capture's phase decides what is declared here;
+        # since their PR #15 a researcher, on their site, decides what is
+        # honoured, and an unassigned participant is given nothing.
         if bundle.study_arm == COACHED_PHASE:
-            print("  study arm: coached -- the site WILL offer AI coaching for this race")
+            print("  study arm: coached -- declared, but not yet granted")
+            print(
+                "    assign this participant on their Operations Dashboard:"
+                f" {player_key_for(bundle.participant_id)} -> coached"
+            )
+            print("    until that is done the site withholds coaching from this race")
         else:
             print(
-                f"  study arm: {bundle.study_arm} -- the site will withhold AI coaching"
+                f"  study arm: {bundle.study_arm} -- the site withholds AI coaching,"
+                " which is what this arm asks for"
             )
         print("Next: racecoach upload-ibmf1 " + str(bundle.path))
         return 0
     if args.command == "upload-ibmf1":
+        from f1coach_core.ibmf1 import COACHED_PHASE, declared_arm, player_key_for
         from racecoach.telemetry.ibmf1_upload import IbmF1UploadError, deliver
 
         try:
@@ -573,6 +581,17 @@ def _dispatch(args: argparse.Namespace) -> int:
             return 1
         print(delivered.message)
         print(f"Review: {delivered.review_url}")
+        # The reply cannot say this: their public session view withholds the arm
+        # so that reading the site cannot unblind anyone. Read it back off the
+        # bundle instead, because a coached race that nobody assigns is a race
+        # the participant will open and find no coach on.
+        arm, participant = declared_arm(args.archive)
+        if arm == COACHED_PHASE and participant:
+            print(
+                f"Still to do: assign {player_key_for(participant)} to coached on their"
+                " Operations Dashboard. Their server ignores the arm a bundle declares,"
+                " so until someone does, this race offers no AI coaching."
+            )
         return 0
     if args.command == "study-summary":
         from f1coach_core.adherence import adherence_all
