@@ -1,8 +1,20 @@
 name: windows-installer
 
-# Manual only. The job compiles the whole TORCS solution and bundles Apex, so
-# it is far too heavy to run on every push, and it needs the pinned archive
+# Never on an ordinary push. The job compiles the whole TORCS solution and
+# bundles Apex, so it is far too heavy for that, and it needs the pinned archive
 # which is not tracked in this repository (.gitignore excludes /torcs-*.tar.*).
+# It runs two ways:
+#
+#   * by hand, which leaves ApexStudySetup.exe as a 30-day artifact; and
+#   * on a `study-*` tag, which publishes it as a release asset instead.
+#
+# Prefer the tag. The installer is ~448 MB of the account's 500 MB Actions
+# artifact allowance, and that allowance is accrued for the billing month rather
+# than measured against what is stored, so deleting the artifact afterwards does
+# not give the space back -- one dispatch can therefore block every artifact
+# upload in every repository on the account until the cycle rolls over. Release
+# assets are not counted against it, do not expire, and can be cited by URL,
+# which is what a build handed to participants needs anyway.
 #
 # .gitignore excludes the 563 MiB archive from the repository, so the job has to
 # fetch it. Three sources, tried in this order:
@@ -21,6 +33,9 @@ name: windows-installer
 # job with a clear error instead of reaching the installer.
 
 on:
+  push:
+    tags:
+      - "study-*"
   workflow_dispatch:
     inputs:
       archive_tag:
@@ -33,8 +48,9 @@ on:
         options: [Release, Debug]
         default: Release
 
+# Write, because a tagged run creates the release it attaches the installer to.
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   installer:
@@ -184,9 +200,74 @@ jobs:
           $size = [math]::Round((Get-Item -LiteralPath $installer).Length / 1MB, 1)
           Write-Host "::notice::ApexStudySetup.exe is $size MB"
 
-      - uses: actions/upload-artifact@v7
+      # Only when there is no tag to publish to. See the note at the top: this
+      # step alone can exhaust the account's artifact allowance for the month.
+      - name: Keep the installer as an artifact
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v7
         with:
           name: ApexStudySetup
           path: ${{ runner.temp }}\apex-torcs-win\dist\ApexStudySetup.exe
           if-no-files-found: error
           retention-days: 30
+
+      # The study instrument is the installer's output, so the thing worth
+      # publishing is the installer itself rather than the source it was built
+      # from. The notes record which commit is inside it and the hash to check a
+      # download against, because a build id cannot be read off a downloaded exe.
+      #
+      # The notes are assembled as an array rather than a here-string: a
+      # here-string terminator must start at column 0, and a column-0 line inside
+      # a YAML block scalar closes the block.
+      - name: Publish the installer to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INSTALLER: ${{ runner.temp }}\apex-torcs-win\dist\ApexStudySetup.exe
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          $item = Get-Item -LiteralPath $env:INSTALLER
+          $size = [math]::Round($item.Length / 1MB, 1)
+          $hash = (Get-FileHash -LiteralPath $env:INSTALLER -Algorithm SHA256).Hash.ToLowerInvariant()
+          $short = $env:COMMIT.Substring(0, 7)
+
+          $notes = @(
+            "Built by CI from ``$short`` ($env:COMMIT), a clean checkout, so the build id"
+            "the app stamps on every recorded view is ``$short`` with no ``+``."
+            ''
+            '| | |'
+            '|---|---|'
+            '| file | `ApexStudySetup.exe` |'
+            "| size | $size MB |"
+            "| SHA-256 | ``$hash`` |"
+            '| Python | 3.12, the version CI also runs the tests on |'
+            '| TORCS | 1.3.9, from the pinned archive, hash-verified before the build started |'
+            ''
+            'The installer unpacks to `%LOCALAPPDATA%\Apex`, makes three shortcuts and writes'
+            'one HKCU uninstall key. No admin, no service, no redistributable.'
+            ''
+            'The Granite weights are **not** inside it -- they are 2.1 GB. A fresh machine'
+            'shows AI SETUP NEEDED until the app downloads them, or until one is adopted'
+            'with `racecoach.exe install-model <gguf>`.'
+            ''
+            'This repository is private, so the asset needs an authenticated download:'
+            ''
+            "    gh release download $env:TAG --repo $env:REPO --pattern ApexStudySetup.exe"
+          ) -join "`n"
+
+          gh release view $env:TAG --repo $env:REPO 2>$null | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:TAG --repo $env:REPO --title "Apex study build $short" --notes $notes
+            if ($LASTEXITCODE -ne 0) { throw "gh release create failed with exit code $LASTEXITCODE" }
+          } else {
+            gh release edit $env:TAG --repo $env:REPO --title "Apex study build $short" --notes $notes
+            if ($LASTEXITCODE -ne 0) { throw "gh release edit failed with exit code $LASTEXITCODE" }
+          }
+
+          gh release upload $env:TAG $env:INSTALLER --repo $env:REPO --clobber
+          if ($LASTEXITCODE -ne 0) { throw "gh release upload failed with exit code $LASTEXITCODE" }
+          Write-Host "::notice::Published ApexStudySetup.exe ($size MB) to release $env:TAG"
+
