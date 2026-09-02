@@ -165,10 +165,19 @@ class CaptureSetupPage(QWidget):
 
     def _render_preset(self) -> None:
         preset = self.study_preset
+        # The grid is on the line because it is the condition a facilitator is
+        # least likely to expect and the one that changes the data most: solo,
+        # every session finishes P1 and the lap-to-lap spread is the driver's
+        # own; in traffic, neither is true.
+        grid = (
+            f"{len(preset.opponents)} opponents"
+            if preset.opponents
+            else "no opponents"
+        )
         self.preset_summary.setText(
             f"{preset.display_name}  ·  "
             f"{preset.track_id} ({preset.track_category})  ·  "
-            f"{preset.car_id}  ·  {preset.laps} laps"
+            f"{preset.car_id}  ·  {preset.laps} laps  ·  {grid}"
         )
         self._render_simulator_status()
 
@@ -265,21 +274,32 @@ class CaptureCompletePage(QWidget):
         self.result_path = QLabel()
         self.result_path.setWordWrap(True)
         self.result_path.setStyleSheet(f"color: {theme.TEXT_DIM};")
-        # The participant is the one holding the only copy at this point, so the
-        # hand-over instruction has to be on the screen they actually end on.
+        # The participant is the one holding the only copy at this point, so what
+        # is happening to it belongs on the screen they actually end on --
+        # including the parts that now happen without them asking.
         next_steps = QLabel(
-            "Your laps are already in the Garage on this computer — nothing further "
-            "is needed to save them.\n\n"
-            "To pass them to the research team, use the button below. It puts this "
-            "whole session into one file you can email or copy, with a checksum of "
-            "every part so the team can tell if anything was lost on the way."
+            "Your laps are in the Garage on this computer, and Apex is saving the "
+            "one file you can hand to the research team — you do not have to do "
+            "anything for either.\n\n"
+            "Where this machine has been set up to send races to the team's Coach "
+            "site, it is doing that too, and will open the review when it is ready."
         )
         next_steps.setWordWrap(True)
+        # Written to as each step finishes rather than once at the end: the slow
+        # one is an upload, and a screen that says nothing for two minutes reads
+        # as a screen that has stopped working.
+        self.handoff_status = QLabel()
+        self.handoff_status.setWordWrap(True)
+        self.handoff_status.setAccessibleName("Handing this session over")
+        self.handoff_status.setStyleSheet(f"color: {theme.TEXT_DIM};")
         buttons = QHBoxLayout()
-        # First and widest: for the study, handing the data over is the point of
-        # the session, and it is the one step nothing else in Apex can do for them.
-        self.package_button = QPushButton("Save a file to send")
-        self.package_button.setObjectName("primary")
+        # No longer first and no longer primary. The file is now written without
+        # being asked for, so this button is for putting a second copy somewhere
+        # chosen -- a memory stick, a shared drive -- rather than for the step
+        # itself. It stays because the automatic copy can fail, and when it does
+        # this is the way out.
+        self.package_button = QPushButton("Save another copy…")
+        self.package_button.setObjectName("quiet")
         self.package_button.setMinimumHeight(44)
         self.package_button.setToolTip(
             "One file containing this session, checksummed so damage in transit shows up"
@@ -290,13 +310,14 @@ class CaptureCompletePage(QWidget):
         self.open_results_button = QPushButton("View my laps")
         self.open_results_button.setObjectName("primary")
         self.open_results_button.setMinimumHeight(44)
-        buttons.addWidget(self.package_button)
-        buttons.addWidget(self.new_session_button)
         buttons.addWidget(self.open_results_button)
+        buttons.addWidget(self.new_session_button)
+        buttons.addWidget(self.package_button)
         buttons.addStretch(1)
         layout.addWidget(heading)
         layout.addWidget(self.result_summary)
         layout.addWidget(self.result_path)
         layout.addWidget(next_steps)
+        layout.addWidget(self.handoff_status)
         layout.addStretch(1)
         layout.addLayout(buttons)

@@ -12,12 +12,14 @@ PATCH_FILE="${SCRIPT_DIR}/patches/graphical-race.patch"
 SCREEN_PATCH_FILE="${SCRIPT_DIR}/patches/screen-size-init.patch"
 PRESET_FILE="${SCRIPT_DIR}/overlay/src/raceman/apexstudy.xml"
 SPEEDWAY_PRESET_FILE="${SCRIPT_DIR}/overlay/src/raceman/apexstudyspeedway.xml"
+TEAM_PRESET_FILE="${SCRIPT_DIR}/overlay/src/raceman/apexibmf1.xml"
 
 [[ -f "${ARCHIVE}" ]] || { echo "TORCS archive not found: ${ARCHIVE}" >&2; exit 2; }
 [[ -f "${PATCH_FILE}" ]] || { echo "Graphical race patch not found: ${PATCH_FILE}" >&2; exit 1; }
 [[ -f "${SCREEN_PATCH_FILE}" ]] || { echo "Screen size patch not found: ${SCREEN_PATCH_FILE}" >&2; exit 1; }
 [[ -f "${PRESET_FILE}" ]] || { echo "Study preset not found: ${PRESET_FILE}" >&2; exit 1; }
 [[ -f "${SPEEDWAY_PRESET_FILE}" ]] || { echo "Study preset not found: ${SPEEDWAY_PRESET_FILE}" >&2; exit 1; }
+[[ -f "${TEAM_PRESET_FILE}" ]] || { echo "Study preset not found: ${TEAM_PRESET_FILE}" >&2; exit 1; }
 
 actual_sha256="$(sha256sum "${ARCHIVE}" | awk '{print $1}')"
 if [[ "${actual_sha256}" != "${EXPECTED_SHA256}" ]]; then
@@ -81,7 +83,21 @@ check_preset() {
 check_preset "${PRESET_FILE}" "Apex Study v1" "aalborg"
 check_preset "${SPEEDWAY_PRESET_FILE}" "Apex Study Speedway v1" "g-track-1"
 
-# The two differ in exactly one thing. Anything else drifting between them makes
+# The team-matched assignment is checked against a different standard, because
+# it answers to a different authority: it is a port of the other half of this
+# project's own practice race, so what makes it correct is agreeing with their
+# file, not with ours. tests/test_team_preset.py reads both and compares every
+# condition. What is left here is only the part that check_preset would get
+# wrong -- three laps and a solo grid are true of the Apex presets and false of
+# this one by design.
+grep -q '<attstr name="name" val="g-track-1"/>' "${TEAM_PRESET_FILE}"
+grep -q '<attnum name="laps" val="2"/>' "${TEAM_PRESET_FILE}"
+grep -q '<attnum name="tire factor" min="0" max="5" val="0"/>' "${TEAM_PRESET_FILE}"
+[[ "$(grep -c '<attstr name="module"' "${TEAM_PRESET_FILE}")" -eq 4 ]]
+
+# The two Apex-native presets differ in exactly one thing. The team-matched one
+# is deliberately outside this comparison: it differs in four, which is what
+# pooling with their data costs. Anything else drifting between them makes
 # a change of track a change of several conditions at once, and the comparison
 # between a participant's races stops being about the track.
 diff <(sed -e 's/Apex Study Speedway v1/Apex Study v1/' \

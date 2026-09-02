@@ -14,6 +14,7 @@
     racecoach study-exposure      one row per coaching view, for dose-response
     racecoach study-adherence     one row per thing advised, and whether it moved
     racecoach package <dir>       bundle one capture into a file to hand over
+    racecoach finish <dir>        read a capture in, save it, send it, open the review
     racecoach collect <zips>      verify and pool handovers from participants
     racecoach capture-synthetic    run pinned unattended robot reference sessions
     racecoach report               render the post-race report
@@ -166,6 +167,49 @@ def main(argv: list[str] | None = None) -> int:
     )
     upload_ibmf1_cmd.add_argument("archive", type=Path)
 
+    finish_cmd = commands.add_parser(
+        "finish",
+        help="close the loop on one capture: read it into the study, save the file "
+        "to send, upload it, open the review",
+    )
+    finish_cmd.add_argument("capture_dir", type=Path)
+    finish_cmd.add_argument(
+        "--out-dir",
+        type=Path,
+        default=None,
+        help="where the file to send is written (default: the Desktop)",
+    )
+    finish_cmd.add_argument(
+        "--session-number",
+        type=int,
+        default=None,
+        help="this participant's Nth race, when known (the site otherwise orders by time)",
+    )
+    finish_cmd.add_argument(
+        "--no-upload",
+        action="store_true",
+        help="do everything except send it, even where an upload key is configured",
+    )
+    finish_cmd.add_argument(
+        "--no-video",
+        action="store_true",
+        help="leave the screen recording out, for an upload over the server's body limit",
+    )
+    review = finish_cmd.add_mutually_exclusive_group()
+    review.add_argument(
+        "--open",
+        dest="open_review",
+        action="store_true",
+        default=None,
+        help="open the review in a browser even for an arm that is not coached",
+    )
+    review.add_argument(
+        "--no-open",
+        dest="open_review",
+        action="store_false",
+        help="never open a browser (default for every arm but coached)",
+    )
+
     study_cmd = commands.add_parser(
         "study-summary",
         help="one row per participant per phase, for a paired statistical test",
@@ -298,6 +342,12 @@ def main(argv: list[str] | None = None) -> int:
         help="launch TORCS unassigned and leave the race to the facilitator; "
         "needed for a recovery session that passes its own -r/-R, and the laps "
         "then export with a blank setup column",
+    )
+    human_cmd.add_argument(
+        "--finish",
+        action="store_true",
+        help="when the race ends, read it into the study, save the file to send, "
+        "upload it where a key is configured, and open the review for a coached run",
     )
     human_cmd.add_argument(
         "torcs_args",
@@ -616,6 +666,29 @@ def _dispatch(args: argparse.Namespace) -> int:
                 " so until someone does, this race offers no AI coaching."
             )
         return 0
+    if args.command == "finish":
+        from racecoach.telemetry.handoff import finish_session
+
+        handoff = finish_session(
+            args.capture_dir,
+            archive_dir=args.out_dir,
+            session_number=args.session_number,
+            upload=False if args.no_upload else None,
+            open_review=args.open_review,
+            include_video=not args.no_video,
+            progress=lambda line: print(line, flush=True),
+        )
+        if handoff.archive is not None:
+            print(f"Send this one file to the research team: {handoff.archive}")
+        if handoff.review_url:
+            print(f"Review: {handoff.review_url}")
+        if handoff.archive is None:
+            # Nothing was written that can leave this machine, which is the one
+            # outcome that loses data rather than delaying it.
+            return 2
+        # A bundle exists only when this was going to be sent, so this is the
+        # difference between "not configured to send" and "tried and failed".
+        return 1 if handoff.bundle is not None and not handoff.delivered else 0
     if args.command == "study-summary":
         from f1coach_core.adherence import adherence_all
         from f1coach_core.study import summarise_all, summary_csv
@@ -801,7 +874,21 @@ def _dispatch(args: argparse.Namespace) -> int:
         print(f"Raw capture and manifest -> {result.capture_dir}")
         for run_dir in result.run_dirs:
             print(f"Registered run {run_dir.name} -> {run_dir}")
-        print("Next: racecoach analyze RUN_ID · racecoach coach RUN_ID")
+        if args.finish:
+            from racecoach.telemetry.handoff import finish_session
+
+            handoff = finish_session(
+                result.capture_dir, progress=lambda line: print(line, flush=True)
+            )
+            if handoff.archive is not None:
+                print(f"Send this one file to the research team: {handoff.archive}")
+            if handoff.review_url:
+                print(f"Review: {handoff.review_url}")
+            return 1 if handoff.bundle is not None and not handoff.delivered else 0
+        print(
+            "Next: racecoach finish "
+            f"{result.capture_dir} · racecoach analyze RUN_ID"
+        )
         return 0
     if args.command == "capture-synthetic":
         from racecoach.telemetry.synthetic_capture import (

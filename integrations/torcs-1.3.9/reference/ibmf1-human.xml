@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE params SYSTEM "params.dtd">
+<params name="human">
+  <section name="Preferences">
+    <attstr name="car name" val="car1-trb1"/>
+  </section>
+</params>
