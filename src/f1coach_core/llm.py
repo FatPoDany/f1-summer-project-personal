@@ -138,18 +138,46 @@ def build_coach_prompt(
         "single_lap": _SINGLE_LAP_CONTEXT,
         "composite": _COMPOSITE_CONTEXT,
     }.get(evidence_summary.get("analysis_mode"), _COMPARISON_CONTEXT)
+    said = _advice_about(evidence_summary, prior_advice)
     return _INSTRUCTIONS.format(
         context=context,
         metric_help=json.dumps(metrics, indent=2),
         summary=json.dumps(_prompt_summary(evidence_summary), indent=2),
         already_said=(
-            _ALREADY_SAID.format(
-                advice="\n".join(f"- {line}" for line in prior_advice)
-            )
-            if prior_advice
+            _ALREADY_SAID.format(advice="\n".join(f"- {line}" for line in said))
+            if said
             else ""
         ),
     )
+
+
+def _advice_about(evidence_summary: dict, prior_advice: Sequence[str]) -> list[str]:
+    """What this driver was already told about the corners in THIS prompt.
+
+    A lap is read a few corners at a time now, so most of what a driver has
+    heard is about corners this request is not asking after. Sending all of it
+    every round spends the scarce thing -- a small local model's context -- on
+    advice that could not be repeated here anyway, and it is what forced the
+    memory to be short enough that a driver could be given the same instruction
+    two laps running.
+
+    Each line is stored as "<corner>: <what to do>". A line that does not name a
+    corner this prompt knows is kept rather than dropped, so a change to that
+    format degrades to sending everything -- which is what this did before --
+    rather than silently sending nothing.
+    """
+    if not prior_advice:
+        return []
+    corners = {
+        str(corner.get("corner")) for corner in coachable_corners(evidence_summary)
+    }
+    kept = []
+    for line in prior_advice:
+        label, separator, _rest = str(line).partition(":")
+        if separator and label.strip() not in corners:
+            continue
+        kept.append(line)
+    return kept
 
 
 def _citation_schema(citation: dict) -> dict:

@@ -167,7 +167,7 @@ def coaching_audit_dir(lap_source: str | Path | None) -> Path:
     return workspace_root() / AUDIT_DIR_NAME
 
 
-PRIOR_ADVICE_LIMIT = 6
+PRIOR_ADVICE_LIMIT = 24
 
 
 def prior_advice(lap: Lap, *, limit: int = PRIOR_ADVICE_LIMIT) -> tuple[str, ...]:
@@ -180,8 +180,15 @@ def prior_advice(lap: Lap, *, limit: int = PRIOR_ADVICE_LIMIT) -> tuple[str, ...
 
     Only the action is taken: what the driver was asked to do is the thing that
     must not repeat, while an issue and a cause may legitimately be restated
-    about the same corner. Newest first and capped, because this rides in the
-    prompt of a small local model whose context is the scarce resource here.
+    about the same corner. Newest first and capped.
+
+    The cap was six while a lap produced three findings, so two laps filled it
+    and a third could be given the same instruction as the first. A lap now
+    carries advice for every corner that lost time -- eight or nine of them --
+    and six would be less than one lap of memory. Holding more is affordable
+    because `build_coach_prompt` sends only the lines about the corners a
+    request is actually asking after: the whole memory is kept here, and a
+    fraction of it travels.
     """
     directory = coaching_audit_dir(lap.source)
     if not directory.is_dir():

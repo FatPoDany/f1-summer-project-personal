@@ -580,3 +580,36 @@ def test_a_lap_with_nothing_to_advise_on_asks_nothing(summary):
     assert asked == []
     assert report.findings == ()
     assert report.model == "test-model"  # stamped even though nothing was asked
+
+
+def test_a_round_carries_only_the_memory_about_its_own_corners(summary):
+    """Most of what a driver has heard is about corners this round is not asking after.
+
+    Sending all of it every round spends a small model's context on advice that
+    could not be repeated here anyway, and it is what forced the memory to be
+    short enough that a driver could be told the same thing two laps running.
+    """
+    corners = [corner["corner"] for corner in coachable_corners(summary, limit=None)]
+    mine, theirs = corners[0], corners[-1]
+    told = (f"{mine}: brake later here.", f"{theirs}: get on the throttle sooner.")
+
+    prompt = build_coach_prompt({**summary, "corners": summary["corners"][:0] or []}, None, told)
+    assert "brake later here" not in prompt  # no corners at all, so no memory
+
+    one_corner = [c for c in coachable_corners(summary, limit=None) if c["corner"] == mine]
+    prompt = build_coach_prompt({**summary, "corners": one_corner}, None, told)
+
+    assert "brake later here" in prompt
+    assert "get on the throttle sooner" not in prompt
+
+
+def test_memory_in_a_shape_this_build_does_not_know_is_still_sent(summary):
+    """A change to how advice is stored must not silently empty the memory.
+
+    Dropping what cannot be parsed would leave the model with no record of what
+    it had already said, and repeat it -- the exact failure the memory exists to
+    prevent, arriving quietly.
+    """
+    prompt = build_coach_prompt(summary, None, ("no corner named in this line",))
+
+    assert "no corner named in this line" in prompt
