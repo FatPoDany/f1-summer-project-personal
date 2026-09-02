@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from PySide6.QtGui import QAction
 
 from apex import main_window
 from apex.coaching_queue import GarageCoachingQueue
@@ -67,6 +68,19 @@ def test_data_collection_guide_is_reachable_without_starting_torcs(qtbot):
     window._capture_action.trigger()
     assert window._stacked.currentWidget() is window._capture
     assert not window._capture.running
+
+
+def test_focused_app_omits_legacy_operator_tools_even_in_research_mode(qtbot, monkeypatch):
+    monkeypatch.setenv("APEX_RESEARCH_MODE", "1")
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    actions = {action.text() for action in window.findChildren(QAction)}
+    assert "Live Pit Wall" not in actions
+    assert "Robot Pilot" not in actions
+    assert not hasattr(window, "_live")
+    assert not hasattr(window, "_synthetic")
+    assert "Study Results" in actions
 
 
 def test_garage_lists_sample_session_and_opens_laps(qtbot):

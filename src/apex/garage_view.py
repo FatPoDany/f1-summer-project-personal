@@ -7,14 +7,18 @@ from pathlib import Path
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
+    QHeaderView,
     QInputDialog,
     QLabel,
     QListWidget,
     QMenu,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -111,21 +115,30 @@ class GarageView(QWidget):
         self._session_list.customContextMenuRequested.connect(self._session_menu)
         self._session_list.setToolTip("Right-click for new and delete")
 
-        left = QWidget()
+        left = QFrame()
+        left.setObjectName("panel")
         left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.addWidget(QLabel("Sessions"))
+        left_layout.setContentsMargins(14, 14, 14, 14)
+        left_layout.setSpacing(10)
+        library_title = QLabel("Session library")
+        library_title.setObjectName("sectionTitle")
+        library_hint = QLabel("Imported and captured drives")
+        library_hint.setObjectName("tertiary")
+        left_layout.addWidget(library_title)
+        left_layout.addWidget(library_hint)
         left_layout.addWidget(self._session_list, stretch=1)
 
         # One import. Watching a folder was a second way to do the same thing,
         # from before capture put its laps in the Garage by itself.
         import_button = QPushButton("Import…")
+        import_button.setObjectName("quiet")
         import_button.clicked.connect(self._import_files)
 
         # Opening a lap used to be available only through a hidden double-click
         # or context-menu gesture.  That left a selected row beside a disabled
         # Lap Analysis toolbar action and made the AI setup state look broken.
         self._open_button = QPushButton("Analyze selected lap")
+        self._open_button.setObjectName("primary")
         self._open_button.setEnabled(False)
         self._open_button.setToolTip(
             "Open Lap Analysis, including the AI Race Engineer and technique review"
@@ -147,6 +160,15 @@ class GarageView(QWidget):
         self._table.verticalHeader().setVisible(False)
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._table.setAlternatingRowColors(True)
+        self._table.setShowGrid(False)
+        self._table.verticalHeader().setDefaultSectionSize(38)
+        self._table.horizontalHeader().setMinimumHeight(38)
+        for column in range(len(TABLE_HEADERS) - 1):
+            self._table.horizontalHeader().setSectionResizeMode(
+                column, QHeaderView.ResizeMode.ResizeToContents
+            )
         self._table.itemSelectionChanged.connect(self._update_open_state)
         self._table.cellDoubleClicked.connect(self._open_row)
         self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -159,6 +181,7 @@ class GarageView(QWidget):
         # preset and the questionnaire; before this the app stored all four and
         # showed none of them, so importing one looked like it had lost them.
         self._participant = QLabel()
+        self._participant.setObjectName("secondary")
         self._participant.setWordWrap(True)
         self._participant.setAccessibleName("Participant and study background")
 
@@ -166,18 +189,37 @@ class GarageView(QWidget):
         self._footage_status.setWordWrap(True)
         self._footage_status.setAccessibleName("Race-window footage status")
 
+        self._session_heading = QLabel("Select a session")
+        self._session_heading.setObjectName("sectionTitle")
+        section_copy = QVBoxLayout()
+        section_copy.setSpacing(2)
+        section_copy.addWidget(self._session_heading)
+        section_hint = QLabel("Laps, verified context and coaching status")
+        section_hint.setObjectName("tertiary")
+        section_copy.addWidget(section_hint)
+
         buttons = QHBoxLayout()
-        buttons.addWidget(import_button)
+        buttons.addLayout(section_copy)
         buttons.addStretch(1)
+        buttons.addWidget(import_button)
         buttons.addWidget(self._debrief_button)
         buttons.addWidget(self._open_button)
 
-        right = QWidget()
+        metadata = QFrame()
+        metadata.setObjectName("summaryCard")
+        metadata_layout = QVBoxLayout(metadata)
+        metadata_layout.setContentsMargins(12, 9, 12, 9)
+        metadata_layout.setSpacing(3)
+        metadata_layout.addWidget(self._participant)
+        metadata_layout.addWidget(self._footage_status)
+
+        right = QFrame()
+        right.setObjectName("panel")
         right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setContentsMargins(14, 14, 14, 14)
+        right_layout.setSpacing(10)
         right_layout.addLayout(buttons)
-        right_layout.addWidget(self._participant)
-        right_layout.addWidget(self._footage_status)
+        right_layout.addWidget(metadata)
         right_layout.addWidget(self._table, stretch=1)
 
         splitter = QSplitter()
@@ -185,9 +227,33 @@ class GarageView(QWidget):
         splitter.addWidget(right)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 3)
+        splitter.setSizes([260, 980])
+
+        page_header = QFrame()
+        page_header.setObjectName("pageHeader")
+        page_header.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
+        )
+        page_header_layout = QVBoxLayout(page_header)
+        page_header_layout.setContentsMargins(18, 13, 18, 13)
+        page_header_layout.setSpacing(3)
+        eyebrow = QLabel("POST-SESSION REVIEW")
+        eyebrow.setObjectName("pageEyebrow")
+        title = QLabel("Garage")
+        title.setObjectName("pageTitle")
+        description = QLabel(
+            "Choose a recorded session, inspect its provenance, then open a lap or the "
+            "whole-session debrief."
+        )
+        description.setObjectName("pageDescription")
+        page_header_layout.addWidget(eyebrow)
+        page_header_layout.addWidget(title)
+        page_header_layout.addWidget(description)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 6, 8, 4)
+        layout.setContentsMargins(16, 14, 16, 12)
+        layout.setSpacing(12)
+        layout.addWidget(page_header)
         layout.addWidget(splitter)
 
     @property
@@ -210,6 +276,7 @@ class GarageView(QWidget):
             self._session_list.setCurrentRow(row)  # triggers _load_selected
         else:
             self._session = None
+            self._session_heading.setText("Select a session")
             self._table.setRowCount(0)
             self._participant.clear()
             self._footage_status.clear()
@@ -231,8 +298,10 @@ class GarageView(QWidget):
         session = self._session
         self._table.setRowCount(0)
         if session is None:
+            self._session_heading.setText("Select a session")
             self._footage_status.clear()
             return
+        self._session_heading.setText(session.name)
         self._update_participant(session)
         self._update_footage_status(session)
         best = session.best_lap

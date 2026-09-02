@@ -7,7 +7,9 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QThreadPool
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QComboBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QSplitter,
@@ -101,25 +103,38 @@ class AnalysisView(QWidget):
         self._corner_rows: list[dict] = []
 
         self._title = QLabel("No lap loaded")
-        self._title.setStyleSheet("font-weight: 600;")
+        self._title.setObjectName("pageTitle")
         self._readout = QLabel("")
-        self._readout.setStyleSheet(f"color: {theme.TEXT_DIM}; font-family: monospace;")
+        self._readout.setObjectName("metric")
+        self._readout.hide()
         self._theoretical = QLabel("")
-        self._theoretical.setStyleSheet(f"color: {theme.PURPLE};")
+        self._theoretical.setObjectName("bestMetric")
         self._theoretical.setToolTip("Best sectors combined — what a clean lap is worth")
         self._ref_combo = QComboBox()
         self._ref_combo.setMinimumWidth(220)
         self._ref_combo.currentIndexChanged.connect(self._apply_reference)
 
         header = QHBoxLayout()
-        header.addWidget(self._title)
+        header.setContentsMargins(18, 11, 18, 11)
+        header.setSpacing(9)
+        title_stack = QVBoxLayout()
+        title_stack.setSpacing(2)
+        eyebrow = QLabel("LAP ANALYSIS")
+        eyebrow.setObjectName("pageEyebrow")
+        title_stack.addWidget(eyebrow)
+        title_stack.addWidget(self._title)
+        header.addLayout(title_stack)
         header.addStretch(1)
         header.addWidget(self._readout)
-        header.addSpacing(12)
         header.addWidget(self._theoretical)
-        header.addSpacing(12)
-        header.addWidget(QLabel("Compare with:"))
+        reference_label = QLabel("REFERENCE")
+        reference_label.setObjectName("tertiary")
+        header.addWidget(reference_label)
         header.addWidget(self._ref_combo)
+
+        header_frame = QFrame()
+        header_frame.setObjectName("pageHeader")
+        header_frame.setLayout(header)
 
         self._stack = StripStack(self)
         self._stack.cursorMoved.connect(self._update_readout)
@@ -135,7 +150,7 @@ class AnalysisView(QWidget):
             "Where on the circuit the cited stretch is. The marker sits at its start."
         )
         self._track_caption = QLabel("Track")
-        self._track_caption.setStyleSheet(f"color: {theme.TEXT_DIM}; font-size: 11px;")
+        self._track_caption.setObjectName("tertiary")
 
         self._corners = QTableWidget(0, len(COMPARISON_HEADERS))
         self._corners.setHorizontalHeaderLabels(COMPARISON_HEADERS)
@@ -143,7 +158,12 @@ class AnalysisView(QWidget):
         self._corners.verticalHeader().setVisible(False)
         self._corners.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._corners.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self._corners.setMaximumHeight(190)
+        self._corners.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._corners.setAlternatingRowColors(True)
+        self._corners.setShowGrid(False)
+        self._corners.verticalHeader().setDefaultSectionSize(36)
+        self._corners.horizontalHeader().setMinimumHeight(38)
+        self._corners.setMaximumHeight(230)
         self._corners.setToolTip(
             "Click a corner to zoom the strips and track onto it; "
             "double-click to review it with the race footage"
@@ -156,7 +176,7 @@ class AnalysisView(QWidget):
         # cost time, in plain language. Clicking one zooms the strips onto it.
         self._debrief_heading = QLabel()
         self._debrief_heading.setWordWrap(True)
-        self._debrief_heading.setStyleSheet("font-weight: 600;")
+        self._debrief_heading.setObjectName("secondary")
         self._debrief_heading.hide()
         # The list of costly stretches that used to sit here said the same thing
         # as the corner table three rows further down -- same corners, same
@@ -194,6 +214,7 @@ class AnalysisView(QWidget):
         self._report_exposure = ExposureLog()
 
         self._panel = CoachPanel(self, pool=coach_pool, server=coach_server)
+        self._panel.setObjectName("sidePanel")
         self._panel.setMinimumWidth(300)
         self._panel.evidenceRequested.connect(self._show_evidence)
         self._panel.viewResetRequested.connect(self._stack.reset_view)
@@ -212,13 +233,35 @@ class AnalysisView(QWidget):
         traces.addWidget(self._stack, stretch=4)
         traces.addLayout(track_column, stretch=1)
 
+        plot_panel = QFrame()
+        plot_panel.setObjectName("panel")
+        plot_layout = QVBoxLayout(plot_panel)
+        plot_layout.setContentsMargins(12, 10, 12, 10)
+        plot_layout.addLayout(traces)
+
+        self._corner_panel = QFrame()
+        self._corner_panel.setObjectName("panel")
+        corner_layout = QVBoxLayout(self._corner_panel)
+        corner_layout.setContentsMargins(12, 10, 12, 12)
+        corner_layout.setSpacing(7)
+        corner_header = QHBoxLayout()
+        corner_title = QLabel("Corner breakdown")
+        corner_title.setObjectName("sectionTitle")
+        corner_hint = QLabel("Click to focus · double-click to review footage")
+        corner_hint.setObjectName("tertiary")
+        corner_header.addWidget(corner_title)
+        corner_header.addStretch(1)
+        corner_header.addWidget(corner_hint)
+        corner_layout.addLayout(corner_header)
+        corner_layout.addLayout(debrief_header)
+        corner_layout.addWidget(self._corners)
+        self._corner_panel.hide()
+
         charts = QWidget()
         charts_layout = QVBoxLayout(charts)
         charts_layout.setContentsMargins(0, 0, 0, 0)
-        charts_layout.setSpacing(4)
-        charts_layout.addLayout(traces, stretch=1)
-        charts_layout.addLayout(debrief_header)
-        charts_layout.addWidget(self._corners)
+        charts_layout.setSpacing(10)
+        charts_layout.addWidget(plot_panel, stretch=1)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(charts)
@@ -228,9 +271,11 @@ class AnalysisView(QWidget):
         splitter.setSizes([920, 340])
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 6, 8, 4)
-        layout.addLayout(header)
+        layout.setContentsMargins(16, 14, 16, 12)
+        layout.setSpacing(12)
+        layout.addWidget(header_frame)
         layout.addWidget(splitter, stretch=1)
+        layout.addWidget(self._corner_panel)
 
     @property
     def lap(self) -> Lap | None:
@@ -266,6 +311,7 @@ class AnalysisView(QWidget):
         self._ref_combo.blockSignals(False)
         self._corners.setRowCount(0)
         self._corners.hide()
+        self._corner_panel.hide()
         self._stack.clear_lap()
         self._track.clear()
         self._panel.set_context(None, None)
@@ -599,6 +645,7 @@ class AnalysisView(QWidget):
         self._corner_rows = []
         if self._lap is None:
             self._corners.hide()
+            self._corner_panel.hide()
             return
         try:
             # Rows and reviewable stretches are built from the same source, so
@@ -621,6 +668,7 @@ class AnalysisView(QWidget):
             self._review_points = []
         if not rows:
             self._corners.hide()
+            self._corner_panel.hide()
             return
         self._corner_rows = rows
         comparison = reference is not None or composite is not None
@@ -681,6 +729,7 @@ class AnalysisView(QWidget):
                 self._corners.setItem(i, col, item)
         self._corners.resizeColumnsToContents()
         self._corners.show()
+        self._corner_panel.show()
 
     def _zoom_corner_row(self, row: int, _col: int = 0) -> None:
         if 0 <= row < len(self._corner_rows):
@@ -723,6 +772,7 @@ class AnalysisView(QWidget):
     def _update_readout(self, values: dict | None) -> None:
         if not values:
             self._readout.setText("")
+            self._readout.hide()
             return
         text = (
             f"{values['dist']:.0f} m · {values['speed_kmh']:.0f} km/h"
@@ -731,3 +781,4 @@ class AnalysisView(QWidget):
         if "gear" in values:
             text += f" · gear {values['gear']}"
         self._readout.setText(text)
+        self._readout.show()

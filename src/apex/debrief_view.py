@@ -40,9 +40,10 @@ from racecoach.granite.report import LapReport, SessionReport, build_report, ren
 from racecoach.granite.server import GraniteServer, ServerError
 
 CARD_STYLE = (
-    "QFrame#lapCard { background: #1f1f1f; border: 1px solid #393939; border-radius: 6px; }"
+    f"QFrame#lapCard {{ background: {theme.SURFACE_1}; border: 1px solid "
+    f"{theme.BORDER}; border-radius: 10px; }}"
 )
-HEADING_STYLE = "font-size: 18px; font-weight: 600;"
+HEADING_STYLE = "font-size: 22px; font-weight: 650;"
 DIM = f"color: {theme.TEXT_DIM};"
 
 # Written coaching is offered from Lap Analysis, which owns the download and its
@@ -176,21 +177,23 @@ class SessionDebriefView(QWidget):
 
     def _build_ui(self) -> None:
         self._heading = QLabel("Session debrief")
-        self._heading.setStyleSheet(HEADING_STYLE)
+        self._heading.setObjectName("pageTitle")
         self._subject = QLabel()
         self._subject.setWordWrap(True)
-        self._subject.setStyleSheet(DIM)
+        self._subject.setObjectName("pageDescription")
         self._subject.setAccessibleName("Session and participant")
         self._state = QLabel()
         self._state.setWordWrap(True)
         self._state.setAccessibleName("Debrief status")
 
         self._coach_button = QPushButton("Write the coaching")
+        self._coach_button.setObjectName("primary")
         self._coach_button.setToolTip(
             "Ask the local Granite model to put the measured stretches into words"
         )
         self._coach_button.clicked.connect(lambda: self._start(narrate=True))
         self._save_button = QPushButton("Save debrief…")
+        self._save_button.setObjectName("quiet")
         self._save_button.setToolTip("Write this debrief to a file you can keep or send")
         self._save_button.clicked.connect(self._save)
 
@@ -202,17 +205,28 @@ class SessionDebriefView(QWidget):
         self._cards_host = QWidget()
         self._cards = QVBoxLayout(self._cards_host)
         self._cards.setContentsMargins(0, 0, 0, 0)
-        self._cards.setSpacing(8)
+        self._cards.setSpacing(10)
         self._cards.addStretch(1)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setWidget(self._cards_host)
 
+        page_header = QFrame()
+        page_header.setObjectName("pageHeader")
+        page_header_layout = QVBoxLayout(page_header)
+        page_header_layout.setContentsMargins(18, 13, 18, 13)
+        page_header_layout.setSpacing(3)
+        eyebrow = QLabel("SESSION REVIEW")
+        eyebrow.setObjectName("pageEyebrow")
+        page_header_layout.addWidget(eyebrow)
+        page_header_layout.addWidget(self._heading)
+        page_header_layout.addWidget(self._subject)
+
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 6, 8, 4)
-        layout.addWidget(self._heading)
-        layout.addWidget(self._subject)
+        layout.setContentsMargins(16, 14, 16, 12)
+        layout.setSpacing(10)
+        layout.addWidget(page_header)
         layout.addLayout(buttons)
         layout.addWidget(self._state)
         layout.addWidget(scroll, stretch=1)
@@ -467,8 +481,8 @@ class _LapCard(QFrame):
         self.setObjectName("lapCard")
         self.setStyleSheet(CARD_STYLE)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(4)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(7)
 
         title = QLabel(f"{lap_title(report.lap)} — {report.lap.lap_time:.2f} s")
         # Purple is the session best everywhere else in Apex; the lap every
@@ -488,8 +502,8 @@ class _LapCard(QFrame):
 def _point_rows(report: LapReport, index: int, point) -> QVBoxLayout:
     """One measured stretch, with whatever the model was allowed to say about it."""
     rows = QVBoxLayout()
-    rows.setContentsMargins(12, 6, 0, 0)
-    rows.setSpacing(2)
+    rows.setContentsMargins(12, 7, 0, 2)
+    rows.setSpacing(4)
     headline = QLabel(point.headline)
     headline.setStyleSheet(f"font-weight: 600; color: {theme.BLUE};")
     rows.addWidget(headline)

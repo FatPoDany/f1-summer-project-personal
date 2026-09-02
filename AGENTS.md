@@ -75,9 +75,6 @@ sha256sum -c integrations/torcs-1.3.9/SHA256SUMS
 integrations/torcs-1.3.9/verify-bridge.sh
 ```
 
-Do not run both the Apex live session and the `racecoach` live CLI against the
-single-peer TORCS bridge at the same time.
-
 ## Working protocol
 
 1. Before editing, read the target file, its tests, the relevant contract/type

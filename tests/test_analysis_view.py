@@ -51,6 +51,15 @@ def test_single_lap_corner_table_is_available_when_chosen(qtbot):
     assert any("REVIEW" in view._corners.item(row, 5).text() for row in range(len(rows)))
 
 
+def test_corner_breakdown_uses_the_polished_readable_table(qtbot):
+    view, _session = make_view(qtbot)
+
+    assert view._corners.alternatingRowColors()
+    assert not view._corners.showGrid()
+    assert view._corners.verticalHeader().defaultSectionSize() == 36
+    assert view._corner_panel.isVisible()
+
+
 def test_optional_reference_comparison_matches_core_and_flags_worst(qtbot):
     view, session = make_view(qtbot)
     best_index = view._ref_combo.findData(session.best_lap)

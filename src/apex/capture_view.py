@@ -154,20 +154,28 @@ class CaptureGuideView(QWidget):
 
     def _build_ui(self) -> None:
         self._title = QLabel("Collect driving data")
-        self._title.setStyleSheet("font-size: 20px; font-weight: 600;")
+        self._title.setObjectName("pageTitle")
         self._intro = QLabel(
             "No terminal or CSV handling is needed. Apex starts the simulator, "
             "checks the recording, and files the completed run for analysis."
         )
         self._intro.setWordWrap(True)
-        self._intro.setStyleSheet(f"color: {theme.TEXT_DIM};")
+        self._intro.setObjectName("pageDescription")
 
         steps = QLabel("1  PREPARE     →     2  DRIVE     →     3  SAVED")
-        steps.setStyleSheet(
-            f"background: {theme.NEUTRAL}; color: {theme.BLUE}; "
-            "padding: 8px; font-weight: 600;"
-        )
+        steps.setObjectName("modeBadge")
         steps.setAccessibleName("Collection progress: prepare, drive, saved")
+
+        page_header = QFrame()
+        page_header.setObjectName("pageHeader")
+        page_header_layout = QVBoxLayout(page_header)
+        page_header_layout.setContentsMargins(18, 13, 18, 13)
+        page_header_layout.setSpacing(3)
+        eyebrow = QLabel("GUIDED CAPTURE")
+        eyebrow.setObjectName("pageEyebrow")
+        page_header_layout.addWidget(eyebrow)
+        page_header_layout.addWidget(self._title)
+        page_header_layout.addWidget(self._intro)
 
         self._pages = QStackedWidget()
         self._setup_page = CaptureSetupPage(
@@ -183,10 +191,9 @@ class CaptureGuideView(QWidget):
 
         body = QWidget()
         body_layout = QVBoxLayout(body)
-        body_layout.setContentsMargins(16, 12, 16, 12)
-        body_layout.setSpacing(10)
-        body_layout.addWidget(self._title)
-        body_layout.addWidget(self._intro)
+        body_layout.setContentsMargins(16, 14, 16, 12)
+        body_layout.setSpacing(12)
+        body_layout.addWidget(page_header)
         body_layout.addWidget(steps)
         body_layout.addWidget(self._pages, stretch=1)
 

@@ -12,9 +12,9 @@ from f1coach_core import Lap, sector_spans
 pg.setConfigOptions(antialias=True)
 
 CHANNELS = (  # (df column, axis label, pen colour)
-    ("speed", "speed (km/h)", theme.BLUE),
-    ("throttle", "throttle (%)", theme.GREEN),
-    ("brake", "brake (%)", theme.RED),
+    ("speed", "Speed (km/h)", theme.BLUE),
+    ("throttle", "Throttle (%)", theme.GREEN),
+    ("brake", "Brake (%)", theme.RED),
 )
 AXIS_WIDTH = 64
 
@@ -30,7 +30,7 @@ class StripStack(pg.GraphicsLayoutWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setBackground(theme.BG)
+        self.setBackground(theme.SURFACE_1)
         self.lap: Lap | None = None
         self.reference: Lap | None = None
         self._dist = np.empty(0)
@@ -60,7 +60,7 @@ class StripStack(pg.GraphicsLayoutWidget):
         self._curves: list[pg.PlotDataItem] = []
         self._ref_curves: list[pg.PlotDataItem] = []
         self._vlines: list[pg.InfiniteLine] = []
-        for i, (_, label, colour) in enumerate(CHANNELS, start=1):
+        for i, (column, label, colour) in enumerate(CHANNELS, start=1):
             strip = self.addPlot(row=i, col=0)
             strip.setLabel("left", label)
             strip.getAxis("left").enableAutoSIPrefix(False)
@@ -69,12 +69,17 @@ class StripStack(pg.GraphicsLayoutWidget):
                 strip.hideAxis("bottom")
             else:
                 strip.setLabel("bottom", "distance", units="m")
-            ref = strip.plot(pen=pg.mkPen(theme.PURPLE, width=1.1))
-            curve = strip.plot(pen=pg.mkPen(colour, width=1.6))
+            ref = strip.plot(pen=pg.mkPen(theme.PURPLE, width=1.35))
+            curve = strip.plot(pen=pg.mkPen(colour, width=2.0))
+            if column != "speed":
+                curve.setFillLevel(0)
+                curve.setBrush(pg.mkBrush(colour + "14"))
             for item in (ref, curve):
                 item.setDownsampling(auto=True, method="peak")
                 item.setClipToView(True)
-            vline = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen("#f4f4f466", width=1))
+            vline = pg.InfiniteLine(
+                angle=90, movable=False, pen=pg.mkPen(theme.TEXT_MUTED + "88", width=1)
+            )
             vline.hide()
             strip.addItem(vline, ignoreBounds=True)
             self._strips.append(strip)
@@ -87,11 +92,15 @@ class StripStack(pg.GraphicsLayoutWidget):
         for strip in self._strips[1:]:
             strip.setXLink(base)
         for plot in (self._ribbon, *self._strips):
+            for name in ("left", "bottom"):
+                axis = plot.getAxis(name)
+                axis.setPen(pg.mkPen(theme.BORDER))
+                axis.setTextPen(pg.mkPen(theme.TEXT_MUTED))
             plot.getAxis("left").setWidth(AXIS_WIDTH)
 
         layout = self.ci.layout
-        layout.setRowFixedHeight(0, 26)
-        layout.setVerticalSpacing(4)
+        layout.setRowFixedHeight(0, 30)
+        layout.setVerticalSpacing(6)
         for row, stretch in ((1, 5), (2, 3), (3, 3)):
             layout.setRowStretchFactor(row, stretch)
 
@@ -197,7 +206,12 @@ class StripStack(pg.GraphicsLayoutWidget):
         x1 = np.array([s[2] for s in spans])
         brushes = [colors.get(s[0], theme.NEUTRAL) for s in spans]
         bars = pg.BarGraphItem(
-            x0=x0, x1=x1, y0=0, y1=1, brushes=brushes, pen=pg.mkPen(theme.BG, width=2)
+            x0=x0,
+            x1=x1,
+            y0=0,
+            y1=1,
+            brushes=brushes,
+            pen=pg.mkPen(theme.SURFACE_1, width=2),
         )
         self._ribbon.addItem(bars)
         self._ribbon_items.append(bars)

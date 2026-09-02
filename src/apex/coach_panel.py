@@ -58,11 +58,12 @@ from racecoach.granite import server as gs
 from racecoach.granite.server import GraniteServer, ServerError
 
 CARD_STYLE = (
-    "QFrame#findingCard { background: #1f1f1f; border: 1px solid #393939; border-radius: 6px; }"
+    f"QFrame#findingCard {{ background: {theme.SURFACE_2}; border: 1px solid "
+    f"{theme.BORDER}; border-radius: 9px; }}"
 )
 CHIP_STYLE = (
-    f"background: #262626; color: {theme.TEXT_DIM}; border-radius: 4px;"
-    " padding: 2px 8px; font-size: 11px;"
+    f"background: {theme.SURFACE_2}; color: {theme.TEXT_DIM}; border: 1px solid "
+    f"{theme.BORDER}; border-radius: 9px; padding: 3px 8px; font-size: 10px;"
 )
 FOCUS_CHIPS = {
     "braking": ("Braking", theme.RED),
@@ -251,13 +252,13 @@ class PatternBanner(QFrame):
         self.setObjectName("patternBanner")
         colour = self.COLOURS.get(pattern.get("category", ""), theme.TEXT_DIM)
         self.setStyleSheet(
-            "QFrame#patternBanner { background: #1a1a1a;"
-            f" border: 1px solid #393939; border-left: 3px solid {colour};"
-            " border-radius: 6px; }"
+            f"QFrame#patternBanner {{ background: {theme.SURFACE_2};"
+            f" border: 1px solid {theme.BORDER}; border-left: 3px solid {colour};"
+            " border-radius: 9px; }"
         )
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(3)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(5)
 
         scope = QLabel("ACROSS CORNERS")
         scope.setStyleSheet(
@@ -292,8 +293,8 @@ class FindingCard(QFrame):
         self.setObjectName("findingCard")
         self.setStyleSheet(CARD_STYLE)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(4)
+        layout.setContentsMargins(12, 10, 12, 11)
+        layout.setSpacing(6)
 
         top = QHBoxLayout()
         self._focus_chip = self._make_focus_chip(finding.focus)
@@ -428,8 +429,8 @@ class CoachPanel(QWidget):
         # stays true for as long as the window is open.
         self._shown: dict[tuple[str, str], tuple[CoachingReport, Path | None]] = {}
 
-        title = QLabel("AI Race Engineer")
-        title.setStyleSheet("font-weight: 600;")
+        title = QLabel("AI Coach")
+        title.setObjectName("sectionTitle")
         self._chip = QLabel("")
         self._chip.setStyleSheet(CHIP_STYLE)
         self._chip.hide()
@@ -445,10 +446,13 @@ class CoachPanel(QWidget):
         header.addWidget(self._chip)
 
         self._coach_button = QPushButton("Analyze lap")
+        self._coach_button.setObjectName("primary")
         self._coach_button.clicked.connect(self._run)
         reset_button = QPushButton("Reset view")
+        reset_button.setObjectName("quiet")
         reset_button.clicked.connect(self.viewResetRequested.emit)
         self._audit_button = QPushButton("Audit…")
+        self._audit_button.setObjectName("quiet")
         self._audit_button.setEnabled(False)
         self._audit_button.setToolTip(
             "The raw record of the last run: prompt, response, and what Apex did with it"
@@ -484,8 +488,8 @@ class CoachPanel(QWidget):
         self._scroll.setWidget(self._cards_host)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 6, 8, 4)
-        layout.setSpacing(6)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(9)
         layout.addLayout(header)
         layout.addLayout(buttons)
         layout.addWidget(self._progress)
