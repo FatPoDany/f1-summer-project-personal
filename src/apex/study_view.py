@@ -66,6 +66,10 @@ PREFERRED_SECOND = (COACHED, CONTROL)
 HEADERS = (
     "Driver",
     "Phase",
+    # Two setups are assignable, and their lap times are not comparable: the
+    # export names which one produced a row, and this table has to as well or
+    # the screen is the one place the ambiguity survives.
+    "Setup",
     "Laps",
     "Best",
     "Mean",
@@ -79,6 +83,12 @@ HEADERS = (
     # export has carried these all along; the screen did not.
     "Background",
 )
+
+# Looked up rather than written as literals. The first version of the blank-cell
+# rule below carried a bare 6, and it addressed the wrong columns the moment one
+# was inserted to its left.
+SETUP_COLUMN = HEADERS.index("Setup")
+FIRST_MEASURED_COLUMN = HEADERS.index("Off track")
 
 
 class StudyView(QWidget):
@@ -357,6 +367,7 @@ class StudyView(QWidget):
             cells = [
                 summary.driver,
                 summary.phase,
+                summary.setup,
                 str(summary.laps),
                 f"{summary.best_lap_s:.2f}",
                 f"{summary.mean_lap_s:.2f}",
@@ -368,7 +379,13 @@ class StudyView(QWidget):
             ]
             for column, text in enumerate(cells):
                 item = QTableWidgetItem(text)
-                if 6 <= column < len(HEADERS) - 1 and text == "":
+                if column == SETUP_COLUMN and text == "":
+                    # A session driven outside the presets, which the CLI
+                    # fallback can legitimately produce. An empty cell would
+                    # read as an assignment nobody bothered to write down.
+                    item.setText("—")
+                    item.setToolTip("No assigned setup; the race was chosen by hand")
+                elif FIRST_MEASURED_COLUMN <= column < len(HEADERS) - 1 and text == "":
                     # Blank means the recording lacked the channel. Saying so
                     # stops it being read as a measured zero.
                     item.setText("—")
