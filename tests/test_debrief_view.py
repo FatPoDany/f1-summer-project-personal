@@ -523,6 +523,68 @@ def test_a_finished_debrief_is_not_regenerated_by_asking_for_it_again(
     assert window._stacked.currentWidget() is window._debrief
 
 
+def test_going_to_another_session_and_back_does_not_pay_for_the_first_twice(
+    qtbot, tmp_path, monkeypatch
+):
+    """The screen remembers one session, and a researcher has six.
+
+    Look at A, look at B, come back to A: the guard in ``set_session`` compares
+    paths, so the return is a different session as far as it is concerned and
+    the whole narration runs again. On a machine with the weights installed
+    that is minutes of a 3B model per visit, for an answer already produced --
+    and it is the ordinary way anybody uses the Garage, not an edge case.
+
+    What makes the return cheap is the record on disk, not a bigger cache in
+    memory: the reports hold every lap's telemetry, and keeping six of those
+    alive on a participant's laptop would trade minutes of CPU for hundreds of
+    megabytes. The numbers are re-measured, which is fast and keeps them honest
+    against the build doing the measuring; only the prose is restored.
+    """
+    ready(monkeypatch)
+    monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "ws"))
+    from f1coach_core import workspace
+
+    sessions = workspace.sessions_root()
+    sessions.mkdir(parents=True, exist_ok=True)
+    for name in ("P001-baseline", "P001-coached"):
+        write_lap(sessions / name, 1, speed_scale=0.88, brake_shift_m=-60.0)
+        write_lap(sessions / name, 2)
+
+    asked = []
+
+    def counting(summary, points, **kwargs):
+        asked.append(summary)
+        return _narrator(summary, points, **kwargs)
+
+    monkeypatch.setattr(gr, "narrate_debrief", counting)
+
+    window = MainWindow()
+    window._debrief._server = FakeServer()
+    qtbot.addWidget(window)
+    window._debrief._pool = InlinePool()
+    window._debrief.clear_session()
+
+    def open_session(row: int) -> None:
+        window._garage._session_list.setCurrentRow(row)
+        window._garage._debrief_button.click()
+
+    open_session(0)
+    first = window._debrief.session.name
+    cost = len(asked)
+    assert cost > 0
+
+    open_session(1)
+    assert window._debrief.session.name != first
+
+    before = len(asked)
+    open_session(0)
+
+    assert window._debrief.session.name == first
+    assert len(asked) == before  # the model was not asked a second time
+    assert "You braked before you needed to." in screen_text(window._debrief)
+    assert not window._debrief._coach_button.isEnabled()
+
+
 def test_the_debrief_shares_the_one_model_server_and_the_one_worker(qtbot, monkeypatch):
     """Two 3B models on one participant's CPU is the failure this prevents."""
     unavailable(monkeypatch)
