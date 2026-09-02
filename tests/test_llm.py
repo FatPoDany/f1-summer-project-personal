@@ -8,6 +8,7 @@ import pytest
 
 from f1coach_core import CoachingSchemaError, build_evidence_summary, load_sample_session
 from f1coach_core.coach import evidence_catalog, opportunity_catalog
+from f1coach_core.guidance import guidance_for
 from f1coach_core.llm import (
     PROMPT_VERSION,
     build_coach_prompt,
@@ -381,3 +382,55 @@ def test_the_schema_never_asks_the_model_how_sure_it_is():
     schema = json.dumps(build_coach_response_format(build_evidence_summary(slow_lap())))
 
     assert "confidence" not in schema
+
+
+def _one_brake_point_finding(comparison, prose):
+    """One schema-valid finding citing a real braking difference."""
+    citation = next(
+        {key: item[key] for key in EVIDENCE_KEYS}
+        for (_corner, metric), item in opportunity_catalog(comparison).items()
+        if metric == "brake_point"
+    )
+    return citation, {
+        "findings": [
+            {
+                "focus": "braking",
+                "issue": prose,
+                "cause": "You are on the brakes before the reference is.",
+                "action": "Carry the same entry a little further before braking.",
+                "evidence": [citation],
+            }
+        ]
+    }
+
+
+def test_the_model_s_own_wording_never_reaches_a_card():
+    """The model chooses the corner; the template says the words.
+
+    Letting its prose through when it cited its own numbers was implemented
+    and measured against the real weights, and it is deliberately not what
+    happens: across five laps the model's words reached a card zero times out
+    of eight, and the one finding that would have gone up verbatim described
+    braking earlier than the reference as braking later and advised braking
+    earlier still. Checking that a number is cited is not checking that the
+    sentence around it is true, so the sentence is never the model's -- while
+    the finding itself, and the difference it rests on, still reach the screen.
+    """
+    session = load_sample_session()
+    comparison = build_evidence_summary(session.laps[0], session.laps[4])
+    citation, raw = _one_brake_point_finding(comparison, "PLACEHOLDER")
+    # A number the finding really does cite, so nothing but the decision above
+    # keeps this sentence off the card: a check on where numbers come from
+    # would pass it.
+    gap = round(abs(citation["value"] - citation["ref"]))
+    assert gap, "this fixture needs a corner where the two numbers differ"
+    raw["findings"][0]["issue"] = f"You brake about {gap} metres early here."
+
+    report = report_from_llm_text(
+        json.dumps(raw), model="granite-test", evidence_summary=comparison
+    )
+
+    assert len(report.findings) == 1
+    assert [item.corner for item in report.findings[0].evidence] == [citation["corner"]]
+    assert report.findings[0].issue == guidance_for("brake_point").issue
+    assert str(gap) not in report.findings[0].issue

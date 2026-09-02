@@ -25,6 +25,11 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from f1coach_core.features import (
+    NOTABLE_THRESHOLDS,
+    CornerScatter,
+    notable_bar,
+)
 from f1coach_core.guidance import guidance_for
 
 FOCUS_AREAS = ("braking", "cornering", "throttle")
@@ -180,7 +185,17 @@ def _number(value, where: str) -> float:
 
 
 def _require_measurement_free_prose(value: str, where: str) -> None:
-    """Keep every numeric claim inside a citation, where it can be fact-checked."""
+    """Keep every numeric claim inside a citation, where it can be fact-checked.
+
+    A whitelist was tried here instead: a finding could say any number it cited,
+    compared at the precision it chose. It worked, and it was still the wrong
+    rule. Checking that a number is cited is not checking that the sentence
+    around it is true, and five laps against the real model produced a finding
+    that cited brake_point 1775 m against a 1795 m reference -- braking earlier
+    -- described that as "later than the reference", and advised braking earlier
+    still. Every number in it was correct and cited. The templates below cannot
+    make that mistake, so the prose is theirs and the digits stay in evidence.
+    """
     _require(
         not any(character.isdigit() for character in value),
         f"{where} must not contain numeric values; put measurements in evidence",
@@ -244,8 +259,62 @@ def evidence_catalog(evidence_summary: dict) -> dict[tuple[str, str], dict]:
     return catalog
 
 
-def opportunity_catalog(evidence_summary: dict) -> dict[tuple[str, str], dict]:
-    """Return only citations whose direction and size support a coaching action."""
+# Which way a metric has to move before it is worth coaching on. The size of
+# the move comes from `_opportunity_bar`, not from here, so the two cannot be
+# changed independently.
+_OPPORTUNITY_DIRECTIONS = {
+    "brake_point": -1,
+    "entry_speed": -1,
+    "min_speed": -1,
+    "exit_speed": -1,
+    "throttle_reapply": +1,
+    "throttle_point": +1,
+    "full_throttle": +1,
+    "exit_throttle": -1,
+    "coast_distance": +1,
+}
+
+# Bars for the five metrics `features.NOTABLE_THRESHOLDS` does not calibrate.
+# The four it does are taken from there instead of copied, because a card and
+# the debrief sentence beside it must not disagree about what counts as a
+# difference worth mentioning. Before this they did: the card asked 15 m of
+# late throttle where the debrief asked 10, and 10 m of coasting where the
+# debrief asked 15.
+_UNCALIBRATED_BARS = {
+    "entry_speed": 3.0,
+    "exit_speed": 3.0,
+    "throttle_point": 15.0,
+    "full_throttle": 15.0,
+    "exit_throttle": 5.0,
+}
+
+
+def _opportunity_bar(metric: str, corner: str, scatter: CornerScatter | None) -> float:
+    fact_key = EVIDENCE_METRICS[metric][0]
+    if fact_key in NOTABLE_THRESHOLDS:
+        return notable_bar(fact_key, corner, scatter)
+    return _UNCALIBRATED_BARS[metric]
+
+
+def opportunity_catalog(
+    evidence_summary: dict, scatter: CornerScatter | None = None
+) -> dict[tuple[str, str], dict]:
+    """Return only citations whose direction and size support a coaching action.
+
+    ``scatter`` is this driver's own lap-to-lap movement through each corner.
+    Where it is wider than the fixed bar it replaces it, exactly as
+    ``features.notable_bar`` does for the debrief: a driver whose minimum speed
+    wanders 8 km/h between laps has not been told anything by a card reporting
+    that one of them was 4 km/h down. The cards were the last screen still
+    reading a driver's noise as a fact about their driving.
+
+    Passing nothing keeps the fixed bars. That direction is the safe one and it
+    is why this is a parameter rather than a field of the evidence packet: the
+    bar can only ever rise, so the scatter-aware catalog is a **subset** of the
+    fixed one, and a report generated against a driver's scatter still
+    validates for a reader that has none. The packet stays byte-for-byte what
+    it was, so every stored audit still matches on it.
+    """
     if evidence_summary.get("analysis_mode") == "single_lap":
         rules = {
             "coast_distance": lambda value, guide: value > guide,
@@ -253,23 +322,26 @@ def opportunity_catalog(evidence_summary: dict) -> dict[tuple[str, str], dict]:
             "throttle_applications": lambda value, guide: value > guide,
             "pedal_overlap": lambda value, guide: value >= guide,
         }
-    else:
-        rules = {
-            "brake_point": lambda value, ref: value <= ref - 10.0,
-            "entry_speed": lambda value, ref: value <= ref - 3.0,
-            "min_speed": lambda value, ref: value <= ref - 3.0,
-            "exit_speed": lambda value, ref: value <= ref - 3.0,
-            "throttle_reapply": lambda value, ref: value >= ref + 15.0,
-            "throttle_point": lambda value, ref: value >= ref + 15.0,
-            "full_throttle": lambda value, ref: value >= ref + 15.0,
-            "exit_throttle": lambda value, ref: value <= ref - 5.0,
-            "coast_distance": lambda value, ref: value >= ref + 10.0,
+        return {
+            citation: item
+            for citation, item in evidence_catalog(evidence_summary).items()
+            if item["metric"] in rules
+            and rules[item["metric"]](item["value"], item["ref"])
         }
     return {
         citation: item
         for citation, item in evidence_catalog(evidence_summary).items()
-        if item["metric"] in rules and rules[item["metric"]](item["value"], item["ref"])
+        if _supports_coaching(item, scatter)
     }
+
+
+def _supports_coaching(item: dict, scatter: CornerScatter | None) -> bool:
+    direction = _OPPORTUNITY_DIRECTIONS.get(item["metric"])
+    if direction is None:
+        return False
+    bar = _opportunity_bar(item["metric"], item["corner"], scatter)
+    gap = item["value"] - item["ref"]
+    return gap <= -bar if direction < 0 else gap >= bar
 
 
 def _same_number(actual: float, expected: float) -> bool:
@@ -281,6 +353,7 @@ def coaching_report_from_dict(
     evidence_summary: dict | None = None,
     *,
     opportunities_only: bool = False,
+    scatter: CornerScatter | None = None,
 ) -> CoachingReport:
     """Validate a response and, when supplied, fact-check every citation.
 
@@ -314,7 +387,7 @@ def coaching_report_from_dict(
     if evidence_summary is None:
         grounded = None
     elif opportunities_only:
-        grounded = opportunity_catalog(evidence_summary)
+        grounded = opportunity_catalog(evidence_summary, scatter)
     else:
         grounded = evidence_catalog(evidence_summary)
     findings = []
@@ -437,6 +510,18 @@ class CoachProvider(ABC):
     # are true. Set by ``run_audited_coaching``, which is the layer that holds
     # the lap; unset means the wording that existed before it was asked.
     device: str = ""
+    # This driver's own spread through each corner, for the same reason and by
+    # the same route as ``device``: it belongs to the session, not to the
+    # packet. Unlike ``device`` it changes which findings are offered, but only
+    # ever by removing them -- see ``opportunity_catalog``. Unset means the
+    # fixed bars, which is what every reader without a session sees.
+    scatter: CornerScatter | None = None
+    # What this driver has already been told on the other laps of this run, so
+    # the same instruction does not arrive on every screen. Set by
+    # ``run_audited_coaching`` like the two above; it reaches the model through
+    # the prompt, and the prompt is stored verbatim in the audit record, so a
+    # report generated against it stays re-derivable from what was kept.
+    prior_advice: tuple[str, ...] = ()
 
     @abstractmethod
     def generate(

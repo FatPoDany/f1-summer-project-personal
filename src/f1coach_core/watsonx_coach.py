@@ -119,10 +119,13 @@ class WatsonxCoach(CoachProvider):
         evidence_summary: dict,
         on_progress: Callable[[str], None] | None = None,
     ) -> CoachingReport:
-        text = self.stream_completion(build_coach_prompt(evidence_summary), on_progress)
+        text = self.stream_completion(
+            build_coach_prompt(evidence_summary, self.scatter, self.prior_advice), on_progress
+        )
         return report_from_llm_text(
             text,
             model=self.model_id,
             evidence_summary=evidence_summary,
             device=self.device,
+            scatter=self.scatter,
         )

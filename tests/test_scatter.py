@@ -24,11 +24,13 @@ from f1coach_core.adherence import (
     prescriptions,
     run_prescriptions,
 )
+from f1coach_core.coach import _opportunity_bar, opportunity_catalog
 from f1coach_core.debrief import DebriefPoint, review_points
 from f1coach_core.features import (
     NOTABLE_BRAKE_POINT_M,
     NOTABLE_MIN_SPEED_KMH,
     NOTABLE_THRESHOLDS,
+    build_evidence_summary,
     corner_patterns,
     corner_scatter,
     detect_corners,
@@ -298,3 +300,54 @@ def test_a_lap_too_short_to_share_a_grid_does_not_take_the_spread_with_it(
     assert corner_scatter(laps, session.best_lap) == corner_scatter(
         list(session.laps), session.best_lap
     )
+
+
+# -- the cards, which used to read a different bar ----------------------------
+
+
+@pytest.mark.parametrize(
+    ("metric", "fact_key"),
+    [
+        ("brake_point", "brake_point_m"),
+        ("min_speed", "min_speed_kmh"),
+        ("throttle_reapply", "throttle_reapply_m"),
+        ("coast_distance", "coast_distance_m"),
+    ],
+)
+def test_a_card_asks_for_the_same_difference_the_debrief_asks_for(metric, fact_key):
+    """One bar per channel, not one for the sentence and another for the card.
+
+    The card used to ask 15 m of late throttle where the debrief asked 10, and
+    10 m of coasting where the debrief asked 15: the same drive was notable on
+    one screen and unremarkable on the next.
+    """
+    assert _opportunity_bar(metric, "T1", None) == NOTABLE_THRESHOLDS[fact_key]
+
+
+def test_no_card_is_offered_for_a_difference_inside_the_driver_s_wandering(session):
+    comparison = build_evidence_summary(session.laps[0], session.laps[4])
+    spread = corner_scatter(list(session.laps), session.laps[0])
+    assert spread, "the sample session should have a measurable spread"
+
+    fixed = set(opportunity_catalog(comparison))
+    against_the_driver = set(opportunity_catalog(comparison, spread))
+
+    assert against_the_driver < fixed
+    # The channel gated below this driver's own noise is the one that goes,
+    # which is the whole finding of the measurement in `notable_bar`.
+    assert {metric for _corner, metric in fixed - against_the_driver} == {"min_speed"}
+
+
+def test_a_card_chosen_against_the_spread_still_stands_without_it(session):
+    """Why the spread is a parameter and never a field of the evidence packet.
+
+    The bar can only rise, so the catalog measured against a driver is a subset
+    of the fixed one. Every reader of a stored report is a reader without the
+    session, and this is what lets one still accept it -- while the packet it
+    is matched on has not changed a byte.
+    """
+    comparison = build_evidence_summary(session.laps[0], session.laps[4])
+    spread = corner_scatter(list(session.laps), session.laps[0])
+    fixed = opportunity_catalog(comparison)
+    for citation, item in opportunity_catalog(comparison, spread).items():
+        assert fixed[citation] == item

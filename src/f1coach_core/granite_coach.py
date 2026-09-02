@@ -104,14 +104,16 @@ class GraniteCoach(CoachProvider):
         evidence_summary: dict,
         on_progress: Callable[[str], None] | None = None,
     ) -> CoachingReport:
-        prompt = build_coach_prompt(evidence_summary)
+        prompt = build_coach_prompt(evidence_summary, self.scatter, self.prior_advice)
         payload = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.0,
             "max_tokens": MAX_TOKENS,
             "stream": True,
-            "response_format": build_coach_response_format(evidence_summary),
+            "response_format": build_coach_response_format(
+                evidence_summary, self.scatter
+            ),
         }
         headers = {"Content-Type": "application/json"}
         if self.api_key:
@@ -146,6 +148,7 @@ class GraniteCoach(CoachProvider):
             model=served_model,
             evidence_summary=evidence_summary,
             device=self.device,
+            scatter=self.scatter,
         )
 
     def _request(

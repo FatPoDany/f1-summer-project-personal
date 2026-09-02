@@ -1,6 +1,7 @@
 """Evidence-grounded prompt, JSON Schema, extraction, and response validation."""
 
 import json
+from collections.abc import Sequence
 
 from f1coach_core.coach import (
     EVIDENCE_METRICS,
@@ -12,9 +13,10 @@ from f1coach_core.coach import (
     coaching_report_from_dict,
     opportunity_catalog,
 )
+from f1coach_core.features import CornerScatter
 from f1coach_core.guidance import guidance_for
 
-PROMPT_VERSION = "coach-v4"
+PROMPT_VERSION = "coach-v5"
 
 _METRIC_HELP = {
     "brake_point": "first rising crossing of 20% brake on the approach",
@@ -51,6 +53,14 @@ corner zones that crossed a deterministic technique review threshold. In this
 mode, the `ref` field is that code-stamped review threshold, not another lap
 and not an optimal target. Do not claim a lap-time loss or improvement."""
 
+_ALREADY_SAID = """
+You have already told this driver the following, earlier in this same run:
+{advice}
+
+Do not repeat advice they have had. If the corner you would name is one of
+those, either say what is different about it this time or choose another.
+"""
+
 _INSTRUCTIONS = """\
 You are IBM Granite 4.1 acting as a racing driver coach. Use ONLY the
 deterministic telemetry evidence below.
@@ -71,7 +81,7 @@ Metric definitions:
 
 Evidence packet:
 {summary}
-
+{already_said}
 Return ONLY a JSON object, without markdown, with this shape:
 
 {{"findings": [
@@ -114,8 +124,15 @@ def _prompt_summary(evidence_summary: dict) -> dict:
     }
 
 
-def build_coach_prompt(evidence_summary: dict) -> str:
-    metrics = {name: _METRIC_HELP[name] for _, name in opportunity_catalog(evidence_summary)}
+def build_coach_prompt(
+    evidence_summary: dict,
+    scatter: CornerScatter | None = None,
+    prior_advice: Sequence[str] = (),
+) -> str:
+    metrics = {
+        name: _METRIC_HELP[name]
+        for _, name in opportunity_catalog(evidence_summary, scatter)
+    }
     context = {
         "single_lap": _SINGLE_LAP_CONTEXT,
         "composite": _COMPOSITE_CONTEXT,
@@ -124,6 +141,13 @@ def build_coach_prompt(evidence_summary: dict) -> str:
         context=context,
         metric_help=json.dumps(metrics, indent=2),
         summary=json.dumps(_prompt_summary(evidence_summary), indent=2),
+        already_said=(
+            _ALREADY_SAID.format(
+                advice="\n".join(f"- {line}" for line in prior_advice)
+            )
+            if prior_advice
+            else ""
+        ),
     )
 
 
@@ -140,9 +164,11 @@ def _citation_schema(citation: dict) -> dict:
     }
 
 
-def build_coach_response_format(evidence_summary: dict) -> dict:
+def build_coach_response_format(
+    evidence_summary: dict, scatter: CornerScatter | None = None
+) -> dict:
     """Strict OpenAI-compatible JSON Schema with only real citations allowed."""
-    citations = list(opportunity_catalog(evidence_summary).values())
+    citations = list(opportunity_catalog(evidence_summary, scatter).values())
     citation_items = (
         {"oneOf": [_citation_schema(citation) for citation in citations]}
         if citations
@@ -238,6 +264,7 @@ def report_from_llm_text(
     evidence_summary: dict | None = None,
     *,
     device: str = "",
+    scatter: CornerScatter | None = None,
 ) -> CoachingReport:
     """Parse model output, stamp provenance, and publish only grounded findings.
 
@@ -246,6 +273,16 @@ def report_from_llm_text(
     are merged, and an invalid finding is isolated so it cannot suppress valid
     siblings. Every finding that survives still passes the complete strict
     contract and exact evidence check.
+
+    The templates run before the check and not as a fallback behind it, so no
+    sentence a participant reads is the model's. Letting the model keep words
+    that passed the contract was tried and measured against the real weights:
+    across five laps its prose reached a card zero times out of eight, and the
+    one finding that would have gone up verbatim had the sign backwards --
+    1775 m of brake point against a 1795 m reference is braking earlier, it
+    called that later, and it advised braking earlier still. A contract that
+    checks whether a number is cited does not check whether the sentence around
+    it is true. See docs/AI_FEEDBACK_IMPROVEMENTS.md 15.6.
     """
     data = extract_json_object(text)
     findings = data.get("findings")
@@ -256,6 +293,7 @@ def report_from_llm_text(
             {"findings": findings, "model": model, "prompt_version": PROMPT_VERSION},
             evidence_summary,
             opportunities_only=True,
+            scatter=scatter,
         )
 
     accepted: list[dict] = []
@@ -274,6 +312,7 @@ def report_from_llm_text(
                 },
                 evidence_summary,
                 opportunities_only=True,
+                scatter=scatter,
             )
         except CoachingSchemaError as exc:
             if first_rejection is None:
@@ -306,6 +345,7 @@ def report_from_llm_text(
         {"findings": accepted, "model": model, "prompt_version": PROMPT_VERSION},
         evidence_summary,
         opportunities_only=True,
+        scatter=scatter,
     )
 
 
