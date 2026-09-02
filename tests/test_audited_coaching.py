@@ -1,6 +1,7 @@
 """One trusted coaching attempt, shared by interactive and queued callers."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -135,3 +136,44 @@ def test_what_the_driver_was_told_is_capped_for_a_small_model_s_context():
         )
 
     assert len(prior_advice(session.laps[-1])) <= PRIOR_ADVICE_LIMIT
+
+
+def test_two_records_written_in_the_same_second_come_back_newest_first():
+    """"-2.json" sorts before ".json", so a plain sort returns the older one.
+
+    `_unique_dest` resolves a collision by appending "-2", and "-" is 0x2D
+    against "."'s 0x2E. Every "newest wins" scan in this module was built on a
+    plain sort, which is the one thing those scans exist to get right. Records
+    written now carry microseconds and barely collide; the ones already in the
+    workspace do -- 20260828-105513-mock.json sits beside its "-2".
+    """
+    from f1coach_core.audit import audit_order
+
+    names = [
+        "20260828-105513-mock.json",
+        "20260828-105513-mock-2.json",
+        "20260828-105513-mock-10.json",
+        "20260902-152541-000001-granite.json",
+        "20260902-152541-662822-granite.json",
+    ]
+
+    ordered = [Path(n).stem for n in sorted(names, key=audit_order)]
+
+    assert ordered == [
+        "20260828-105513-mock",
+        "20260828-105513-mock-2",
+        "20260828-105513-mock-10",  # 10 after 2, not between 1 and 2
+        "20260902-152541-000001-granite",
+        "20260902-152541-662822-granite",
+    ]
+
+
+def test_a_filename_that_is_not_ours_sorts_oldest_rather_than_raising():
+    """These folders are read to decide what to show somebody mid-session."""
+    from f1coach_core.audit import audit_order
+
+    names = ["20260828-105513-mock.json", "notes.json", "README.json"]
+
+    assert [Path(n).stem for n in sorted(names, key=audit_order)][-1] == (
+        "20260828-105513-mock"
+    )

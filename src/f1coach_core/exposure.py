@@ -33,12 +33,20 @@ from f1coach_core.workspace import SAMPLE_SESSION_NAME, is_arrived, workspace_ro
 SCHEMA_VERSION = "apex-exposure-v1"
 EXPOSURE_DIR_NAME = "exposure"
 
-# The two things a participant can be looking at. A corner is the review window
-# open on one stretch; a report is the coach's findings on the analysis screen.
+# The three things a participant can be looking at. A corner is the review
+# window open on one stretch; a report is the coach's findings on the analysis
+# screen; a debrief is the whole run they were sent away to read between drives.
 # Kept apart because they are different doses: somebody who read the panel and
 # never opened a corner is a real case, and pooling the two would hide it.
+#
+# The debrief is the one the study's design actually rests on. Participants
+# drive, read this, and drive again; nothing is shown to them between one lap
+# and the next. It went unrecorded until now, which meant the coached arm's
+# dose-response argument was built on time in front of the two screens that are
+# NOT the intervention, and read zero for the one that is.
 CORNER_VIEW = "corner"
 REPORT_VIEW = "report"
+DEBRIEF_VIEW = "debrief"
 
 # A view shorter than this is somebody arrowing down the corner list, not
 # somebody reading it. Counting keystrokes as attention would inflate exactly
@@ -77,9 +85,13 @@ class ReviewView:
 
     driver: str
     phase: str  # the phase of the lap looked at, not the one being driven next
-    kind: str  # CORNER_VIEW or REPORT_VIEW
+    kind: str  # CORNER_VIEW, REPORT_VIEW or DEBRIEF_VIEW
     seconds: float
-    lap: str = ""  # the lap file it was about
+    # The lap file it was about. For a debrief, which is about a whole session,
+    # this is the lap the rest of the run was measured against -- the one file
+    # that names what the reading was anchored to, and enough to find the
+    # session it belongs to.
+    lap: str = ""
     corner: str = ""  # empty for a report view
     advice: bool = False  # a validated AI instruction was on screen with it
     findings: int | None = None  # report views: how many were on screen
@@ -413,6 +425,13 @@ class PhaseExposure:
     review_corners_seen: int  # distinct corners, so breadth is not depth
     advice_seconds: float
     report_seconds: float
+    # The whole-session debrief: what a coached participant was sent away to
+    # read between their two runs. `debrief_coached_seconds` is the part of it
+    # with written coaching on screen -- the measured debrief is complete
+    # without a model, and a laptop that could not run one still shows the
+    # numbers, so time on it is exposure to the measurements and not to advice.
+    debrief_seconds: float = 0.0
+    debrief_coached_seconds: float = 0.0
 
 
 def phase_exposure(views: list[ReviewView], phase: str) -> PhaseExposure:
@@ -426,21 +445,30 @@ def phase_exposure(views: list[ReviewView], phase: str) -> PhaseExposure:
     """
     corners = [v for v in views if v.phase == phase and v.kind == CORNER_VIEW]
     reports = [v for v in views if v.phase == phase and v.kind == REPORT_VIEW]
+    debriefs = [v for v in views if v.phase == phase and v.kind == DEBRIEF_VIEW]
     return PhaseExposure(
         review_seconds=round(sum(v.seconds for v in corners), 1),
         review_corners=len(corners),
         review_corners_seen=len({v.corner for v in corners if v.corner}),
         advice_seconds=round(sum(v.seconds for v in corners if v.advice), 1),
         report_seconds=round(sum(v.seconds for v in reports), 1),
+        debrief_seconds=round(sum(v.seconds for v in debriefs), 1),
+        debrief_coached_seconds=round(
+            sum(v.seconds for v in debriefs if v.advice), 1
+        ),
     )
 
 
+# Appended to rather than reordered: an analyst holding an export from an
+# earlier build should find the columns they already know in the same places.
 EXPOSURE_COLUMNS = (
     "review_seconds",
     "review_corners",
     "review_corners_seen",
     "advice_seconds",
     "report_seconds",
+    "debrief_seconds",
+    "debrief_coached_seconds",
 )
 
 
@@ -463,4 +491,6 @@ def exposure_columns(views: list[ReviewView] | None, *, phase: str) -> dict:
         "review_corners_seen": found.review_corners_seen,
         "advice_seconds": found.advice_seconds,
         "report_seconds": found.report_seconds,
+        "debrief_seconds": found.debrief_seconds,
+        "debrief_coached_seconds": found.debrief_coached_seconds,
     }

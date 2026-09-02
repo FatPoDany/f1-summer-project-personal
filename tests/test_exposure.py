@@ -7,6 +7,7 @@ import pytest
 from f1coach_core.build import app_build
 from f1coach_core.exposure import (
     CORNER_VIEW,
+    DEBRIEF_VIEW,
     REPORT_VIEW,
     ExposureLog,
     ReviewView,
@@ -438,3 +439,60 @@ def test_counting_the_banner_does_not_change_what_advice_seconds_means():
 
     assert summary.advice_seconds == 30.0
     assert summary.report_seconds == 90.0
+
+
+def test_reading_the_whole_session_debrief_is_its_own_dose():
+    """The intervention is the debrief, and it used to be counted as nothing.
+
+    Kept apart from the report and the corner rather than pooled with them:
+    those two are the analysis screens, reachable at any time and driven by
+    curiosity, while the debrief is the thing a coached participant is sent
+    away to read between their two runs. Summing them would let time spent
+    exploring Lap Analysis stand in for the dose the study is about.
+    """
+    views = [
+        ReviewView(driver="A001", phase="baseline", kind=DEBRIEF_VIEW, seconds=180.0,
+                   advice=True),
+        ReviewView(driver="A001", phase="baseline", kind=DEBRIEF_VIEW, seconds=40.0,
+                   advice=False),
+        ReviewView(driver="A001", phase="baseline", kind=REPORT_VIEW, seconds=12.0),
+        ReviewView(driver="A001", phase="coached", kind=DEBRIEF_VIEW, seconds=99.0,
+                   advice=True),
+    ]
+
+    found = phase_exposure(views, "baseline")
+
+    assert found.debrief_seconds == 220.0
+    # Only the part with the model's prose on screen. The measured debrief is
+    # complete without a model, so a laptop that could not run one still shows
+    # every number, and time on that is exposure to measurements, not advice.
+    assert found.debrief_coached_seconds == 180.0
+    assert found.report_seconds == 12.0
+
+
+def test_the_debrief_columns_reach_the_export():
+    columns = exposure_columns(
+        [ReviewView(driver="A001", phase="baseline", kind=DEBRIEF_VIEW,
+                    seconds=61.0, advice=True)],
+        phase="baseline",
+    )
+
+    assert columns["debrief_seconds"] == 61.0
+    assert columns["debrief_coached_seconds"] == 61.0
+    # Blank rather than zero when no log reached this workspace at all, the same
+    # distinction the other five columns carry.
+    assert exposure_columns(None, phase="baseline")["debrief_seconds"] == ""
+
+
+def test_the_new_columns_were_appended_rather_than_woven_in():
+    """An export from an earlier build must still read column for column."""
+    from f1coach_core.exposure import EXPOSURE_COLUMNS
+
+    assert EXPOSURE_COLUMNS[:5] == (
+        "review_seconds",
+        "review_corners",
+        "review_corners_seen",
+        "advice_seconds",
+        "report_seconds",
+    )
+    assert EXPOSURE_COLUMNS[5:] == ("debrief_seconds", "debrief_coached_seconds")

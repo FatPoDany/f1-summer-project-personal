@@ -14,6 +14,7 @@ was, and a lap file name does not say.
 """
 
 import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -33,6 +34,38 @@ from f1coach_core.reference import CompositeReference, evidence_for, reference_n
 from f1coach_core.workspace import _unique_dest, sessions_root, workspace_root
 
 AUDIT_DIR_NAME = "coaching"
+
+# <date>-<time>[-<microseconds>]-<provider>[-<collision counter>]
+_AUDIT_NAME = re.compile(
+    r"^(?P<stamp>\d{8}-\d{6}(?:-\d{6})?)-(?P<provider>.+?)(?:-(?P<counter>\d+))?$"
+)
+
+
+def audit_order(path: str | Path) -> tuple[str, int, str]:
+    """Chronological sort key for a record filename, collisions included.
+
+    Timestamped names were meant to make lexical order chronological, and for
+    a single record per second they do. But `_unique_dest` resolves a collision
+    by appending "-2", and "-2.json" sorts BEFORE ".json" -- "-" is 0x2D and "."
+    is 0x2E. So two records written in the same second come back in the wrong
+    order, and every "newest wins" scan built on a plain sort returns the older
+    one. That is the single thing those scans exist to get right, and the
+    workspace has real pairs in it: `20260828-105513-mock.json` sits beside
+    `20260828-105513-mock-2.json`.
+
+    Records written from now on carry microseconds and will essentially never
+    collide, but the counter still has to be read, because the ones already on
+    disk do not have microseconds and some of them do collide.
+
+    A name that is not one of ours sorts oldest rather than raising: these
+    directories are read to decide what to show a participant, and a stray file
+    should cost nothing.
+    """
+    stem = Path(path).stem
+    match = _AUDIT_NAME.match(stem)
+    if match is None:
+        return ("", 0, stem)
+    return (match["stamp"], int(match["counter"] or 1), stem)
 
 
 @dataclass(frozen=True)
@@ -239,7 +272,9 @@ def write_coaching_audit(
     }
     directory = coaching_audit_dir(lap_source)
     directory.mkdir(parents=True, exist_ok=True)
-    dest = _unique_dest(directory, f"{now:%Y%m%d-%H%M%S}-{provider}.json")
+    # Microseconds, so `audit_order` almost never has to fall back on the
+    # collision counter and a plain listing reads chronologically too.
+    dest = _unique_dest(directory, f"{now:%Y%m%d-%H%M%S-%f}-{provider}.json")
     dest.write_text(json.dumps(record, indent=2), encoding="utf-8")
     return dest
 
@@ -262,7 +297,7 @@ def latest_coaching_report(
         return None
     summary = evidence_for(lap, reference)
     against = reference_name(reference)
-    for path in sorted(directory.glob("*.json"), reverse=True):
+    for path in sorted(directory.glob("*.json"), key=audit_order, reverse=True):
         try:
             record = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError):
@@ -327,7 +362,7 @@ def latest_coaching_outcomes(session_path: str | Path) -> dict[tuple[str, str | 
     if not directory.is_dir():
         return {}
     outcomes: dict[tuple[str, str | None], int] = {}
-    for path in sorted(directory.glob("*.json")):
+    for path in sorted(directory.glob("*.json"), key=audit_order):
         try:
             record = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):

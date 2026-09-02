@@ -370,6 +370,9 @@ class MainWindow(QMainWindow):
         # would keep that resident after the window is gone.
         self._coaching_queue.shutdown()
         self._analysis.coach_shutdown()
+        # The debrief is the intervention, so the reading in progress when they
+        # close Apex is the one most worth not losing.
+        self._debrief.shutdown()
         super().closeEvent(event)
 
     def _pick_file(self) -> None:

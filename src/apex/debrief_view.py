@@ -39,6 +39,7 @@ from apex.coach_ready import (
     model_name,
 )
 from f1coach_core import Lap, Session
+from f1coach_core.exposure import DEBRIEF_VIEW, ExposureLog
 from racecoach.granite.debrief_store import (
     StoredDebrief,
     latest_debrief,
@@ -182,6 +183,13 @@ class SessionDebriefView(QWidget):
         self._report: SessionReport | None = None
         self._task: _DebriefTask | None = None
         self._stored: StoredDebrief | None = None
+        # What a coached participant was sent away to read, and for how long.
+        # This screen is the study's intervention and it recorded nothing until
+        # now: the dose-response argument was built on time in front of Lap
+        # Analysis and the corner replay, which are the two screens that are not
+        # the intervention, and read zero for the one that is.
+        self._exposure = ExposureLog()
+        self._on_screen = False
         self._build_ui()
         self._refresh_buttons()
 
@@ -273,6 +281,8 @@ class SessionDebriefView(QWidget):
             and (self._report is not None or self._task is not None)
         ):
             return
+        # A different session is a different reading, and this one is over.
+        self._exposure.closed()
         if self._task is not None:
             # It may not have started yet, and a session nobody is looking at
             # any more must not sit in front of the one they are: the pool runs
@@ -455,6 +465,14 @@ class SessionDebriefView(QWidget):
 
     def _render(self, report: SessionReport) -> None:
         self._report = report
+        self._start_reading()
+        if any(item.narrated is not None for item in report.laps):
+            # Prose landing while they are already reading still counts as
+            # advice having been on screen. Narration arrives lap by lap and
+            # minutes after the numbers, so requiring it to be there first would
+            # record a participant sitting in front of coaching as having been
+            # shown none.
+            self._exposure.advice_arrived(report.findings)
         self._clear_cards()
         name = self._session.name if self._session is not None else ""
         identity = identity_line(report)
@@ -466,6 +484,66 @@ class SessionDebriefView(QWidget):
                 self._cards.addWidget(_LapCard(lap_report))
         self._cards.addStretch(1)
         self._refresh_buttons()
+
+    # -- exposure ------------------------------------------------------------
+
+    def _start_reading(self) -> None:
+        """Begin timing this debrief, if it is in front of somebody.
+
+        Only while it is on screen. Every session that lands now has its debrief
+        produced in the background, and a dose is what a participant had in
+        front of them -- not what their laptop worked out while they were
+        somewhere else. ``ExposureLog`` itself declines to record a session that
+        arrived from another machine or the bundled sample, so a researcher
+        reading a participant's debrief here is doing analysis rather than
+        taking a dose of it.
+
+        Idempotent: the report is re-rendered for every lap the model speaks
+        for, and re-opening on each would chop one reading into a handful of
+        short ones and lose them all to ``MIN_VIEW_SECONDS``.
+        """
+        report = self._report
+        if report is None or not report.laps or report.reference is None:
+            return
+        if not self._on_screen or self._exposure.open_view is not None:
+            return
+        identity = report.laps[0].lap.identity
+        self._exposure.opened(
+            driver=identity.driver,
+            phase=identity.phase,
+            kind=DEBRIEF_VIEW,
+            # The lap the rest of the run was measured against: a debrief is
+            # about a session, and this is the one file that names what the
+            # reading was anchored to and which folder it came from.
+            lap_source=report.reference.source,
+            advice=any(item.narrated is not None for item in report.laps),
+            findings=report.findings,
+        )
+
+    def showEvent(self, event) -> None:
+        self._on_screen = True
+        self._start_reading()
+        self._exposure.resumed()
+        super().showEvent(event)
+
+    def hideEvent(self, event) -> None:
+        """Another screen is in front; hold the reading rather than end it.
+
+        Paused, not closed: stepping out to the Garage and coming straight back
+        is the same reading, and splitting it in two would make the dose look
+        like engagement it was not.
+        """
+        self._on_screen = False
+        self._exposure.paused()
+        super().hideEvent(event)
+
+    def shutdown(self) -> None:
+        """File the reading before the app goes.
+
+        A reading that was never closed is a reading that never happened, and
+        closing Apex is how a participant usually finishes with this screen.
+        """
+        self._exposure.closed()
 
     # -- saving --------------------------------------------------------------
 

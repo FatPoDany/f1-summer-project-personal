@@ -16,11 +16,14 @@ from apex.debrief_view import (
 )
 from apex.main_window import MainWindow
 from f1coach_core import load_session
+from f1coach_core.exposure import DEBRIEF_VIEW, ExposureLog
+from f1coach_core.workspace import ARRIVED_NAME
 from racecoach.granite import report as gr
 from racecoach.granite.debrief_store import latest_debrief
 from racecoach.granite.host import Capability
 from racecoach.granite.narrate import NarratedDebrief, NarratedPoint
 from racecoach.granite.server import ServerError
+from test_exposure import FakeClock
 from test_granite_report import write_lap
 
 
@@ -583,6 +586,157 @@ def test_going_to_another_session_and_back_does_not_pay_for_the_first_twice(
     assert len(asked) == before  # the model was not asked a second time
     assert "You braked before you needed to." in screen_text(window._debrief)
     assert not window._debrief._coach_button.isEnabled()
+
+
+def timed(view: SessionDebriefView):
+    """Drive the reading clock instead of waiting on it, and keep the views."""
+    clock = FakeClock()
+    written = []
+    view._exposure = ExposureLog(clock=clock, sink=written.append)
+    return clock, written
+
+
+def test_time_spent_reading_the_debrief_is_recorded_as_a_dose(
+    qtbot, session, monkeypatch
+):
+    """This screen is the intervention and it used to record nothing at all."""
+    unavailable(monkeypatch)
+    view = SessionDebriefView()
+    qtbot.addWidget(view)
+    clock, written = timed(view)
+    view.show()
+    qtbot.waitExposed(view)
+    open_on(view, session)
+
+    clock.tick(240.0)
+    view.shutdown()
+
+    assert len(written) == 1
+    read = written[0]
+    assert read.kind == DEBRIEF_VIEW
+    assert read.driver == "A001"
+    assert read.phase == "baseline"
+    assert read.seconds == 240.0
+    assert read.findings == view.report.findings
+    # No model on this laptop, so the measurements were the whole of it.
+    assert read.advice is False
+    # The lap the rest of the run was measured against, which also says which
+    # session the reading came from.
+    assert read.lap == view.report.reference.source.name
+
+
+def test_a_debrief_produced_in_the_background_is_nobody_s_dose(
+    qtbot, session, monkeypatch
+):
+    """Every session that lands is debriefed now, whether anybody looks or not.
+
+    A dose is what a participant had in front of them. Counting work their
+    laptop did while they were on another screen would inflate the one number
+    the dose-response argument rests on.
+    """
+    unavailable(monkeypatch)
+    view = SessionDebriefView()
+    qtbot.addWidget(view)
+    clock, written = timed(view)
+    open_on(view, session)  # never shown
+
+    clock.tick(600.0)
+    view.shutdown()
+
+    assert view.report is not None  # it was produced
+    assert written == []  # and nobody read it
+
+
+def test_written_coaching_that_lands_mid_reading_still_counts_as_advice(
+    qtbot, session, monkeypatch
+):
+    """Narration arrives lap by lap, minutes after the numbers do."""
+    ready(monkeypatch)
+    monkeypatch.setattr(gr, "narrate_debrief", _narrator)
+    view = SessionDebriefView(server=FakeServer())
+    qtbot.addWidget(view)
+    clock, written = timed(view)
+    view.show()
+    qtbot.waitExposed(view)
+    open_on(view, session)
+
+    clock.tick(90.0)
+    view.shutdown()
+
+    assert len(written) == 1
+    assert written[0].advice is True
+
+
+def test_stepping_out_to_the_garage_holds_the_reading_rather_than_ending_it(
+    qtbot, session, monkeypatch
+):
+    """Two short views instead of one long one would read as engagement."""
+    unavailable(monkeypatch)
+    view = SessionDebriefView()
+    qtbot.addWidget(view)
+    clock, written = timed(view)
+    view.show()
+    qtbot.waitExposed(view)
+    open_on(view, session)
+
+    clock.tick(100.0)
+    view.hide()
+    clock.tick(3600.0)  # a long time on some other screen
+    view.show()
+    qtbot.waitExposed(view)
+    clock.tick(50.0)
+    view.shutdown()
+
+    assert len(written) == 1
+    assert written[0].seconds == 150.0
+
+
+def test_moving_to_another_session_ends_the_reading_of_the_first(
+    qtbot, tmp_path, session, monkeypatch
+):
+    unavailable(monkeypatch)
+    other = tmp_path / "second"
+    write_lap(other, 1, speed_scale=0.9, brake_shift_m=-40.0)
+    write_lap(other, 2)
+
+    view = SessionDebriefView()
+    qtbot.addWidget(view)
+    clock, written = timed(view)
+    view.show()
+    qtbot.waitExposed(view)
+    open_on(view, session)
+    clock.tick(120.0)
+
+    view.set_session(load_session(other))
+    clock.tick(30.0)
+    view.shutdown()
+
+    assert [round(v.seconds) for v in written] == [120, 30]
+
+
+def test_a_session_that_arrived_from_another_machine_is_not_a_dose(
+    qtbot, session, monkeypatch
+):
+    """On the researcher's workspace, reading a debrief is analysis.
+
+    Every session there is imported study data, and recording the researcher's
+    reading against the participant measures the wrong person -- on the machine
+    the dose is finally exported from.
+    """
+    unavailable(monkeypatch)
+    (session.path / ARRIVED_NAME).write_text("{}", encoding="utf-8")
+    view = SessionDebriefView()
+    qtbot.addWidget(view)
+    clock, written = timed(view)
+    view.show()
+    qtbot.waitExposed(view)
+    open_on(view, session)
+
+    clock.tick(300.0)
+    view.shutdown()
+
+    assert view.report is not None
+    assert written == []
 
 
 def test_the_debrief_shares_the_one_model_server_and_the_one_worker(qtbot, monkeypatch):

@@ -33,6 +33,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
+from f1coach_core.audit import audit_order
 from f1coach_core.build import app_build
 from f1coach_core.debrief import DebriefPoint
 from f1coach_core.workspace import _unique_dest, is_arrived
@@ -226,15 +227,16 @@ def restore_narration(report: SessionReport, stored: StoredDebrief) -> SessionRe
 def latest_debrief(session_dir: str | Path) -> StoredDebrief | None:
     """The newest readable debrief record for this session, or None.
 
-    Timestamped names make lexical order chronological. Unreadable records are
-    skipped rather than fatal: these files are read back on a participant's
-    machine to decide whether to spend minutes of their CPU, and a corrupt one
-    should cost them a rerun, not the screen.
+    Ordered by ``audit_order``, the same rule the coaching trail uses, so the
+    two stores cannot disagree about which of two records is later. Unreadable
+    records are skipped rather than fatal: these files are read back on a
+    participant's machine to decide whether to spend minutes of their CPU, and a
+    corrupt one should cost them a rerun, not the screen.
     """
     directory = debrief_dir(session_dir)
     if not directory.is_dir():
         return None
-    for path in sorted(directory.glob("*.json"), reverse=True):
+    for path in sorted(directory.glob("*.json"), key=audit_order, reverse=True):
         try:
             record = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError):
