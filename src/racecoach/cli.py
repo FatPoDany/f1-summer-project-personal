@@ -5,7 +5,7 @@
     racecoach analyze <run_id>     rule-based metrics -> runs/<id>/metrics.json
     racecoach bob-analyze [files]  IBM Bob Shell code analysis -> docs/bob/exports/
     racecoach run                  drive through the TORCS Granite/SCR bridge
-    racecoach capture-human        record a human TORCS session without controlling it
+    racecoach capture-human        record a human session under the assigned setup
     racecoach recover-capture      register laps a crashed session left unregistered
     racecoach debrief <session>    coached debrief for a folder of canonical laps
     racecoach install-model <f>   adopt a Granite weights file you already have
@@ -118,6 +118,7 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="served Granite model alias (or GRANITE_MODEL)",
     )
+    from racecoach.telemetry.human_capture import study_presets
     from racecoach.telemetry.torcs_runtime import default_torcs_binary
 
     package_cmd = commands.add_parser(
@@ -275,6 +276,28 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=default_torcs_binary(),
         help="patched TORCS executable produced by build.sh install",
+    )
+    # This command requires a participant id and a phase, so every use of it is
+    # a study session, and it used to launch TORCS with no assignment at all --
+    # stock 640x480, whatever race was configured last, and a blank setup in the
+    # manifest. The desktop app has always launched the assignment. The two now
+    # agree, and driving unassigned has to be asked for.
+    preset_ids = [preset.preset_id for preset in study_presets(default_torcs_binary())]
+    human_assignment = human_cmd.add_mutually_exclusive_group()
+    human_assignment.add_argument(
+        "--preset",
+        choices=preset_ids,
+        default=preset_ids[0],
+        help="the assigned setup to launch (default: %(default)s)",
+    )
+    human_assignment.add_argument(
+        "--no-preset",
+        dest="preset",
+        action="store_const",
+        const=None,
+        help="launch TORCS unassigned and leave the race to the facilitator; "
+        "needed for a recovery session that passes its own -r/-R, and the laps "
+        "then export with a blank setup column",
     )
     human_cmd.add_argument(
         "torcs_args",
@@ -731,11 +754,36 @@ def _dispatch(args: argparse.Namespace) -> int:
             print(f"Registered run {run_dir.name} -> {run_dir}")
         return 0
     if args.command == "capture-human":
-        from racecoach.telemetry.human_capture import HumanCaptureConfig, capture_human_runs
+        from racecoach.telemetry.human_capture import (
+            HumanCaptureConfig,
+            capture_human_runs,
+            study_preset_by_id,
+        )
 
         torcs_args = tuple(args.torcs_args)
         if torcs_args[:1] == ("--",):
             torcs_args = torcs_args[1:]
+        # Resolved against the binary that will actually run, not the default
+        # one: a preset names a race configuration that lives beside its own
+        # TORCS install.
+        preset = (
+            None if args.preset is None else study_preset_by_id(args.torcs, args.preset)
+        )
+        if preset is None:
+            print(
+                "racecoach: no assigned setup. The facilitator picks the race, and "
+                "these laps export with a blank setup column so they are not read "
+                "as an assigned run.",
+                file=sys.stderr,
+                flush=True,
+            )
+        else:
+            print(
+                f"Assigned setup {preset.preset_id}: {preset.track_id} · "
+                f"{preset.car_id} · {preset.laps} laps · "
+                f"{preset.window_width}x{preset.window_height}.",
+                flush=True,
+            )
         print(
             f"Launching TORCS human capture for {args.participant_id} / {args.phase}. "
             "Quit TORCS after the driving session to finalize the data.",
@@ -747,6 +795,7 @@ def _dispatch(args: argparse.Namespace) -> int:
                 phase=args.phase,
                 torcs_binary=args.torcs,
                 torcs_args=torcs_args,
+                preset=preset,
             )
         )
         print(f"Raw capture and manifest -> {result.capture_dir}")

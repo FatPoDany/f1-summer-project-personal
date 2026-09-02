@@ -1,5 +1,7 @@
 """Study metrics: what the comparison is judged on, and what it refuses to guess."""
 
+import csv
+import io
 from pathlib import Path
 
 import numpy as np
@@ -8,6 +10,7 @@ import pandas as pd
 from f1coach_core.lap import Lap, StudyIdentity
 from f1coach_core.participant import Background
 from f1coach_core.study import (
+    EXPOSURE_COLUMNS,
     MIN_EXCURSION_SAMPLES,
     lap_columns,
     lap_csv,
@@ -29,6 +32,7 @@ def make_lap(
     n: int = 100,
     source: str = "lap.csv",
     lap_number: int | None = None,
+    setup: str | None = "apex-study-v1",
 ) -> Lap:
     t = np.linspace(0.0, seconds, n)
     data = {
@@ -50,8 +54,12 @@ def make_lap(
         schema_version=1,
         dist_derived=False,
         lap_number=lap_number,
-        identity=StudyIdentity(driver=driver, phase=phase, setup="apex-study-v1"),
+        identity=StudyIdentity(driver=driver, phase=phase, setup=setup),
     )
+
+
+def _first_row(text: str) -> dict:
+    return next(csv.DictReader(io.StringIO(text)))
 
 
 def test_a_lap_without_the_channel_reports_unavailable_not_zero():
@@ -166,10 +174,10 @@ def test_the_csv_is_one_row_per_participant_per_phase():
     text = summary_csv(summarise_all(laps))
     lines = text.strip().split("\n")
 
-    assert lines[0].startswith("driver,phase,laps,best_lap_s")
+    assert lines[0].startswith("driver,phase,setup,laps,best_lap_s")
     assert len(lines) == 3
-    assert lines[1].startswith("A001,baseline,1,18.0")
-    assert lines[2].startswith("A001,coached,1,16.0")
+    assert lines[1].startswith("A001,baseline,apex-study-v1,1,18.0")
+    assert lines[2].startswith("A001,coached,apex-study-v1,1,16.0")
 
 
 def test_a_single_lap_phase_has_no_spread_rather_than_an_error():
@@ -295,15 +303,53 @@ def test_the_dose_rides_on_the_row_of_the_phase_that_was_reviewed():
     assert cells[1]["review_seconds"] == "0"
 
 
+def test_the_row_says_which_assignment_produced_it():
+    """Two tracks are assignable, and lap times across them are not comparable.
+
+    Without this column a CG Speedway row and an aalborg row sit in the same
+    file, in the same units, with nothing to tell them apart.
+    """
+    laps = [make_lap(driver="A001", phase="baseline", setup="apex-study-speedway-v1")]
+
+    assert _first_row(summary_csv(summarise_all(laps)))["setup"] == "apex-study-speedway-v1"
+    assert _first_row(lap_csv(laps))["setup"] == "apex-study-speedway-v1"
+
+
+def test_a_session_driven_outside_the_presets_says_so_rather_than_passing():
+    """The CLI can be told to launch unassigned. That has to remain visible in
+    the export, because such a lap was driven under conditions nothing recorded."""
+    laps = [make_lap(driver="A001", phase="baseline", setup=None)]
+
+    assert _first_row(summary_csv(summarise_all(laps)))["setup"] == ""
+    assert _first_row(lap_csv(laps))["setup"] == ""
+
+
+def test_a_phase_that_mixes_two_assignments_is_shown_mixed_not_averaged():
+    """One row per participant per phase is a lie if the phase pooled two
+    tracks. The row still exists -- dropping it would hide the mistake -- but it
+    names both, so nobody reads its best lap as a time on either circuit."""
+    laps = [
+        make_lap(driver="A001", phase="baseline", seconds=126.0, setup="apex-study-v1"),
+        make_lap(
+            driver="A001", phase="baseline", seconds=43.0, setup="apex-study-speedway-v1"
+        ),
+    ]
+
+    row = _first_row(summary_csv(summarise_all(laps)))
+
+    assert row["setup"] == "apex-study-speedway-v1+apex-study-v1"
+    assert row["laps"] == "2"
+
+
 def test_a_participant_nobody_recorded_gets_blanks_not_zeros():
     """Zero is a claim about them; blank is a claim about the record."""
     summaries = [summarise("A001", "baseline", [make_lap(driver="A001")])]
 
-    unknown = summary_csv(summaries)
-    watched = summary_csv(summaries, exposure={"A001": []})
+    unknown = _first_row(summary_csv(summaries))
+    watched = _first_row(summary_csv(summaries, exposure={"A001": []}))
 
-    assert unknown.strip().splitlines()[1].split(",")[9:14] == [""] * 5
-    assert watched.strip().splitlines()[1].split(",")[9:14] == ["0", "0", "0", "0", "0"]
+    assert [unknown[name] for name in EXPOSURE_COLUMNS] == [""] * len(EXPOSURE_COLUMNS)
+    assert [watched[name] for name in EXPOSURE_COLUMNS] == ["0"] * len(EXPOSURE_COLUMNS)
 
 
 def test_every_view_gets_its_own_row_so_an_implausible_one_can_be_seen():

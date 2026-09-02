@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from racecoach.cli import main
 from racecoach.telemetry.human_capture import (
     HumanCaptureCancelled,
     HumanCaptureConfig,
@@ -925,3 +926,88 @@ def test_a_session_that_could_not_be_recorded_still_registers_its_laps(
     manifest = json.loads((result.capture_dir / "manifest.json").read_text("utf-8"))
     assert "No ffmpeg" in manifest["recording_error"]
     assert "recording" not in manifest
+
+
+def _cli_capture(monkeypatch, argv: list[str]):
+    """Run the CLI down to the config it would have handed the capture."""
+    observed = {}
+
+    def fake_capture(config, **_kwargs):
+        observed["config"] = config
+        return SimpleNamespace(capture_dir=Path("capture"), run_dirs=())
+
+    monkeypatch.setattr(
+        "racecoach.telemetry.human_capture.capture_human_runs", fake_capture
+    )
+    code = main(argv)
+    return code, observed.get("config")
+
+
+def test_the_cli_launches_the_assigned_setup_by_default(torcs_binary, monkeypatch):
+    """It requires a participant id and a phase, so every run of it is a study
+    session. It used to launch TORCS with no assignment at all."""
+    code, config = _cli_capture(
+        monkeypatch,
+        ["capture-human", "--participant-id", "P001", "--phase", "baseline",
+         "--torcs", str(torcs_binary)],
+    )
+
+    assert code == 0
+    assert config.preset is not None
+    assert config.preset.preset_id == default_study_preset(torcs_binary).preset_id
+
+
+def test_the_cli_can_be_given_the_other_track(torcs_binary, monkeypatch):
+    """The other half of the project is frozen on CG Speedway. A fallback
+    session that has to be comparable with it needs to reach that preset."""
+    code, config = _cli_capture(
+        monkeypatch,
+        ["capture-human", "--participant-id", "P001", "--phase", "baseline",
+         "--torcs", str(torcs_binary), "--preset", "apex-study-speedway-v1"],
+    )
+
+    assert code == 0
+    assert config.preset.preset_id == "apex-study-speedway-v1"
+    assert config.preset.track_id == "g-track-1"
+
+
+def test_the_cli_still_allows_an_unassigned_session_and_says_so(
+    torcs_binary, monkeypatch, capsys
+):
+    """Recovery sessions need it. It has to be asked for, and announced."""
+    code, config = _cli_capture(
+        monkeypatch,
+        ["capture-human", "--participant-id", "P001", "--phase", "baseline",
+         "--torcs", str(torcs_binary), "--no-preset"],
+    )
+
+    assert code == 0
+    assert config.preset is None
+    assert "no assigned setup" in capsys.readouterr().err
+
+
+def test_a_recovery_session_passing_its_own_race_is_told_which_flag_it_needs(
+    torcs_binary, monkeypatch, capsys
+):
+    """The documented recovery form passes -r. With an assignment in force that
+    is a contradiction, and the message has to name the way out."""
+    code, config = _cli_capture(
+        monkeypatch,
+        ["capture-human", "--participant-id", "P001", "--phase", "baseline",
+         "--torcs", str(torcs_binary), "--", "-r", "practice.xml"],
+    )
+
+    assert code == 2
+    assert config is None
+    assert "--no-preset" in capsys.readouterr().err
+
+
+def test_an_unknown_preset_is_refused_by_the_parser(torcs_binary, capsys):
+    """A preset this build does not have describes conditions it cannot
+    reproduce, so it fails before TORCS is launched rather than after."""
+    with pytest.raises(SystemExit) as stopped:
+        main(["capture-human", "--participant-id", "P001", "--phase", "baseline",
+              "--torcs", str(torcs_binary), "--preset", "apex-study-monaco"])
+
+    assert stopped.value.code == 2
+    assert "apex-study-monaco" in capsys.readouterr().err

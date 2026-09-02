@@ -63,6 +63,7 @@ class PhaseSummary:
 
     driver: str
     phase: str
+    setup: str  # the assigned preset id, blank when the laps carry none
     laps: int
     best_lap_s: float
     mean_lap_s: float
@@ -75,6 +76,7 @@ class PhaseSummary:
         return {
             "driver": self.driver,
             "phase": self.phase,
+            "setup": self.setup,
             "laps": self.laps,
             "best_lap_s": round(self.best_lap_s, 3),
             "mean_lap_s": round(self.mean_lap_s, 3),
@@ -90,6 +92,23 @@ class PhaseSummary:
 def _blank(value):
     """Missing stays missing. A blank cell is honest; a zero is a claim."""
     return "" if value is None else value
+
+
+def _setup_label(laps: list[Lap]) -> str:
+    """Which assigned setup these laps were driven under.
+
+    Blank when they carry none. That is what a session captured outside the
+    assigned presets looks like -- the CLI fallback allows one deliberately --
+    and a blank cell says so instead of letting it pass for an assigned run.
+
+    Joined with "+" when a group mixes two, because such a row pools conditions
+    that are not comparable. Two presets are offered now, and a best lap of
+    43.41 s on CG Speedway against 126.15 s on aalborg is a gap no coaching
+    could produce; averaging the two would read as an effect. A mixed row has to
+    be visible rather than quietly averaged, and there is no correct single
+    value to print for it.
+    """
+    return "+".join(sorted({lap.identity.setup for lap in laps if lap.identity.setup}))
 
 
 def lap_metrics(lap: Lap) -> LapMetrics:
@@ -168,6 +187,7 @@ def summarise(driver: str, phase: str, laps: list[Lap]) -> PhaseSummary | None:
     return PhaseSummary(
         driver=driver,
         phase=phase,
+        setup=_setup_label(laps),
         laps=len(laps),
         best_lap_s=min(times),
         mean_lap_s=mean(times),
@@ -199,6 +219,7 @@ class LapRow:
 
     driver: str
     phase: str
+    setup: str  # the assigned preset id, blank when the lap carries none
     lap: int  # order within the phase -- the axis a learning curve is drawn on
     race_lap: int | None  # what the simulator called it, kept as provenance
     lap_time_s: float
@@ -212,6 +233,7 @@ class LapRow:
         return {
             "driver": self.driver,
             "phase": self.phase,
+            "setup": self.setup,
             "lap": self.lap,
             "race_lap": _blank(self.race_lap),
             "lap_time_s": round(self.lap_time_s, 3),
@@ -253,6 +275,10 @@ def summarise_all(laps: list[Lap]) -> list[PhaseSummary]:
 PERFORMANCE_COLUMNS = (
     "driver",
     "phase",
+    # Which assignment produced the row. Without it two tracks pool into one
+    # column of lap times and nothing in the file says they were different
+    # races.
+    "setup",
     "laps",
     "best_lap_s",
     "mean_lap_s",
@@ -366,6 +392,7 @@ def lap_rows(laps: list[Lap]) -> list[LapRow]:
                 LapRow(
                     driver=driver,
                     phase=phase,
+                    setup=lap.identity.setup or "",
                     lap=index,
                     race_lap=lap.lap_number,
                     lap_time_s=metrics.lap_time_s,
@@ -382,6 +409,7 @@ def lap_rows(laps: list[Lap]) -> list[LapRow]:
 LAP_COLUMNS = (
     "driver",
     "phase",
+    "setup",
     "lap",
     "race_lap",
     "lap_time_s",

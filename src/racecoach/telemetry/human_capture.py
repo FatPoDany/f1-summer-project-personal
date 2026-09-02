@@ -215,7 +215,10 @@ class HumanCaptureConfig:
         if self.preset is not None and any(
             argument.startswith(("-r", "-R")) for argument in self.torcs_args
         ):
-            raise ValueError("a study preset cannot be combined with -r or -R arguments")
+            raise ValueError(
+                "a study preset cannot be combined with -r or -R arguments; "
+                "pass --no-preset to drive a race of your own"
+            )
 
 
 @dataclass(frozen=True)
