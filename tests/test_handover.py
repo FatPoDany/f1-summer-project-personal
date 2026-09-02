@@ -278,7 +278,9 @@ def test_collect_then_summarise_is_a_path_that_runs_end_to_end(driven, tmp_path,
     assert cli.main(["study-laps", "--out", str(laps)]) == 0
 
     rows = summary.read_text("utf-8").strip().splitlines()
-    assert len(rows) == 2 and rows[1].startswith("A001,baseline,3,")
+    # The assigned setup survives packaging, collection and export, so the
+    # analyst's file says which race produced the row.
+    assert len(rows) == 2 and rows[1].startswith("A001,baseline,apex-study-v1,3,")
     # The comparability columns travelled with the laps and are on the row.
     assert rows[1].endswith("weekly,3,,,,,,")
     assert len(laps.read_text("utf-8").strip().splitlines()) == 4
