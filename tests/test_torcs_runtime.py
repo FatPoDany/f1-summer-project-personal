@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from racecoach.telemetry import torcs_runtime
-from racecoach.telemetry.human_capture import default_study_preset
+from racecoach.telemetry.human_capture import default_study_preset, study_presets
 from racecoach.telemetry.synthetic_capture import default_robot_study_preset
 from racecoach.telemetry.torcs_runtime import (
     default_torcs_binary,
@@ -55,7 +55,11 @@ def test_windows_presets_resolve_beside_the_executable(windows_layout, tmp_path)
     binary = tmp_path / "torcs-runtime" / "wtorcs.exe"
     raceman = binary.parent.resolve() / "config" / "raceman"
 
-    assert default_study_preset(binary).race_config == raceman / "apexstudy.xml"
+    assert [preset.race_config for preset in study_presets(binary)] == [
+        raceman / name
+        for name in ("apexibmf1.xml", "apexstudy.xml", "apexstudyspeedway.xml")
+    ]
+    assert default_study_preset(binary).race_config.parent == raceman
     assert (
         default_robot_study_preset(binary).race_config == raceman / "apexrobotstudy.xml"
     )
@@ -67,7 +71,11 @@ def test_posix_presets_resolve_under_the_share_prefix(posix_layout, tmp_path):
         binary.parent.parent.resolve() / "share" / "games" / "torcs" / "config" / "raceman"
     )
 
-    assert default_study_preset(binary).race_config == raceman / "apexstudy.xml"
+    assert [preset.race_config for preset in study_presets(binary)] == [
+        raceman / name
+        for name in ("apexibmf1.xml", "apexstudy.xml", "apexstudyspeedway.xml")
+    ]
+    assert default_study_preset(binary).race_config.parent == raceman
     assert (
         default_robot_study_preset(binary).race_config == raceman / "apexrobotstudy.xml"
     )

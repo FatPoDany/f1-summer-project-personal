@@ -7,3 +7,10 @@
 
 # Verification and build scripts run under bash, which does not tolerate CRLF.
 *.sh text eol=lf
+
+# Files copied verbatim from the other half of this project, so that
+# tests/test_team_preset.py can compare against them without their repository
+# checked out. Their whole value is being byte-for-byte what upstream holds:
+# rewriting the line endings on checkout would break the blob hash recorded in
+# reference/README.md, which is the only way to prove the copy was not edited.
+integrations/torcs-1.3.9/reference/** -text

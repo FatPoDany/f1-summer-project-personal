@@ -282,11 +282,11 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # setup_win32_generic.bat copies a fixed list of stock race managers, so the
-# two Apex presets are installed here instead of patching that 1000-line file.
+# Apex presets are installed here instead of patching that 1000-line file.
 Write-Step 'Installing the Apex race-manager presets'
 $racemanDir = Join-Path $RuntimeDir 'config\raceman'
 New-Item -ItemType Directory -Force -Path $racemanDir | Out-Null
-foreach ($preset in @('apexstudy.xml', 'apexstudyspeedway.xml', 'apexrobotstudy.xml')) {
+foreach ($preset in @('apexibmf1.xml', 'apexstudy.xml', 'apexstudyspeedway.xml', 'apexrobotstudy.xml')) {
     $source = Join-Path $SourceDir "src\raceman\$preset"
     if (-not (Test-Path -LiteralPath $source)) { throw "Overlay preset missing: $source" }
     Copy-Item -LiteralPath $source -Destination (Join-Path $racemanDir $preset) -Force
@@ -300,10 +300,19 @@ foreach ($preset in @('apexstudy.xml', 'apexstudyspeedway.xml', 'apexrobotstudy.
 # for as long as that was the study's track, and went on naming only g-track-1
 # after the study moved to aalborg, so the gate would have passed a runtime that
 # could not open the race anybody actually drove.
+#
+# Both cars and all three robot modules, for the same reason. The team-matched
+# assignment puts berniw, bt and olethros on the grid and drives car1-trb1;
+# each one is a file the participant's runtime either has or does not, and a
+# missing one becomes a race that will not start rather than a build that fails
+# here.
 $required = @(
     'wtorcs.exe',
     'drivers\human\human.dll',
     'drivers\berniw\berniw.dll',
+    'drivers\bt\bt.dll',
+    'drivers\olethros\olethros.dll',
+    'config\raceman\apexibmf1.xml',
     'config\raceman\apexstudy.xml',
     'config\raceman\apexstudyspeedway.xml',
     'config\raceman\apexrobotstudy.xml',
@@ -311,6 +320,8 @@ $required = @(
     'tracks\road\aalborg\aalborg.acc',
     'tracks\road\g-track-1\g-track-1.xml',
     'tracks\road\g-track-1\g-track-1.acc',
+    'cars\car1-trb1\car1-trb1.xml',
+    'cars\car1-trb1\car1-trb1.acc',
     'cars\car7-trb1\car7-trb1.xml',
     'cars\car7-trb1\car7-trb1.acc'
 )

@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- IBMF1 default Practice: human + 3 robots, CG Speedway number 1 (g-track-1), 2 laps, tire factor 0. -->
+<!-- ibmf1-practice-v5: 2 laps. No track-select wizard. Menu label is CG Speedway number 1, not g-track-1. -->
+<!-- v3 was 8 laps and v4 three. No session recorded before 2026-08-29 completed more than 3, so the target never ended a race; two keeps the export small. Lap 1 is a standing start, so one flying lap per session. -->
+<!DOCTYPE params SYSTEM "../libs/tgf/params.dtd">
+<params name="practice" type="param" mode="mw">
+
+  <section name="Header">
+    <attstr name="name" val="Practice"/>
+    <attstr name="type" val="practice"/>
+    <attstr name="description" val="IBMF1 human practice with robot traffic ibmf1-practice-v5"/>
+    <attnum name="priority" val="100"/>
+    <attstr name="menu image" val="data/img/splash-practice.png"/>
+    <attstr name="run image" val="data/img/splash-run-practice.png"/>
+  </section>
+
+  <section name="Tracks">
+    <attnum name="max items" val="1"/>
+    <attnum name="maximum number" val="1"/>
+    <section name="1">
+      <attstr name="name" val="g-track-1"/>
+      <attstr name="category" val="road"/>
+    </section>
+  </section>
+
+  <section name="Races">
+    <section name="1">
+      <attstr name="name" val="Practice"/>
+    </section>
+  </section>
+
+  <section name="Race">
+    <attnum name="laps" val="2"/>
+    <attnum name="distance" val="0"/>
+  </section>
+
+  <section name="Practice">
+    <attnum name="laps" val="2"/>
+    <attstr name="type" val="practice"/>
+    <attstr name="starting order" val="drivers list"/>
+    <attstr name="restart" val="yes"/>
+    <attstr name="display mode" val="normal"/>
+    <attstr name="display results" val="yes"/>
+    <attnum name="distance" unit="km" val="0"/>
+    <attnum name="fuel consumption factor" min="0.0" max="5.0" val="1.0"/>
+    <attnum name="damage factor" min="0.0" max="5.0" val="1.0"/>
+    <attnum name="tire factor" min="0" max="5" val="0"/>
+    <section name="Starting Grid">
+      <attnum name="rows" val="1"/>
+      <attnum name="distance to start" val="100"/>
+      <attnum name="distance between columns" val="20"/>
+      <attnum name="offset within a column" val="10"/>
+      <attnum name="initial speed" unit="km/h" val="0"/>
+      <attnum name="initial height" unit="m" val="0.2"/>
+    </section>
+  </section>
+
+  <section name="Drivers">
+    <attnum name="maximum number" val="10"/>
+    <attstr name="focused module" val="human"/>
+    <attnum name="focused idx" val="1"/>
+    <!-- idx must name an interface the module actually registers, and every car
+         must stay in the TRB1 class. human registers only index 1; berniw 1-10;
+         bt and olethros 0-9, whose index 0 is a stock/rally car, not TRB1. -->
+    <section name="1">
+      <attnum name="idx" val="1"/>
+      <attstr name="module" val="human"/>
+    </section>
+    <section name="2">
+      <attnum name="idx" val="4"/>
+      <attstr name="module" val="berniw"/>
+    </section>
+    <section name="3">
+      <attnum name="idx" val="4"/>
+      <attstr name="module" val="bt"/>
+    </section>
+    <section name="4">
+      <attnum name="idx" val="5"/>
+      <attstr name="module" val="olethros"/>
+    </section>
+  </section>
+
+  <section name="Configuration">
+    <section name="1">
+      <attstr name="type" val="drivers select"/>
+    </section>
+    <section name="2">
+      <attstr name="type" val="race config"/>
+      <attstr name="race" val="Practice"/>
+      <section name="Options">
+        <section name="1">
+          <attstr name="type" val="race length"/>
+        </section>
+        <section name="2">
+          <attstr name="type" val="display mode"/>
+        </section>
+      </section>
+    </section>
+  </section>
+
+</params>

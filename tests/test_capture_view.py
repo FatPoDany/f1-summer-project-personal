@@ -70,10 +70,42 @@ def speedway_preset(tmp_path) -> TorcsStudyPreset:
     )
 
 
+@pytest.fixture
+def team_preset(tmp_path) -> TorcsStudyPreset:
+    race_config = tmp_path / "apexibmf1.xml"
+    race_config.write_text("<params name='Apex Team Practice'/>", encoding="utf-8")
+    return TorcsStudyPreset(
+        preset_id="ibmf1-practice-v5",
+        display_name="Team practice (matches IBMF1)",
+        track_id="g-track-1",
+        track_category="road",
+        car_id="car1-trb1",
+        laps=2,
+        race_config=race_config,
+        opponents=("berniw", "bt", "olethros"),
+    )
+
+
 def make_ready(view: CaptureGuideView) -> None:
     view._participant_id.setText("P001")
     for check in view._readiness_checks:
         check.setChecked(True)
+
+
+def test_the_facilitator_is_told_the_grid_is_not_empty(qtbot, torcs_binary, team_preset):
+    """Traffic is the condition most easily missed and the one that changes most.
+
+    Solo, every session finishes P1 and the lap-to-lap spread belongs to the
+    driver. With three robots neither is true, and a facilitator who reads the
+    summary as "the usual race on a different track" would pool two things that
+    do not pool.
+    """
+    view = CaptureGuideView(torcs_binary=torcs_binary, study_preset=team_preset)
+    qtbot.addWidget(view)
+
+    assert "3 opponents" in view._preset_summary.text()
+    assert "2 laps" in view._preset_summary.text()
+    assert "car1-trb1" in view._preset_summary.text()
 
 
 def test_capture_has_a_dedicated_worker_so_model_jobs_cannot_delay_torcs(
@@ -104,6 +136,7 @@ def test_guide_requires_pseudonym_readiness_and_simulator_before_starting(
     assert "aalborg" in view._preset_summary.text()
     assert "car7-trb1" in view._preset_summary.text()
     assert "3 laps" in view._preset_summary.text()
+    assert "no opponents" in view._preset_summary.text()
     assert not view._start_button.isEnabled()
 
     view._participant_id.setText("Alice Smith")

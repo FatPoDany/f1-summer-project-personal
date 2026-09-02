@@ -165,10 +165,19 @@ class CaptureSetupPage(QWidget):
 
     def _render_preset(self) -> None:
         preset = self.study_preset
+        # The grid is on the line because it is the condition a facilitator is
+        # least likely to expect and the one that changes the data most: solo,
+        # every session finishes P1 and the lap-to-lap spread is the driver's
+        # own; in traffic, neither is true.
+        grid = (
+            f"{len(preset.opponents)} opponents"
+            if preset.opponents
+            else "no opponents"
+        )
         self.preset_summary.setText(
             f"{preset.display_name}  ·  "
             f"{preset.track_id} ({preset.track_category})  ·  "
-            f"{preset.car_id}  ·  {preset.laps} laps"
+            f"{preset.car_id}  ·  {preset.laps} laps  ·  {grid}"
         )
         self._render_simulator_status()
 

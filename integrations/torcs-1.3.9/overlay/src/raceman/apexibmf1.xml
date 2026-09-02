@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!DOCTYPE params SYSTEM "../params.dtd">
+
+<!-- A port of the other half of this project's own practice race, so that a
+     session collected by Apex can be pooled with the ones its kit has already
+     collected. Upstream is apps/player-kit/config/practice.xml in
+     github.com/UOBGraduate/IBMF1, which labels itself ibmf1-practice-v5.
+
+     Every number below that decides what the participant drives is theirs, not
+     ours, and verify-study-preset.sh reads both files and fails if any of them
+     drift apart. Where this file differs from apexstudy.xml it is because
+     theirs differs, and each one matters on its own:
+
+       laps 2, not 3        lap 1 is a standing start, so this is one flying lap
+       three robots         a finish position that can vary at all; Apex's own
+                            presets are solo, where it is 1 in every session
+       tire factor 0        no tyre wear across the race
+       car1-trb1            set from the preset into the driver profile at
+                            launch, since TORCS takes the car from there and not
+                            from this file
+       restart yes          theirs lets a participant restart; ours does not
+
+     Deliberately absent, because theirs does not set it either: "maximum
+     dammage". Apex's own presets disable retirement (val 0) so that a novice
+     who cannot finish still produces data. Two laps of CG Speedway is a long
+     way inside TORCS's default limit, and matching their race matters more here
+     than carrying our own safeguard into it.
+
+     Also absent: their Configuration section, which drives the pre-race menus.
+     Apex launches with -R and enters the event directly, so it would never be
+     read. It is the only thing in their file that is about navigating to a race
+     rather than about the race. -->
+
+<params name="Apex Team Practice" type="param" mode="mw">
+    <section name="Header">
+        <attstr name="name" val="Apex Team Practice"/>
+        <attstr name="description" val="IBMF1 practice conditions, driven under Apex capture"/>
+        <attnum name="priority" val="1"/>
+        <attstr name="menu image" val="data/img/splash-practice.png"/>
+        <attstr name="run image" val="data/img/splash-run-practice.png"/>
+    </section>
+
+    <section name="Tracks">
+        <attnum name="maximum number" val="1"/>
+        <section name="1">
+            <attstr name="name" val="g-track-1"/>
+            <attstr name="category" val="road"/>
+        </section>
+    </section>
+
+    <section name="Races">
+        <section name="1">
+            <attstr name="name" val="Practice"/>
+        </section>
+    </section>
+
+    <section name="Race">
+        <attnum name="laps" val="2"/>
+        <attnum name="distance" val="0"/>
+    </section>
+
+    <section name="Practice">
+        <attnum name="laps" val="2"/>
+        <attstr name="type" val="practice"/>
+        <attstr name="starting order" val="drivers list"/>
+        <attstr name="restart" val="yes"/>
+        <attstr name="display mode" val="normal"/>
+        <attstr name="display results" val="yes"/>
+        <attnum name="distance" unit="km" val="0"/>
+        <attnum name="fuel consumption factor" min="0.0" max="5.0" val="1.0"/>
+        <attnum name="damage factor" min="0.0" max="5.0" val="1.0"/>
+        <attnum name="tire factor" min="0" max="5" val="0"/>
+
+        <section name="Starting Grid">
+            <attnum name="rows" val="1"/>
+            <attnum name="distance to start" val="100"/>
+            <attnum name="distance between columns" val="20"/>
+            <attnum name="offset within a column" val="10"/>
+            <attnum name="initial speed" unit="km/h" val="0"/>
+            <attnum name="initial height" unit="m" val="0.2"/>
+        </section>
+    </section>
+
+    <!-- The participant is section 1, so "drivers list" starting order puts them
+         on pole, exactly as it does in theirs. idx must name an interface the
+         module actually registers, and every car has to stay in the TRB1 class:
+         human registers only index 1; berniw 1-10; bt and olethros 0-9, whose
+         index 0 is a stock/rally car rather than a TRB1. -->
+    <section name="Drivers">
+        <attnum name="maximum number" val="10"/>
+        <attstr name="focused module" val="human"/>
+        <attnum name="focused idx" val="1"/>
+        <section name="1">
+            <attnum name="idx" val="1"/>
+            <attstr name="module" val="human"/>
+        </section>
+        <section name="2">
+            <attnum name="idx" val="4"/>
+            <attstr name="module" val="berniw"/>
+        </section>
+        <section name="3">
+            <attnum name="idx" val="4"/>
+            <attstr name="module" val="bt"/>
+        </section>
+        <section name="4">
+            <attnum name="idx" val="5"/>
+            <attstr name="module" val="olethros"/>
+        </section>
+    </section>
+</params>
