@@ -147,6 +147,13 @@ class TorcsStudyPreset:
     car_id: str
     laps: int
     race_config: Path
+    # Every module on the grid besides the participant, in the order the race
+    # configuration lists them. Recorded because a race driven in traffic is not
+    # the same race as one driven alone -- finish position stops being a
+    # constant, and the lap-to-lap spread widens for a reason that has nothing to
+    # do with the driver. A capture that does not say which of the two it was
+    # cannot be pooled with either.
+    opponents: tuple[str, ...] = ()
     # TORCS ships a 640x480 window. That is too small to place a car accurately,
     # and enlarging it by hand does not work: the renderer keeps its viewport at
     # the configured view size and simply re-centres it, so a maximised window
@@ -171,6 +178,9 @@ class TorcsStudyPreset:
             raise ValueError("display name must be 1-128 visible characters")
         if isinstance(self.laps, bool) or not isinstance(self.laps, int) or self.laps < 1:
             raise ValueError("laps must be a positive integer")
+        object.__setattr__(self, "opponents", tuple(self.opponents))
+        for module in self.opponents:
+            _validate_slug(module, "opponent module")
         for name, value in (
             ("window width", self.window_width),
             ("window height", self.window_height),
@@ -191,6 +201,7 @@ class TorcsStudyPreset:
             "car_id": self.car_id,
             "laps": self.laps,
             "race_config": str(self.race_config),
+            "opponents": list(self.opponents),
             "window_width": self.window_width,
             "window_height": self.window_height,
         }
@@ -227,12 +238,24 @@ class HumanCaptureResult:
     run_dirs: tuple[Path, ...]
 
 
-# The car is not chosen here. TORCS reads it from the human driver's own
-# profile (overlay/src/drivers/human/human.xml), which is one file for the whole
-# install, so every preset drives the same car and this field records that fact
-# rather than deciding it. Changing car per preset means writing that profile at
-# launch, the way screen.xml and graph.xml are written; nothing needs it yet.
+# TORCS does not take the car from the race configuration. It reads it from the
+# human driver's own profile, one file for the whole install, so a preset that
+# only *names* a car names one it is not driving. `_write_driver_car` writes that
+# profile immediately before launch, the way screen.xml and graph.xml are
+# written, which is what makes this field decide rather than describe.
 STUDY_CAR_ID = "car7-trb1"
+
+# The car the other half of this project drives. Same TRB1 class, different
+# vehicle: pooling absolute speeds or brake points across two cars measures the
+# cars.
+TEAM_CAR_ID = "car1-trb1"
+
+# The three robots their practice grid carries. Module names only; which index
+# of each module -- and so which setup it runs -- lives in the race
+# configuration, because that file is the thing that is shipped, verified and
+# reproducible. Naming the indices here as well would give two places to state
+# one fact and no way to tell which one the race actually used.
+TEAM_OPPONENTS = ("berniw", "bt", "olethros")
 
 
 def _study_preset(
@@ -242,39 +265,69 @@ def _study_preset(
     display_name: str,
     track_id: str,
     race_config_name: str,
+    car_id: str = STUDY_CAR_ID,
+    laps: int = 3,
+    opponents: tuple[str, ...] = (),
 ) -> TorcsStudyPreset:
     return TorcsStudyPreset(
         preset_id=preset_id,
         display_name=display_name,
         track_id=track_id,
         track_category="road",
-        car_id=STUDY_CAR_ID,
-        laps=3,
+        car_id=car_id,
+        laps=laps,
         race_config=torcs_raceman_dir(torcs_binary) / race_config_name,
+        opponents=opponents,
     )
 
 
 def study_presets(torcs_binary: str | Path) -> tuple[TorcsStudyPreset, ...]:
     """Every assignment a facilitator may pick, the default first.
 
-    aalborg rather than the speedway it started on: a comparative study is judged
-    on more than lap time, and CG Speedway 1 has enough asphalt run-off that a
-    participant measured 14 m outside the track edge still collected no damage at
-    all. A narrower circuit with the barrier closer makes a mistake register as
-    something, which is what gives the incident count any power to discriminate.
+    The default is the one that matches the other half of this project. Its kit
+    is frozen on ``ibmf1-practice-v5`` and every race it has stored was driven
+    there, so a race driven under anything else can only ever be compared with
+    Apex's own -- which is a study of five people, not of eighty. Matching it is
+    what lets a participant collected here sit in the same analysis as theirs.
 
-    CG Speedway is offered alongside it because the other half of this project
-    is frozen on that circuit -- 77 of its 77 stored races -- and absolute lap
-    times cannot be pooled across two tracks. Its median best lap there is
-    43.41 s against 126.15 s on aalborg, on a lap only 1.27x shorter: the
-    difference is difficulty, not distance. A shared track is necessary for
-    pooling and not sufficient, since laps and opponents still differ; what it
-    buys is a comparison that is about the driver rather than the circuit.
+    Matching means all four conditions, not just the circuit. The track alone
+    was tried and is not enough: their grid carries three robots to Apex's none,
+    which is the difference between a finish position that varies and one that
+    is 1 in every stored session; two laps to three, which is the difference
+    between one flying lap and two; ``car1-trb1`` to ``car7-trb1``, which moves
+    every absolute speed; and tire factor 0 to 1. Each one on its own is enough
+    to stop absolute figures pooling, so a preset that fixes three of them buys
+    nothing.
 
-    Everything except the track is identical between the two, so choosing one
-    changes one thing.
+    The two Apex-native assignments stay, because the data already collected
+    under them has to remain reproducible and because they measure something
+    their circuit cannot:
+
+    * ``apex-study-v1`` -- aalborg. A comparative study is judged on more than
+      lap time, and CG Speedway 1 has enough asphalt run-off that a participant
+      measured 14 m outside the track edge collected no damage at all. A
+      narrower circuit with the barrier closer makes a mistake register as
+      something, which is what gives the incident count any power to
+      discriminate.
+    * ``apex-study-speedway-v1`` -- CG Speedway, and otherwise identical to it,
+      so choosing between those two changes exactly one thing. It is the right
+      pick for asking what the circuit alone did.
+
+    Choosing between the team-matched preset and either of those changes four
+    things at once, deliberately. That is the price of pooling, and it is why
+    they are three separate assignments rather than one with options.
     """
     return (
+        _study_preset(
+            torcs_binary,
+            preset_id="ibmf1-practice-v5",
+            display_name="Team practice (matches IBMF1)",
+            track_id="g-track-1",
+            race_config_name="apexibmf1.xml",
+            car_id=TEAM_CAR_ID,
+            laps=2,
+            opponents=TEAM_OPPONENTS,
+        ),
         _study_preset(
             torcs_binary,
             preset_id="apex-study-v1",
@@ -373,7 +426,7 @@ def capture_human_runs(
         environment[TORCS_LOCAL_DIR_ENV] = str(profile_dir)
         _write_screen_config(profile_dir, binary, config.preset)
         _reset_display_mode(profile_dir, binary)
-        _reset_driver_profile(profile_dir, binary)
+        _reset_driver_profile(profile_dir, binary, config.preset)
     # Recording is layered on top and never decides anything. If it will not
     # start, the session runs unrecorded and says so in the manifest rather than
     # denying somebody the drive they came for.
@@ -769,9 +822,12 @@ def _reset_display_mode(profile_dir: Path, torcs_binary: Path) -> None:
 
 
 _SKILL_ATTR = re.compile(r'(<attstr\s+name="skill level"[^>]*?\bval=")([^"]*)(")')
+_CAR_ATTR = re.compile(r'(<attstr\s+name="car name"[^>]*?\bval=")([^"]*)(")')
 
 
-def _reset_driver_profile(profile_dir: Path, torcs_binary: Path) -> None:
+def _reset_driver_profile(
+    profile_dir: Path, torcs_binary: Path, preset: TorcsStudyPreset | None = None
+) -> None:
     """Re-seed the human driver settings from the ones this build ships.
 
     TORCS seeds a profile once and then leaves it alone, so a change to the
@@ -780,9 +836,15 @@ def _reset_driver_profile(profile_dir: Path, torcs_binary: Path) -> None:
     which is what makes impacts register at all, and every existing profile
     quietly stayed on `rookie` and kept multiplying damage by zero.
 
-    Only the skill level is rewritten, not the whole file: the profile also
-    carries the participant's own control bindings, and replacing those between
-    sessions would change what they are driving with.
+    Only the skill level and the car are rewritten, not the whole file: the
+    profile also carries the participant's own control bindings, and replacing
+    those between sessions would change what they are driving with.
+
+    A profile that does not exist yet is seeded here rather than left to TORCS.
+    Both would write the same bytes, but TORCS writes them after this runs,
+    which would leave the car unset on exactly the machine where it matters
+    most: a fresh install, used for the first time, by a participant about to
+    drive an assignment that names a different car from the shipped default.
     """
     destination = profile_dir / "drivers" / "human" / "human.xml"
     source = torcs_data_root(torcs_binary) / "drivers" / "human" / "human.xml"
@@ -796,12 +858,27 @@ def _reset_driver_profile(profile_dir: Path, torcs_binary: Path) -> None:
     try:
         current = destination.read_text(encoding="latin-1")
     except OSError:
-        return  # no profile copy yet: TORCS will seed it from the shipped file
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(shipped, encoding="latin-1")
+        except OSError:
+            return
+        current = shipped
 
     updated, count = _SKILL_ATTR.subn(
         lambda m: f"{m.group(1)}{wanted.group(2)}{m.group(3)}", current
     )
-    if not count or updated == current:
+    if not count:
+        return
+    if preset is not None:
+        # Only the first match, which is driver index 1 -- the one every study
+        # race configuration focuses. A profile may carry further indices the
+        # participant made for themselves, and rewriting the car under those
+        # would edit settings this session never uses.
+        updated = _CAR_ATTR.sub(
+            lambda m: f"{m.group(1)}{preset.car_id}{m.group(3)}", updated, count=1
+        )
+    if updated == current:
         return
     try:
         destination.write_text(updated, encoding="latin-1")

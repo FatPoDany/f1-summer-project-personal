@@ -19,8 +19,9 @@ from PySide6.QtWidgets import (
 from apex import theme
 from apex.background_dialog import BackgroundDialog
 from apex.capture_pages import CaptureCompletePage, CaptureDrivePage, CaptureSetupPage
-from apex.capture_task import CaptureFunction, HumanCaptureTask
+from apex.capture_task import CaptureFunction, HandoffTask, HumanCaptureTask
 from f1coach_core.participant import Background, load_background, save_background
+from racecoach.telemetry.handoff import Handoff, finish_session
 from racecoach.telemetry.handover import HandoverError, package
 from racecoach.telemetry.human_capture import (
     HumanCaptureConfig,
@@ -130,9 +131,18 @@ class CaptureGuideView(QWidget):
         torcs_binary: str | Path | None = None,
         study_preset: TorcsStudyPreset | None = None,
         ask_background: Callable[[str, QWidget], Background | None] | None = None,
+        finish_fn: Callable[..., Handoff] | None = None,
     ) -> None:
         super().__init__(parent)
         self._capture_fn = capture_fn
+        # Injectable for the same reason as the capture itself: it writes files
+        # outside the workspace and can reach the network, and a test must be
+        # able to watch it without doing either. Resolved here rather than in
+        # the signature so that replacing the module attribute is enough --
+        # a default bound at definition time cannot be replaced at all, and the
+        # first version of this wrote real zips into the developer's home
+        # directory every time the suite ran.
+        self._finish_fn = finish_fn if finish_fn is not None else finish_session
         # Injectable because it is a modal: a headless run has nobody to dismiss
         # it, and a test that hangs on a dialog teaches nothing.
         self._ask_background = ask_background or _prompt_for_background
@@ -147,6 +157,8 @@ class CaptureGuideView(QWidget):
         self._pool = QThreadPool(self)
         self._pool.setMaxThreadCount(1)
         self._task: HumanCaptureTask | None = None
+        self._handoff: HandoffTask | None = None
+        self._handoff_lines: list[str] = []
         self._result_capture_dir: str | None = None
         self._result_run_dirs: list[str] = []
         self._build_ui()
@@ -225,6 +237,7 @@ class CaptureGuideView(QWidget):
         self._new_session_button = self._complete_page.new_session_button
         self._open_results_button = self._complete_page.open_results_button
         self._package_button = self._complete_page.package_button
+        self._handoff_status = self._complete_page.handoff_status
         self._participant_id.textChanged.connect(self._update_start_state)
         # Choosing a track can change whether the race is startable at all: a
         # build missing one preset's race config still has the other's.
@@ -281,6 +294,12 @@ class CaptureGuideView(QWidget):
     def reset_guide(self) -> None:
         if self._task is not None:
             return
+        # Detached rather than stopped. An upload started for the last session
+        # keeps running -- it is that participant's race and it is already on
+        # its way -- but its progress must not appear under the next one's name.
+        self._handoff = None
+        self._handoff_lines = []
+        self._handoff_status.clear()
         self._participant_id.clear()
         self._result_run_dirs = []
         for check in self._readiness_checks:
@@ -301,9 +320,54 @@ class CaptureGuideView(QWidget):
         self._result_capture_dir = str(result.capture_dir)
         self._pages.setCurrentWidget(self._complete_page)
         self._new_session_button.setFocus()
+        self._start_handoff(result.capture_dir)
         self.sessionFinished.emit(
             str(result.capture_dir), self._result_run_dirs
         )
+
+    def _start_handoff(self, capture_dir: Path) -> None:
+        """Read the race into the study, save the file to send, send it.
+
+        Started here rather than offered as a button because every one of those
+        steps used to be somebody remembering to do it, and the one most easily
+        forgotten -- reading the laps into the study path -- was invisible when
+        it did not happen: the Garage showed the session either way.
+        """
+        self._handoff_lines = []
+        self._handoff_status.setText("Handing this session over…")
+        task = HandoffTask(capture_dir, finish_fn=self._finish_fn)
+        task.signals.progress.connect(self._on_handoff_progress)
+        task.signals.finished.connect(self._on_handoff_finished)
+        self._handoff = task
+        task.start()
+
+    def _is_current_handoff(self, token: object) -> bool:
+        return self._handoff is not None and token is self._handoff.token
+
+    def _on_handoff_progress(self, token: object, line: str) -> None:
+        if not self._is_current_handoff(token):
+            return
+        self._handoff_lines.append(line)
+        self._handoff_status.setText("\n".join(self._handoff_lines))
+
+    def _on_handoff_finished(self, token: object, handoff: Handoff) -> None:
+        if not self._is_current_handoff(token):
+            return
+        self._handoff = None
+        closing = []
+        if handoff.archive is not None:
+            closing.append(f"The file to send is at {handoff.archive}")
+        else:
+            # The one outcome that loses data rather than delaying it, so it is
+            # said in the participant's own words and the manual route is named.
+            closing.append(
+                "Apex could not save the file to send. Use “Save another copy…” "
+                "and choose somewhere yourself."
+            )
+        if handoff.review_url:
+            closing.append(f"Review: {handoff.review_url}")
+        self._handoff_lines.extend(closing)
+        self._handoff_status.setText("\n".join(self._handoff_lines))
 
     def _package_session(self) -> None:
         """Turn this session into the one file the participant has to send.

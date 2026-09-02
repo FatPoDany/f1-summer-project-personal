@@ -15,6 +15,7 @@ from racecoach.telemetry.handover import (
     collect,
     package,
     register,
+    register_capture,
     session_name,
     unpack,
 )
@@ -406,3 +407,72 @@ def test_collecting_says_in_the_session_that_it_was_driven_elsewhere(capture, tm
     marker = json.loads((session / ARRIVED_NAME).read_text("utf-8"))
     assert marker["participant_id"] == "A001"
     assert not is_recordable(session / "whatever-lap01.csv")
+
+
+# --- a race driven on this machine, without the round trip ---------------------
+#
+# The Garage showed a capture the moment it finished; everything on the study
+# path read canonical laps out of the workspace, and the only thing that ever
+# put them there was `collect`, which runs on the analyst's machine. So a
+# session was visible to the person who drove it and invisible to the study on
+# the same computer.
+
+
+def test_a_race_driven_here_reaches_the_study_without_a_round_trip(driven):
+    from f1coach_core.workspace import list_sessions
+
+    registered = register_capture(driven)
+
+    assert registered.session == driven.name
+    assert registered.laps == 3
+    assert [session.name for session in list_sessions()] == [driven.name]
+
+
+def test_a_race_driven_here_is_not_marked_as_having_arrived(driven):
+    """`arrived.json` means "driven somewhere else", and it is load-bearing.
+
+    It is what keeps a researcher opening a debrief from being counted as the
+    participant's own dose of coaching. Writing it for a local capture would
+    make every session on a participant's own machine look like somebody else's.
+    """
+    from f1coach_core.exposure import is_recordable
+    from f1coach_core.workspace import ARRIVED_NAME, sessions_root
+
+    registered = register_capture(driven)
+
+    session = sessions_root() / registered.session
+    assert not (session / ARRIVED_NAME).exists()
+    assert is_recordable(session / "whatever-lap01.csv")
+
+
+def test_registering_the_same_race_twice_adds_the_laps_once(driven):
+    """A capture that is registered and then also collected must not double."""
+    first = register_capture(driven)
+    second = register_capture(driven)
+
+    assert first.laps == second.laps == 3
+
+
+def test_collecting_a_package_of_our_own_capture_does_not_relabel_it(tmp_path, monkeypatch):
+    """Opening one's own handover to check it arrived is a reasonable thing to do.
+
+    It must not turn the session into somebody else's, which would move that
+    participant's coaching views out of their own dose and into nobody's.
+    """
+    from f1coach_core.workspace import ARRIVED_NAME, sessions_root
+    from racecoach.telemetry.human_capture import human_captures_root
+
+    monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "ws"))
+    directory = human_captures_root() / "A001-baseline-20260826-091209"
+    directory.mkdir(parents=True)
+    torcs_run(directory / "human-1-1787735531-9624-1.csv")
+    (directory / "manifest.json").write_text(
+        json.dumps({"participant_id": "A001", "phase": "baseline"}), encoding="utf-8"
+    )
+
+    register_capture(directory)
+    package(directory, tmp_path / "A001.zip")
+    (handover,) = collect([tmp_path / "A001.zip"], tmp_path / "pool")
+    registered = register(handover)
+
+    assert not (sessions_root() / registered.session / ARRIVED_NAME).exists()

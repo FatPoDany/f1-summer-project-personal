@@ -36,6 +36,30 @@ def torcs_binary(tmp_path) -> Path:
     return binary
 
 
+def write_shipped_human(
+    torcs_binary: Path, *, car: str = "car7-trb1", skill: str = "amateur"
+) -> Path:
+    """The human.xml this build would ship, inside the fake runtime.
+
+    Written rather than skipped-around: these paths used to skip on every
+    machine without an installed TORCS, which is every CI runner, so the one
+    place the assignment reaches the simulator went unexercised precisely where
+    it was most likely to break.
+    """
+    shipped = torcs_data_root(torcs_binary) / "drivers" / "human" / "human.xml"
+    shipped.parent.mkdir(parents=True, exist_ok=True)
+    shipped.write_text(
+        '<params name="human">\n'
+        '  <section name="1">\n'
+        f'    <attstr name="car name" val="{car}"/>\n'
+        f'    <attstr name="skill level" val="{skill}"/>\n'
+        "  </section>\n"
+        "</params>\n",
+        encoding="latin-1",
+    )
+    return shipped
+
+
 def write_capture(
     path: Path,
     *,
@@ -167,6 +191,7 @@ def test_study_preset_launches_graphical_race_and_records_context(tmp_path, torc
         "car_id": "car7-trb1",
         "laps": 5,
         "race_config": str(preset.race_config),
+        "opponents": [],
         "window_width": preset.window_width,
         "window_height": preset.window_height,
     }
@@ -257,20 +282,39 @@ def test_study_preset_rejects_unsafe_or_impossible_values(tmp_path, field, value
         TorcsStudyPreset(**values)
 
 
-def test_both_circuits_are_assignable_and_aalborg_is_still_the_default(torcs_binary):
+def test_the_team_matched_assignment_is_the_default(torcs_binary):
+    """Three assignments, and the one that pools with the other half leads.
+
+    Which one is first decides what a facilitator gets if they change nothing,
+    and the reason it is this one is that a race driven under anything else can
+    only be compared with Apex's own handful of sessions. The two Apex-native
+    circuits stay assignable, because data already collected under them has to
+    remain reproducible.
+    """
     presets = study_presets(torcs_binary)
 
-    assert [preset.track_id for preset in presets] == ["aalborg", "g-track-1"]
+    assert [preset.preset_id for preset in presets] == [
+        "ibmf1-practice-v5",
+        "apex-study-v1",
+        "apex-study-speedway-v1",
+    ]
     assert default_study_preset(torcs_binary) == presets[0]
     assert [preset.race_config.name for preset in presets] == [
+        "apexibmf1.xml",
         "apexstudy.xml",
         "apexstudyspeedway.xml",
     ]
 
 
 def test_choosing_a_circuit_changes_the_circuit_and_nothing_else(torcs_binary):
-    """Otherwise a change of track is a change of several conditions at once."""
-    aalborg, speedway = study_presets(torcs_binary)
+    """Otherwise a change of track is a change of several conditions at once.
+
+    True of the two Apex-native assignments and deliberately false of the
+    team-matched one, which differs in four conditions because theirs does.
+    Those four are pinned against their own file in test_team_preset.py.
+    """
+    aalborg = study_preset_by_id(torcs_binary, "apex-study-v1")
+    speedway = study_preset_by_id(torcs_binary, "apex-study-speedway-v1")
     varies = {"preset_id", "display_name", "track_id", "race_config"}
 
     same = {
@@ -665,32 +709,41 @@ def test_recovery_refuses_a_folder_with_nothing_to_register(torcs_binary, tmp_pa
     assert list_runs() == []
 
 
-def test_the_study_assignment_matches_the_race_configuration_it_ships(torcs_binary):
-    """A preset that names a different track from the XML would silently mislead."""
-    from racecoach.telemetry.human_capture import default_study_preset
+def test_every_assignment_matches_the_race_configuration_it_ships(torcs_binary):
+    """A preset that names a different track or lap count from its own XML lies.
 
-    preset = default_study_preset(torcs_binary)
-    xml = Path("integrations/torcs-1.3.9/overlay/src/raceman/apexstudy.xml").read_text("utf-8")
-
-    assert f'val="{preset.track_id}"' in xml
-    assert f'name="laps" val="{preset.laps}"' in xml
-
-
-def test_every_participant_is_assigned_the_same_car(torcs_binary):
-    """An uncontrolled car would confound the comparison the study is built on.
-
-    The raceman does not choose the human's car -- TORCS takes it from the driver
-    profile -- so the control lives in the shipped human.xml that each fresh
-    profile is seeded from, and the preset must agree with it.
+    The manifest and every study export are written from the preset while TORCS
+    reads the file, so a disagreement labels a capture with conditions it was not
+    driven under -- and nothing downstream can detect that. Checked for all three
+    rather than for the default alone: it was the default that was checked when
+    there was one, and adding a second assignment left the new one unchecked.
     """
-    from racecoach.telemetry.human_capture import default_study_preset
-    from racecoach.telemetry.torcs_runtime import torcs_data_root
+    overlay = Path("integrations/torcs-1.3.9/overlay/src/raceman")
 
-    preset = default_study_preset(torcs_binary)
-    template = torcs_data_root(torcs_binary) / "drivers" / "human" / "human.xml"
-    if not template.is_file():
-        pytest.skip("no installed TORCS runtime on this machine")
-    assert f'val="{preset.car_id}"' in template.read_text("latin-1")
+    for preset in study_presets(torcs_binary):
+        xml = (overlay / preset.race_config.name).read_text("utf-8")
+        assert f'val="{preset.track_id}"' in xml, preset.preset_id
+        assert f'name="laps" val="{preset.laps}"' in xml, preset.preset_id
+
+
+def test_the_assignment_decides_the_car_the_participant_drives(tmp_path, torcs_binary):
+    """The race file cannot choose the human's car; the driver profile does.
+
+    So a preset naming car1-trb1 over a profile still saying car7-trb1 would put
+    the participant in one car and record the other, and nothing downstream could
+    tell. Writing the profile from the preset immediately before launch is what
+    turns `car_id` from a note into the thing that decides.
+    """
+    from racecoach.telemetry.human_capture import _reset_driver_profile
+
+    write_shipped_human(torcs_binary, car="car7-trb1")
+    preset = study_preset_by_id(torcs_binary, "ibmf1-practice-v5")
+
+    _reset_driver_profile(tmp_path / "profile", torcs_binary, preset)
+
+    written = (tmp_path / "profile" / "drivers" / "human" / "human.xml").read_text("latin-1")
+    assert f'name="car name" val="{preset.car_id}"' in written
+    assert 'val="car7-trb1"' not in written
 
 
 def test_damage_is_recorded_but_can_never_end_a_participants_session():
@@ -810,32 +863,56 @@ def test_an_existing_profile_still_gets_this_builds_skill_level(tmp_path, torcs_
     and only a brand-new install would have recorded any.
     """
     from racecoach.telemetry.human_capture import _reset_driver_profile
-    from racecoach.telemetry.torcs_runtime import torcs_data_root
 
-    shipped = torcs_data_root(torcs_binary) / "drivers" / "human" / "human.xml"
-    if not shipped.is_file():
-        pytest.skip("no installed TORCS runtime on this machine")
+    write_shipped_human(torcs_binary, skill="amateur")
 
     profile = tmp_path / "profile" / "drivers" / "human"
     profile.mkdir(parents=True)
     stale = profile / "human.xml"
     stale.write_text(
         '<params name="Human">\n'
+        '  <attstr name="car name" val="car7-trb1"/>\n'
         '  <attstr name="skill level" val="rookie"/>\n'
         '  <attstr name="key up" val="Player-chosen"/>\n'
         "</params>\n",
         encoding="latin-1",
     )
+    preset = study_preset_by_id(torcs_binary, "ibmf1-practice-v5")
 
-    _reset_driver_profile(tmp_path / "profile", torcs_binary)
+    _reset_driver_profile(tmp_path / "profile", torcs_binary, preset)
 
     text = stale.read_text("latin-1")
     assert 'name="skill level" val="rookie"' not in text
+    assert f'name="car name" val="{preset.car_id}"' in text
     # Their own control bindings are theirs; only the assignment is re-applied.
     assert 'name="key up" val="Player-chosen"' in text
 
 
-def test_a_profile_that_does_not_exist_yet_is_left_to_torcs(tmp_path, torcs_binary):
+def test_a_profile_that_does_not_exist_yet_is_seeded_with_the_assignment(
+    tmp_path, torcs_binary
+):
+    """TORCS would seed it too, but only after this has run.
+
+    Leaving it to the simulator left the car unset on exactly the machine where
+    it matters most: a fresh install, first use, a participant about to drive an
+    assignment naming a different car from the shipped default.
+    """
+    from racecoach.telemetry.human_capture import _reset_driver_profile
+
+    write_shipped_human(torcs_binary, car="car7-trb1")
+    preset = study_preset_by_id(torcs_binary, "ibmf1-practice-v5")
+
+    _reset_driver_profile(tmp_path / "profile", torcs_binary, preset)
+
+    written = (tmp_path / "profile" / "drivers" / "human" / "human.xml").read_text(
+        "latin-1"
+    )
+    assert f'name="car name" val="{preset.car_id}"' in written
+
+
+def test_a_missing_shipped_profile_is_not_worth_failing_a_session_over(
+    tmp_path, torcs_binary
+):
     from racecoach.telemetry.human_capture import _reset_driver_profile
 
     _reset_driver_profile(tmp_path / "profile", torcs_binary)  # must not raise

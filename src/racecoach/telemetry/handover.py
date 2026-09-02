@@ -342,8 +342,16 @@ def mark_arrived(session_name: str, handover: Handover) -> Path | None:
     workspace's shape, and a guess that is wrong once has already recorded a
     researcher's reading as a participant's dose.
     """
+    from racecoach.telemetry.human_capture import human_captures_root
+
     directory = sessions_root() / session_name
     if not directory.is_dir():
+        return None
+    if (human_captures_root() / session_name).is_dir():
+        # This machine drove it. Collecting a package of one's own capture is a
+        # reasonable thing to do -- it is how a facilitator checks a handover
+        # opens -- and it must not relabel the session as somebody else's, which
+        # would move that participant's coaching views out of their own dose.
         return None
     marker = directory / ARRIVED_NAME
     marker.write_text(
@@ -360,6 +368,56 @@ def mark_arrived(session_name: str, handover: Handover) -> Path | None:
     return marker
 
 
+def _register(folder: Path, name: str, *, adopt: bool = True) -> Registered:
+    """Split every run in `folder` into canonical laps under session `name`."""
+    identity, recording = handover_identity(folder)
+    background = adopt_background(folder) if adopt else None
+    views = adopt_exposure(folder, identity.driver or background) if adopt else 0
+    skipped: list[str] = []
+    for run in sorted(folder.glob("*.csv")):
+        try:
+            import_telemetry(run, name, identity=identity, recording=recording)
+        except (TelemetrySchemaError, OSError) as exc:
+            # One unreadable file must not cost four participants their data. A
+            # capture folder routinely holds an export for a race that was
+            # started and abandoned, and the participant is in no position to
+            # tidy it up; say which file and carry on with the rest.
+            skipped.append(f"{run.name}: {exc}")
+    session = sessions_root() / name
+    laps = len(list(session.glob("*.csv"))) if session.is_dir() else 0
+    return Registered(
+        session=name,
+        laps=laps,
+        background=background is not None,
+        views=views,
+        skipped=tuple(skipped),
+    )
+
+
+def register_capture(capture_dir: str | Path) -> Registered:
+    """Make laps driven on this machine readable by the study path, right away.
+
+    The Garage shows a capture the moment it finishes, but everything on the
+    study path -- the summary, the per-lap export, the Study Results screen --
+    reads canonical single laps out of `sessions_root`, and the only thing that
+    ever put them there was `collect`, which runs on the analyst's machine. So a
+    session was visible to the person who drove it and invisible to the study on
+    the same computer, and the gap closed only after the data had made a round
+    trip through a zip and back.
+
+    Nothing is adopted and no arrival is marked, which is the whole difference
+    from `register`. The background answers and the exposure log are already
+    this workspace's own rather than copies of somebody else's, and
+    `arrived.json` means "driven elsewhere" -- it is what keeps a researcher
+    reading a debrief from being counted as the participant's dose.
+
+    Importing is content-addressed, so running this after a capture and then
+    collecting a package of the same capture adds the laps once.
+    """
+    capture_dir = Path(capture_dir)
+    return _register(capture_dir, capture_dir.name, adopt=False)
+
+
 def register(handover: Handover) -> Registered:
     """Turn a verified handover into laps this workspace can actually read.
 
@@ -373,27 +431,7 @@ def register(handover: Handover) -> Registered:
     Importing is content-addressed, so collecting the same handover twice adds
     no laps the second time rather than counting that participant twice.
     """
-    identity, recording = handover_identity(handover.path)
-    background = adopt_background(handover.path)
-    views = adopt_exposure(handover.path, identity.driver or background)
     name = session_name(handover)
-    skipped: list[str] = []
-    for run in sorted(handover.path.glob("*.csv")):
-        try:
-            import_telemetry(run, name, identity=identity, recording=recording)
-        except (TelemetrySchemaError, OSError) as exc:
-            # One unreadable file must not cost four participants their data. A
-            # capture folder routinely holds an export for a race that was
-            # started and abandoned, and the participant is in no position to
-            # tidy it up; say which file and carry on with the rest.
-            skipped.append(f"{run.name}: {exc}")
-    session = sessions_root() / name
+    registered = _register(handover.path, name)
     mark_arrived(name, handover)
-    laps = len(list(session.glob("*.csv"))) if session.is_dir() else 0
-    return Registered(
-        session=name,
-        laps=laps,
-        background=background is not None,
-        views=views,
-        skipped=tuple(skipped),
-    )
+    return registered

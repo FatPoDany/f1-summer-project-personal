@@ -5,12 +5,14 @@ pipeline asynchronously; the race is not reviewable until that job finishes. So
 an upload that returns without polling has told the participant nothing useful.
 
 No credential lives in this repository. The token is read from the environment,
-and a missing one is an error with instructions rather than a silent
-unauthenticated attempt that comes back 401.
+or from the configuration file their own player kit ships, and a missing one is
+an error with instructions rather than a silent unauthenticated attempt that
+comes back 401.
 """
 
 import json
 import os
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -85,6 +87,13 @@ class Endpoint:
         return f"{self.review_origin.rstrip('/')}/"
 
 
+def _upload_limit(environ: dict[str, str]) -> float:
+    try:
+        return float(environ.get(MAX_UPLOAD_ENV) or DEFAULT_MAX_UPLOAD_MB)
+    except ValueError as exc:
+        raise IbmF1UploadError(f"{MAX_UPLOAD_ENV} must be a number of megabytes.") from exc
+
+
 def endpoint_from_env(environ: dict[str, str] | None = None) -> Endpoint:
     """Read where to send and what to send it with, from the environment only."""
     environ = os.environ if environ is None else environ
@@ -95,15 +104,100 @@ def endpoint_from_env(environ: dict[str, str] | None = None) -> Endpoint:
             ".env that is not committed) to the key the team issued for this "
             "workspace. It is never stored in this repository."
         )
-    try:
-        limit_mb = float(environ.get(MAX_UPLOAD_ENV) or DEFAULT_MAX_UPLOAD_MB)
-    except ValueError as exc:
-        raise IbmF1UploadError(f"{MAX_UPLOAD_ENV} must be a number of megabytes.") from exc
     return Endpoint(
         origin=(environ.get(ORIGIN_ENV) or DEFAULT_ORIGIN).strip(),
         token=token,
-        max_upload_bytes=int(limit_mb * 1024 * 1024),
+        max_upload_bytes=int(_upload_limit(environ) * 1024 * 1024),
         review_origin=(environ.get(REVIEW_ORIGIN_ENV) or DEFAULT_REVIEW_ORIGIN).strip(),
+    )
+
+
+# Their installer carries this file, with the same key inside every copy, and
+# their own deployment notes say in as many words that this token is not a
+# secret -- unlike the import credential, which is a different header and is
+# never read here. Reading their file is what lets the loop close on a machine
+# nobody will ever set an environment variable on, which is every machine a
+# participant sits at.
+KIT_CONFIG_NAME = "coach-endpoint.json"
+CONFIG_ENV = "IBMF1_ENDPOINT_FILE"
+
+
+def kit_config_candidates() -> tuple[Path, ...]:
+    """Where a shipped upload configuration may sit, most trusted first.
+
+    The workspace leads so one machine can be pointed elsewhere without touching
+    the install. Beside the executable comes next because that is where a frozen
+    build's own copy travels, alongside the TORCS and Granite runtimes that are
+    already found this way.
+    """
+    from f1coach_core.workspace import workspace_root
+
+    roots = [workspace_root(), Path(sys.executable).resolve().parent]
+    return tuple(root / KIT_CONFIG_NAME for root in roots)
+
+
+def endpoint_from_kit(
+    path: str | Path, environ: dict[str, str] | None = None
+) -> Endpoint:
+    """Build an endpoint from the configuration file their player kit ships.
+
+    Read with their key names so the file a researcher was handed works
+    unedited. Only the two origins and the token are taken: those are the three
+    things this module models. Their `import_path` and `job_path` are not read,
+    because the paths are constants here and reading them would create a file
+    that looks configurable while half of it is ignored.
+    """
+    environ = os.environ if environ is None else environ
+    path = Path(path)
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise IbmF1UploadError(f"Could not read {path}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise IbmF1UploadError(f"{path} is not valid JSON: {exc}") from exc
+    if not isinstance(config, dict):
+        raise IbmF1UploadError(f"{path} does not hold a Coach endpoint object.")
+    token = str(config.get("upload_token") or "").strip()
+    if not token:
+        raise IbmF1UploadError(
+            f"{path} carries no upload_token. It is the key their installer ships; "
+            f"set {TOKEN_ENV} instead if this machine was given one directly."
+        )
+    return Endpoint(
+        origin=(environ.get(ORIGIN_ENV) or config.get("upload_origin") or DEFAULT_ORIGIN).strip(),
+        token=token,
+        max_upload_bytes=int(_upload_limit(environ) * 1024 * 1024),
+        review_origin=(
+            environ.get(REVIEW_ORIGIN_ENV) or config.get("coach_origin") or DEFAULT_REVIEW_ORIGIN
+        ).strip(),
+    )
+
+
+def resolve_endpoint(
+    environ: dict[str, str] | None = None,
+    *,
+    candidates: tuple[Path, ...] | None = None,
+) -> Endpoint:
+    """Where to send this bundle, from whichever source this machine has.
+
+    An environment variable wins, because setting one is deliberate. A path
+    named in `IBMF1_ENDPOINT_FILE` that does not resolve is an error rather than
+    a fall through to the search: an explicit pointer that silently does nothing
+    is worse than no pointer.
+    """
+    environ = os.environ if environ is None else environ
+    if (environ.get(TOKEN_ENV) or "").strip():
+        return endpoint_from_env(environ)
+    named = (environ.get(CONFIG_ENV) or "").strip()
+    if named:
+        return endpoint_from_kit(named, environ)
+    for candidate in kit_config_candidates() if candidates is None else candidates:
+        if candidate.is_file():
+            return endpoint_from_kit(candidate, environ)
+    raise IbmF1UploadError(
+        f"No Coach upload key. Either set {TOKEN_ENV} in the environment, or put "
+        f"the {KIT_CONFIG_NAME} their installer ships next to the Apex executable "
+        "or in the Apex workspace. Neither is stored in this repository."
     )
 
 
@@ -279,7 +373,7 @@ def deliver(
     archive = Path(archive)
     if not archive.is_file():
         raise IbmF1UploadError(f"No bundle to upload: {archive}")
-    endpoint = endpoint or endpoint_from_env()
+    endpoint = endpoint or resolve_endpoint()
     last: _Busy | None = None
     for delay in (0, *delays_s):
         if delay:
