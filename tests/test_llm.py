@@ -7,7 +7,11 @@ from copy import deepcopy
 import pytest
 
 from f1coach_core import CoachingSchemaError, build_evidence_summary, load_sample_session
-from f1coach_core.coach import evidence_catalog, opportunity_catalog
+from f1coach_core.coach import (
+    coachable_corners,
+    evidence_catalog,
+    opportunity_catalog,
+)
 from f1coach_core.guidance import guidance_for
 from f1coach_core.llm import (
     PROMPT_VERSION,
@@ -15,6 +19,7 @@ from f1coach_core.llm import (
     build_coach_response_format,
     extract_json_object,
     report_from_llm_text,
+    report_over_rounds,
 )
 from sample_laps import slow_and_best, slow_lap
 
@@ -62,6 +67,12 @@ def test_prompt_carries_only_compact_coachable_evidence_and_the_contract(summary
         corner["corner"] = f"X{index + 1}"
         corner["time_lost_s"] = float(index + 1)
         packet["corners"].append(corner)
+    # One corner that lost nothing worth saying, to prove the prompt still drops
+    # what is not worth a model's time now that it no longer drops by rank.
+    quick = deepcopy(template)
+    quick["corner"] = "X9"
+    quick["time_lost_s"] = 0.004
+    packet["corners"].append(quick)
 
     prompt = build_coach_prompt(packet)
 
@@ -70,8 +81,12 @@ def test_prompt_carries_only_compact_coachable_evidence_and_the_contract(summary
     assert "Never invent" in prompt
     assert "at most once across the entire response" in prompt
     assert "must-not-enter-the-model" not in prompt  # unrelated bulk is removed
-    assert '"X8"' in prompt and '"X3"' in prompt  # six highest-loss corners survive
-    assert '"X2"' not in prompt and '"X1"' not in prompt
+    # Every corner that lost time reaches the model, not the worst six. Ranking
+    # still decides the order they are read in, and now nothing but the
+    # threshold decides whether they are read at all.
+    for index in range(8):
+        assert f'"X{index + 1}"' in prompt
+    assert '"X9"' not in prompt  # below the threshold, so nothing to advise on
 
 
 def test_response_format_is_strict_and_allows_only_available_citations(summary):
@@ -434,3 +449,134 @@ def test_the_model_s_own_wording_never_reaches_a_card():
     assert [item.corner for item in report.findings[0].evidence] == [citation["corner"]]
     assert report.findings[0].issue == guidance_for("brake_point").issue
     assert str(gap) not in report.findings[0].issue
+
+
+# --- reading a whole lap, three corners at a time -----------------------------
+#
+# One request carries three findings and a lap routinely has eight or nine
+# corners worth advising on, so a single request could never cover a lap. It was
+# not trying to: measured across the four collected sessions plus the sample,
+# 72 corners lost time, 60 reached the model, and 36 could ever be answered for.
+# The other half told the participant that no validated advice cited that
+# stretch, while its evidence sat in the pack the model had been handed.
+
+
+# Prose has to differ per finding or the validator merges them as one repeated
+# claim, and it may not contain digits, so the corner name cannot be used to
+# tell them apart.
+_ORDINALS = ("first", "second", "third", "fourth")
+
+
+def _round_answer(round_summary: dict) -> tuple[str, str]:
+    """One grounded finding for every corner this round is about."""
+    best: dict[str, dict] = {}
+    for citation in opportunity_catalog(round_summary).values():
+        best.setdefault(citation["corner"], citation)
+    findings = [
+        {
+            "focus": citation["focus"],
+            "issue": f"The {_ORDINALS[index]} opportunity is {citation['focus']}",
+            "cause": "The cited telemetry differs from the reference.",
+            "action": "Use a smoother and more repeatable technique here.",
+            "evidence": [{key: citation[key] for key in EVIDENCE_KEYS}],
+        }
+        for index, citation in enumerate(best.values())
+    ]
+    return json.dumps({"findings": findings}), "test-model"
+
+
+def test_every_coachable_corner_is_asked_about(summary):
+    asked = []
+
+    def ask(round_summary):
+        asked.append([corner["corner"] for corner in round_summary["corners"]])
+        return _round_answer(round_summary)
+
+    report_over_rounds(summary, ask=ask)
+
+    corners = [corner["corner"] for corner in coachable_corners(summary, limit=None)]
+    assert len(corners) > 3  # otherwise this asserts nothing about rounds
+    assert [name for batch in asked for name in batch] == corners
+    assert all(len(batch) <= 3 for batch in asked)
+
+
+def test_a_round_is_only_shown_the_corners_it_is_about(summary):
+    """So the citation schema cannot offer the model a corner to wander onto."""
+    seen = []
+
+    def ask(round_summary):
+        seen.append(round_summary)
+        return _round_answer(round_summary)
+
+    report_over_rounds(summary, ask=ask)
+
+    first, second = seen[0], seen[1]
+    assert not {c["corner"] for c in first["corners"]} & {
+        c["corner"] for c in second["corners"]
+    }
+    # Everything else about the lap still travels, or the model would be reading
+    # corners with no idea whose lap they are.
+    assert first["lap"] == summary["lap"]
+
+
+def test_findings_from_every_round_reach_one_report(summary):
+    report = report_over_rounds(summary, ask=_round_answer)
+
+    cited = {item.corner for finding in report.findings for item in finding.evidence}
+    # Every corner the model had something citable for. A corner can lose time
+    # and still carry no opportunity metric, and there is nothing to ground a
+    # finding on there -- that gap is upstream of the model, not a round it
+    # missed.
+    wanted = {citation["corner"] for citation in opportunity_catalog(summary).values()}
+    coachable = {corner["corner"] for corner in coachable_corners(summary, limit=None)}
+    assert len(coachable) > 3  # otherwise one request would have covered the lap
+    assert cited == wanted
+
+
+def test_one_unusable_round_does_not_cost_the_others(summary):
+    """A round that comes back as nonsense is three corners, not the lap."""
+    calls = []
+
+    def ask(round_summary):
+        calls.append(round_summary)
+        if len(calls) == 1:
+            return "not json at all", "test-model"
+        return _round_answer(round_summary)
+
+    report = report_over_rounds(summary, ask=ask)
+
+    assert len(calls) > 1
+    assert report.findings  # the later rounds still landed
+
+
+def test_when_every_round_fails_the_first_reason_is_the_one_reported(summary):
+    with pytest.raises(CoachingSchemaError):
+        report_over_rounds(summary, ask=lambda _s: ("not json at all", "test-model"))
+
+
+def test_a_corner_gets_one_round_and_is_not_asked_again(summary):
+    """The same request twice is the same answer twice, on a local model."""
+    asked = []
+
+    def ask(round_summary):
+        asked.append([corner["corner"] for corner in round_summary["corners"]])
+        return json.dumps({"findings": []}), "test-model"
+
+    report_over_rounds(summary, ask=ask)
+
+    names = [name for batch in asked for name in batch]
+    assert len(names) == len(set(names))
+    assert set(names) == {c["corner"] for c in coachable_corners(summary, limit=None)}
+
+
+def test_a_lap_with_nothing_to_advise_on_asks_nothing(summary):
+    quiet = {**summary, "corners": []}
+    asked = []
+
+    report = report_over_rounds(
+        quiet, ask=lambda s: (asked.append(s), ("", ""))[1], fallback_model="test-model"
+    )
+
+    assert asked == []
+    assert report.findings == ()
+    assert report.model == "test-model"  # stamped even though nothing was asked

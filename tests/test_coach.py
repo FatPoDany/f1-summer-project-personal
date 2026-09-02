@@ -11,7 +11,7 @@ from f1coach_core import (
     get_provider,
     load_sample_session,
 )
-from f1coach_core.coach import evidence_catalog
+from f1coach_core.coach import MAX_FINDINGS, coachable_corners, evidence_catalog
 from sample_laps import slow_and_best
 
 EVIDENCE_KEYS = ("metric", "corner", "value", "ref", "unit", "span_m")
@@ -156,10 +156,29 @@ def test_validator_rejects_extra_fields_at_every_contract_level(summary, level):
         coaching_report_from_dict(payload, summary)
 
 
-def test_validator_rejects_more_than_three_findings(summary):
+def test_a_report_may_carry_one_finding_for_every_coachable_corner(summary):
+    """The request limit is three; the report limit is the corner budget.
+
+    They were one number until 2026-09-02, and that made a limit on what a small
+    model answers well in one response into a limit on how much of a lap a
+    participant could be told about: measured over the collected sessions, half
+    the corners that lost time could never be answered for.
+    """
     payload = valid_payload(summary)
     payload["findings"] = [deepcopy(payload["findings"][0]) for _ in range(4)]
-    with pytest.raises(CoachingSchemaError, match="at most 3"):
+
+    report = coaching_report_from_dict(payload, summary)
+
+    assert len(report.findings) == 4
+
+
+def test_a_report_with_more_findings_than_corners_is_still_refused(summary):
+    """The cap is loosened, not removed: a report is still a bounded thing."""
+    payload = valid_payload(summary)
+    payload["findings"] = [
+        deepcopy(payload["findings"][0]) for _ in range(MAX_FINDINGS + 1)
+    ]
+    with pytest.raises(CoachingSchemaError, match=f"at most {MAX_FINDINGS}"):
         coaching_report_from_dict(payload, summary)
 
 
@@ -174,7 +193,9 @@ def test_mock_coach_grounds_findings_in_the_evidence(summary):
     report = get_provider("mock").generate(summary)
 
     assert report.model == "mock" and report.prompt_version == "mock-3"
-    assert 1 <= len(report.findings) <= 3
+    # One per coachable corner. The mock is what CI and the demo see, so a cap
+    # here would hide the gap the real providers were failing to close.
+    assert len(report.findings) == len(coachable_corners(summary))
     worst = max(summary["corners"], key=lambda corner: corner["time_lost_s"])
     assert worst["corner"] == report.findings[0].evidence[0].corner
     catalog = evidence_catalog(summary)

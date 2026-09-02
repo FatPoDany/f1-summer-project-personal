@@ -1,12 +1,13 @@
 """Evidence-grounded prompt, JSON Schema, extraction, and response validation."""
 
 import json
-from collections.abc import Sequence
+import math
+from collections.abc import Callable, Sequence
 
 from f1coach_core.coach import (
     EVIDENCE_METRICS,
     FOCUS_AREAS,
-    MAX_FINDINGS,
+    MAX_FINDINGS_PER_REQUEST,
     CoachingReport,
     CoachingSchemaError,
     coachable_corners,
@@ -16,7 +17,7 @@ from f1coach_core.coach import (
 from f1coach_core.features import CornerScatter
 from f1coach_core.guidance import guidance_for
 
-PROMPT_VERSION = "coach-v5"
+PROMPT_VERSION = "coach-v6"
 
 _METRIC_HELP = {
     "brake_point": "first rising crossing of 20% brake on the approach",
@@ -203,7 +204,7 @@ def build_coach_response_format(
             "findings": {
                 "type": "array",
                 "minItems": 1 if citations else 0,
-                "maxItems": MAX_FINDINGS if citations else 0,
+                "maxItems": MAX_FINDINGS_PER_REQUEST if citations else 0,
                 "items": finding,
             }
         },
@@ -333,7 +334,7 @@ def report_from_llm_text(
             used_citations.update(_citation_key(item) for item in additions)
             continue
 
-        if len(accepted) >= MAX_FINDINGS:
+        if len(accepted) >= MAX_FINDINGS_PER_REQUEST:
             continue
         claim_indexes[claim] = len(accepted)
         accepted.append(candidate)
@@ -347,6 +348,114 @@ def report_from_llm_text(
         opportunities_only=True,
         scatter=scatter,
     )
+
+
+def report_over_rounds(
+    evidence_summary: dict,
+    *,
+    ask: Callable[[dict], tuple[str, str]],
+    fallback_model: str = "",
+    device: str = "",
+    scatter: CornerScatter | None = None,
+    per_round: int = MAX_FINDINGS_PER_REQUEST,
+    on_round: Callable[[int, int], None] | None = None,
+) -> CoachingReport:
+    """Ask until every corner that lost time has been answered for.
+
+    One request can carry three findings, and a lap routinely has eight or nine
+    corners worth advising on, so a single request could never cover a lap. It
+    was not trying to: the request limit had become the review limit, and half
+    the corners a participant opened told them no advice cited that stretch
+    while their evidence sat in the pack the model had been handed.
+
+    Rounds rather than one larger request, because the limit of three is real.
+    A 3B model answering a strict schema keeps its footing at three findings and
+    loses it at nine -- repeated claims, dropped citations, truncated JSON. Each
+    round is handed only the corners still unanswered, so the prompt and the
+    citation schema both shrink: the model cannot cite a corner this round is
+    not about, and it has fewer things to confuse.
+
+    A corner gets one round. If the model says nothing usable about it, the
+    corner is not carried into the next round -- the same request twice is the
+    same answer twice, and a participant waiting on a local model should not pay
+    for it.
+
+    ``ask`` takes the summary for one round and returns that round's raw text
+    and the model name that served it. Everything else -- transport, streaming,
+    authentication -- stays with the provider.
+    """
+    remaining = coachable_corners(evidence_summary, limit=None)
+    rounds = math.ceil(len(remaining) / per_round)
+    accepted: list[dict] = []
+    # A lap with nothing worth advising on asks nothing, and still has to say
+    # which model was not asked: the report is stamped either way, and a
+    # participant's exposure record needs to name the build that read the lap
+    # even when it had nothing to say about it.
+    served = fallback_model
+    first_error: CoachingSchemaError | None = None
+    for number in range(rounds):
+        batch = remaining[number * per_round : (number + 1) * per_round]
+        if not batch:
+            break
+        if on_round is not None:
+            on_round(number + 1, rounds)
+        round_summary = {**evidence_summary, "corners": batch}
+        text, model_name = ask(round_summary)
+        served = model_name or served
+        try:
+            report = report_from_llm_text(
+                text,
+                model=model_name,
+                evidence_summary=round_summary,
+                device=device,
+                scatter=scatter,
+            )
+        except CoachingSchemaError as exc:
+            # One unusable round must not cost the corners the other rounds
+            # answered for. Kept in case every round fails, where the first
+            # reason is the one worth reporting.
+            if first_error is None:
+                first_error = exc
+            continue
+        accepted.extend(_as_finding_dicts(report))
+
+    if not accepted and first_error is not None:
+        raise first_error
+    return coaching_report_from_dict(
+        {"findings": accepted, "model": served, "prompt_version": PROMPT_VERSION},
+        evidence_summary,
+        opportunities_only=True,
+        scatter=scatter,
+    )
+
+
+def _as_finding_dicts(report: CoachingReport) -> list[dict]:
+    """A validated report back into the shape the validator takes.
+
+    Round-tripping rather than keeping the raw text: what comes back out has
+    already passed the contract and the exact evidence check, so assembling the
+    lap's report from these cannot smuggle in a claim that failed a round.
+    """
+    return [
+        {
+            "focus": finding.focus,
+            "issue": finding.issue,
+            "cause": finding.cause,
+            "action": finding.action,
+            "evidence": [
+                {
+                    "corner": item.corner,
+                    "metric": item.metric,
+                    "value": item.value,
+                    "ref": item.ref,
+                    "unit": item.unit,
+                    "span_m": [item.span[0], item.span[1]],
+                }
+                for item in finding.evidence
+            ],
+        }
+        for finding in report.findings
+    ]
 
 
 def _citation_key(item: dict) -> tuple[str, str]:

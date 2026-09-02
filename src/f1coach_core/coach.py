@@ -33,9 +33,28 @@ from f1coach_core.features import (
 from f1coach_core.guidance import guidance_for
 
 FOCUS_AREAS = ("braking", "cornering", "throttle")
-MAX_FINDINGS = 3
+# How many findings ONE model request may return. Three, because that is what a
+# small local model answers well in one strict-JSON response; asking a 3B model
+# for nine at once is where the answers start repeating and the schema starts
+# failing. It is a limit on the request, not on the review.
+MAX_FINDINGS_PER_REQUEST = 3
+
+# How many findings a finished report may carry. Every corner that lost time
+# should have one, so this is the corner budget rather than the request budget.
+#
+# These were one constant until 2026-09-02, and that made the request limit into
+# the review limit: measured across the four collected sessions plus the sample,
+# 72 corners lost time, 60 of them reached the model, and only 36 could ever be
+# answered. Half the corners a participant looked at said "no validated AI
+# advice cited this exact stretch" while their evidence was sitting in the pack
+# the model had been given.
+MAX_FINDINGS = 12
 MIN_TIME_LOST = 0.05
-MAX_COACHING_CORNERS = 6
+
+# How many corners the review will pursue. A full aalborg lap has ten; the old
+# value of six meant the corners ranked seventh and worse never reached a model
+# at all, however much time they had cost.
+MAX_COACHING_CORNERS = 12
 
 # Public metric names in the coaching contract -> fields in one corner's
 # deterministic evidence packet.  Providers may choose the prose, but every
@@ -202,8 +221,14 @@ def _require_measurement_free_prose(value: str, where: str) -> None:
     )
 
 
-def coachable_corners(evidence_summary: dict) -> list[dict]:
-    """Return the most relevant corner packets that fit the model context."""
+def coachable_corners(
+    evidence_summary: dict, *, limit: int | None = MAX_COACHING_CORNERS
+) -> list[dict]:
+    """Every corner worth advising on, worst first.
+
+    ``limit`` bounds the review, not one request: the caller that asks a model
+    takes these in batches. Pass None for the whole eligible set.
+    """
     single_lap = evidence_summary.get("analysis_mode") == "single_lap"
     eligible: list[dict] = []
     for corner in evidence_summary.get("corners", []):
@@ -218,9 +243,8 @@ def coachable_corners(evidence_summary: dict) -> list[dict]:
         if not math.isfinite(score) or below_threshold:
             continue
         eligible.append(corner)
-    return sorted(eligible, key=lambda corner: float(corner[score_key]), reverse=True)[
-        :MAX_COACHING_CORNERS
-    ]
+    ranked = sorted(eligible, key=lambda corner: float(corner[score_key]), reverse=True)
+    return ranked if limit is None else ranked[:limit]
 
 
 def evidence_catalog(evidence_summary: dict) -> dict[tuple[str, str], dict]:
@@ -544,6 +568,9 @@ class MockCoach(CoachProvider):
     """
 
     name = "mock"
+    # Covers every coachable corner rather than the first three. The mock is what
+    # CI and the demo see, so a cap here would hide the very gap this limit was
+    # raised to close.
     MAX_FINDINGS = MAX_FINDINGS
     MIN_TIME_LOST = MIN_TIME_LOST  # seconds — below this a corner isn't worth a finding
 

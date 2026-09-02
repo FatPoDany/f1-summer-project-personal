@@ -19,7 +19,7 @@ from f1coach_core.coach import CoachingReport, CoachProvider
 from f1coach_core.llm import (
     build_coach_prompt,
     build_coach_response_format,
-    report_from_llm_text,
+    report_over_rounds,
 )
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8080/v1"
@@ -104,6 +104,30 @@ class GraniteCoach(CoachProvider):
         evidence_summary: dict,
         on_progress: Callable[[str], None] | None = None,
     ) -> CoachingReport:
+        def ask(round_summary: dict) -> tuple[str, str]:
+            return self._one_round(round_summary, on_progress)
+
+        return report_over_rounds(
+            evidence_summary,
+            ask=ask,
+            fallback_model=self.model,
+            device=self.device,
+            scatter=self.scatter,
+            on_round=(
+                None
+                if on_progress is None
+                else lambda number, total: on_progress(
+                    f"Reading the corners, {number} of {total}…"
+                )
+            ),
+        )
+
+    def _one_round(
+        self,
+        evidence_summary: dict,
+        on_progress: Callable[[str], None] | None,
+    ) -> tuple[str, str]:
+        """One request, for the corners this round is about."""
         prompt = build_coach_prompt(evidence_summary, self.scatter, self.prior_advice)
         payload = {
             "model": self.model,
@@ -141,15 +165,7 @@ class GraniteCoach(CoachProvider):
             )
         if on_progress is not None and not streamed:
             on_progress(raw_text)
-
-        served_model = str(response.get("model") or self.model)
-        return report_from_llm_text(
-            raw_text,
-            model=served_model,
-            evidence_summary=evidence_summary,
-            device=self.device,
-            scatter=self.scatter,
-        )
+        return raw_text, str(response.get("model") or self.model)
 
     def _request(
         self,

@@ -103,13 +103,20 @@ def _kind_suffix(point) -> str:
 
 
 def _loss_suffix(point) -> str:
-    """What the corner cost, or nothing at all.
+    """What the corner cost, or gained, or nothing at all.
 
     A single-lap review has no reference and therefore no loss. Printing "0.00 s
     lost" there would assert a measurement nobody made.
+
+    A negative loss is a gain, and "-0.90 s lost" is not how anybody reads that.
+    Measured on real laps: two of the ten corners in a sample lap were quicker
+    than the reference, one of them by 0.9 s, and the driver was told they had
+    lost negative time there.
     """
     if point.time_lost_s is None:
         return ""
+    if point.time_lost_s < 0:
+        return f"   —   {abs(point.time_lost_s):.2f} s quicker"
     return f"   —   {point.time_lost_s:.2f} s lost"
 
 
@@ -509,6 +516,11 @@ class ReplayWindow(QDialog):
             self._load(index)
             self.stretchChanged.emit(index)
 
+    @staticmethod
+    def _was_quicker(point) -> bool:
+        """This corner gained time rather than losing it."""
+        return point.time_lost_s is not None and point.time_lost_s < 0
+
     def _describe(self, index: int, point, fallback_note: str) -> None:
         """Fill the advice column, saying plainly when there is no advice to give."""
         self._headline.setText(f"{point.corner}{_kind_suffix(point)}{_loss_suffix(point)}")
@@ -520,6 +532,18 @@ class ReplayWindow(QDialog):
         self._observation.setText(observation or point.difference or fallback_note)
         if instruction:
             self._advice.setText(f"Next lap: {instruction}")
+            self._advice.show()
+        elif self._was_quicker(point):
+            # Not a gap in the coaching. The driver did this corner better than
+            # the lap being compared against, and there is nothing measured here
+            # to change. Saying "no advice cited this stretch" at the one corner
+            # somebody got right reads as a failure of theirs rather than as the
+            # result it is.
+            self._advice.setText(
+                f"You were {abs(point.time_lost_s):.2f} s quicker than the "
+                "compared lap through here — nothing to change. The measurements "
+                "are below."
+            )
             self._advice.show()
         elif point.category and self._advice_complete:
             self._advice.setText(

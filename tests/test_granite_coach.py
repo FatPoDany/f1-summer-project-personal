@@ -7,10 +7,23 @@ import urllib.error
 import pytest
 
 from f1coach_core import build_evidence_summary
-from f1coach_core.coach import opportunity_catalog
+from f1coach_core.coach import coachable_corners, opportunity_catalog
 from f1coach_core.granite_coach import GraniteCoach, GraniteCoachError
 from f1coach_core.llm import build_coach_response_format
 from sample_laps import slow_and_best, slow_lap
+
+
+def _round(number: int, total: int) -> str:
+    """What the provider says before each request.
+
+    A lap with more coachable corners than one request can answer is read in
+    rounds, and the wait is long enough that saying nothing looks like a stall.
+    It travels on the same channel as the streamed text because that channel is
+    a status line the panel replaces rather than appends to, and a human
+    sentence already goes down it -- "Starting the coach. The first time takes
+    a minute".
+    """
+    return f"Reading the corners, {number} of {total}…"
 
 
 @pytest.fixture(scope="module")
@@ -18,11 +31,24 @@ def summary():
     return build_evidence_summary(*slow_and_best())
 
 
+@pytest.fixture(scope="module")
+def one_corner(summary):
+    """A lap narrowed to a single coachable corner, so one request reads it all.
+
+    The tests below are about the transport and the schema it is handed. The
+    real lap has eight corners worth advising on, which is three rounds and
+    three transports, and a transport test that also exercises the round loop
+    fails for two unrelated reasons at once. The round loop has its own tests.
+    """
+    corners = coachable_corners(summary, limit=None)
+    return {**summary, "corners": corners[:1]}
+
+
 def empty_report() -> str:
     return json.dumps({"findings": []})
 
 
-def test_posts_to_openai_endpoint_with_strict_dynamic_schema_and_stamps_model(summary):
+def test_posts_to_openai_endpoint_with_strict_dynamic_schema_and_stamps_model(one_corner):
     captured = {}
     raw = empty_report()
 
@@ -38,7 +64,7 @@ def test_posts_to_openai_endpoint_with_strict_dynamic_schema_and_stamps_model(su
         transport=transport,
         api_key="test-only",
         timeout_s=3,
-    ).generate(summary, on_progress=progress.append)
+    ).generate(one_corner, on_progress=progress.append)
 
     assert captured["url"] == "http://127.0.0.1:8080/v1/chat/completions"
     assert captured["timeout"] == 3
@@ -46,15 +72,15 @@ def test_posts_to_openai_endpoint_with_strict_dynamic_schema_and_stamps_model(su
     assert captured["payload"]["model"] == "ibm-granite/granite-4.1-3b"
     assert captured["payload"]["temperature"] == 0.0
     assert captured["payload"]["stream"] is True
-    assert captured["payload"]["response_format"] == build_coach_response_format(summary)
+    assert captured["payload"]["response_format"] == build_coach_response_format(one_corner)
     assert captured["payload"]["response_format"]["type"] == "json_schema"
     assert captured["payload"]["response_format"]["json_schema"]["strict"] is True
     assert "never invent values" in captured["payload"]["messages"][0]["content"]
     assert report.model == "served/granite-4.1-3b"
-    assert progress == [raw]
+    assert progress == [_round(1, 1), raw]
 
 
-def test_streams_openai_chunks_and_reports_accumulated_progress(summary):
+def test_streams_openai_chunks_and_reports_accumulated_progress(one_corner):
     captured = {}
 
     def transport(url, payload, headers, timeout):
@@ -72,17 +98,17 @@ def test_streams_openai_chunks_and_reports_accumulated_progress(summary):
 
     progress = []
     report = GraniteCoach(transport=transport).generate(
-        summary, on_progress=progress.append
+        one_corner, on_progress=progress.append
     )
 
     assert captured["payload"]["stream"] is True
-    assert progress == ['{"findings":', '{"findings":[]}']
+    assert progress == [_round(1, 1), '{"findings":', '{"findings":[]}']
     assert report.findings == ()
     assert report.model == "served/granite-4.1-3b"
 
 
 def test_default_transport_reads_sse_and_ignores_heartbeats(
-    summary, monkeypatch
+    one_corner, monkeypatch
 ):
     class Response:
         def __enter__(self):
@@ -116,17 +142,17 @@ def test_default_transport_reads_sse_and_ignores_heartbeats(
     progress = []
 
     report = GraniteCoach(timeout_s=9).generate(
-        summary, on_progress=progress.append
+        one_corner, on_progress=progress.append
     )
 
     assert captured["timeout"] == 9
     assert captured["payload"]["stream"] is True
-    assert progress == ['{"findings":', '{"findings":[]}']
+    assert progress == [_round(1, 1), '{"findings":', '{"findings":[]}']
     assert report.findings == ()
     assert report.model == "served/granite"
 
 
-def test_stream_error_is_readable_and_preserves_partial_progress(summary):
+def test_stream_error_is_readable_and_preserves_partial_progress(one_corner):
     def transport(url, payload, headers, timeout):
         return iter(
             [
@@ -138,10 +164,10 @@ def test_stream_error_is_readable_and_preserves_partial_progress(summary):
     progress = []
     with pytest.raises(GraniteCoachError, match="slot unavailable"):
         GraniteCoach(transport=transport).generate(
-            summary, on_progress=progress.append
+            one_corner, on_progress=progress.append
         )
 
-    assert progress == ['{"findings":']
+    assert progress == [_round(1, 1), '{"findings":']
 
 
 def test_an_answer_cut_off_by_the_context_limit_says_so(summary):
