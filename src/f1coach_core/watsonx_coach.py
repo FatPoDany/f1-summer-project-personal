@@ -21,7 +21,7 @@ import keyring
 import keyring.errors
 
 from f1coach_core.coach import CoachingReport, CoachProvider
-from f1coach_core.llm import build_coach_prompt, report_from_llm_text
+from f1coach_core.llm import build_coach_prompt, report_over_rounds
 
 KEYRING_SERVICE = "apex-watsonx"
 DEFAULT_URL = "https://eu-gb.ml.cloud.ibm.com"
@@ -119,13 +119,17 @@ class WatsonxCoach(CoachProvider):
         evidence_summary: dict,
         on_progress: Callable[[str], None] | None = None,
     ) -> CoachingReport:
-        text = self.stream_completion(
-            build_coach_prompt(evidence_summary, self.scatter, self.prior_advice), on_progress
-        )
-        return report_from_llm_text(
-            text,
-            model=self.model_id,
-            evidence_summary=evidence_summary,
+        def ask(round_summary: dict) -> tuple[str, str]:
+            text = self.stream_completion(
+                build_coach_prompt(round_summary, self.scatter, self.prior_advice),
+                on_progress,
+            )
+            return text, self.model_id
+
+        return report_over_rounds(
+            evidence_summary,
+            ask=ask,
+            fallback_model=self.model_id,
             device=self.device,
             scatter=self.scatter,
         )

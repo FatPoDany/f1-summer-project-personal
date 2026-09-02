@@ -12,7 +12,7 @@ import urllib.request
 from collections.abc import Callable, Iterable, Iterator
 
 from f1coach_core.coach import CoachingReport, CoachProvider
-from f1coach_core.llm import build_coach_prompt, report_from_llm_text
+from f1coach_core.llm import build_coach_prompt, report_over_rounds
 
 DEFAULT_URL = "http://localhost:11434"
 DEFAULT_MODEL = "granite3.3:8b"
@@ -107,13 +107,17 @@ class OllamaCoach(CoachProvider):
         evidence_summary: dict,
         on_progress: Callable[[str], None] | None = None,
     ) -> CoachingReport:
-        text = self.stream_completion(
-            build_coach_prompt(evidence_summary, self.scatter, self.prior_advice), on_progress
-        )
-        return report_from_llm_text(
-            text,
-            model=f"ollama/{self.model}",
-            evidence_summary=evidence_summary,
+        def ask(round_summary: dict) -> tuple[str, str]:
+            text = self.stream_completion(
+                build_coach_prompt(round_summary, self.scatter, self.prior_advice),
+                on_progress,
+            )
+            return text, f"ollama/{self.model}"
+
+        return report_over_rounds(
+            evidence_summary,
+            ask=ask,
+            fallback_model=f"ollama/{self.model}",
             device=self.device,
             scatter=self.scatter,
         )

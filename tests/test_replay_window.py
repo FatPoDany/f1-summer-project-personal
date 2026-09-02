@@ -979,3 +979,33 @@ def test_advice_that_lands_while_the_corner_is_open_still_counts_as_read(qtbot):
 
     assert written[0].advice is True
     assert written[0].seconds == 20.0
+
+
+def test_a_corner_the_driver_was_quicker_through_is_not_reported_as_a_gap(qtbot):
+    """Two of the ten corners in a real lap were quicker than the reference.
+
+    One of them by 0.9 s, and the driver was shown "no validated AI advice cited
+    this exact stretch" and "-0.90 s lost". At the one corner somebody got right,
+    that reads as a failure of theirs rather than as the result it is -- and
+    there is nothing measured there to change, so an instruction would be
+    invented.
+    """
+    from apex.widgets.replay_window import ReplayWindow
+    from f1coach_core.debrief import DebriefPoint
+
+    quicker = DebriefPoint(
+        corner="T5", apex_m=500.0, span_m=(450.0, 560.0), time_lost_s=-0.898,
+        difference="carried more speed", detail="you 131 km/h, best 118 km/h",
+        category="cornering",
+    )
+    window = ReplayWindow()
+    qtbot.addWidget(window)
+    window.show_stretch(_positioned_lap(20.0), quicker)
+    window.update_advice({}, complete=True)
+
+    assert "0.90 s quicker" in window._advice.text()
+    assert "nothing to change" in window._advice.text()
+    assert "no validated AI advice" not in window._advice.text()
+    # And the heading says gained, not "-0.90 s lost".
+    assert "0.90 s quicker" in window._headline.text()
+    assert "lost" not in window._headline.text()
