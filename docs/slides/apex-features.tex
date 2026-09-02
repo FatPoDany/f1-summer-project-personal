@@ -170,15 +170,15 @@
     \midrule
     Garage        & Everyone      & Session library, lap table, import and watched folders \\
     Collect Data  & Participant   & Guided three-step capture; opens the assigned TORCS race \\
-    Robot Pilot   & Facilitator   & Unattended synthetic reference batches (pipeline testing) \\
+    Session Debrief & Everyone    & Whole-run measurements and written coaching \\
     Lap Analysis  & Everyone      & Traces, corner table, driver debrief, Granite race engineer \\
     Compare       & Everyone      & Two laps on a shared distance axis with cumulative delta \\
-    Live Pit Wall & Operator      & Live telemetry, tyre state and validated Granite advice \\
+    Study Results & Researcher    & Paired participant results and analysis-ready CSV export \\
     \bottomrule
   \end{tabular}
   \par\vspace{0.9em}
-  {\footnotesize\color{cgray}Robot Pilot is hidden unless \code{APEX\_RESEARCH\_MODE=1};
-  participants never see it.}
+  {\footnotesize\color{cgray}Study Results is hidden unless
+  \code{APEX\_RESEARCH\_MODE=1}; participants never see it.}
 \end{frame}
 
 % ==========================================================================
@@ -220,27 +220,6 @@
   {\scriptsize\color{cgray}Apex opens the assigned five-lap race directly and finishes the import when
   TORCS closes. The final page ends with the two actions a participant needs --- \emph{Collect another
   session} and \emph{View my laps} --- and names the folder to send to the researchers.}
-\end{frame}
-
-% ==========================================================================
-\begin{frame}{Robot Pilot --- validating the pipeline before recruitment}{Facilitator-only; synthetic runs are never presented as participant data}
-  \begin{columns}[T]
-  \begin{column}{0.62\textwidth}
-    \shot{05-robot-pilot.png}
-  \end{column}
-  \begin{column}{0.36\textwidth}\footnotesize
-    \begin{itemize}\itemsep3pt
-      \item Runs a \kw{pinned built-in robot} (\code{berniw} index 9) on the same
-            track and car, three laps per session.
-      \item 1--20 sequential unattended sessions; each is validated and imported
-            exactly like a human capture.
-      \item Stored separately under \code{captures/synthetic/} with
-            \code{synthetic-robot} provenance and \code{SIM-BERNIW9-NNN} ids.
-      \item The banner states the limit plainly: these runs test the collection
-            pipeline; they cannot show that coaching changes human behaviour.
-    \end{itemize}
-  \end{column}
-  \end{columns}
 \end{frame}
 
 % ==========================================================================
@@ -334,15 +313,6 @@
 \end{frame}
 
 % ==========================================================================
-\begin{frame}{Live Pit Wall --- advice while the car is running}
-  \shot{10-live-pit-wall.png}
-  \vspace{-1pt}
-  {\scriptsize\color{cgray}Bridge health, tyre state and a real Granite 4.1 response with its measured
-  latency. Advice is asynchronous and latest-only: a slow model delays advice, never the car. Stale advice
-  is labelled rather than silently shown, and the evidence box lists the values it may rest on.}
-\end{frame}
-
-% ==========================================================================
 \begin{frame}{Audit --- the record behind every answer}{Prompt, raw response, evidence packet and outcome, in one file per run}
   \begin{columns}[T]
   \begin{column}{0.56\textwidth}
@@ -420,7 +390,7 @@
       \item All six screens implemented and under test.
       \item Native TORCS 1.3.9 overlay: human telemetry recorder, SCR robot
             bridge, locked study preset.
-      \item Local Granite 4.1 integration end to end, post-lap and live, with
+      \item Local Granite 4.1 integration end to end for post-lap review, with
             validation and audit records.
       \item Human capture, synthetic reference capture, and the full storage
             contract.
@@ -469,17 +439,15 @@
   \begin{itemize}\itemsep4pt
     \item Every screenshot is the current build, rendered headless from the
           repository at commit \code{d33350d} on 18 August 2026.
-    \item The coaching content on the Analysis and Live Pit Wall slides is a
+    \item The coaching content on the Analysis slide is a
           \kw{real response} from the local \code{ibm-granite/granite-4.1-3b}
-          server, not a mock or a canned reply. Latency shown is measured.
+          server, not a mock or a canned reply.
     \item The Garage, Analysis, Debrief and Compare screens use the bundled
-          three-lap sample session, which ships with the application.
+          five-lap sample session, which ships with the application.
     \item The Replay screen uses a real captured drive, because that is the data
           that carries world position.
-    \item On the Collect Data and Robot Pilot slides the \kw{screens are real}
-          but are shown in their completed states; running them for the
-          screenshot would have required a live TORCS session and a full
-          synthetic batch.
+    \item The Collect Data screen is real but shown in its completed state;
+          running it for the screenshot would have required a live TORCS session.
   \end{itemize}
 \end{frame}
 

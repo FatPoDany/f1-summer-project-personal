@@ -1,5 +1,8 @@
-"""The window shell: Garage, analysis, comparison, and Live Pit Wall views,
-plus menu, drag-and-drop, and status line.
+"""The post-session window shell: collection, Garage, debrief and analysis.
+
+The application intentionally stays focused on the same capture -> evidence ->
+review workflow as the team IBMF1 repository. The former live-coaching screen
+was a separate intervention and is no longer part of Apex.
 
 Dropping or opening a canonical lap CSV goes straight to Lap Analysis;
 a TORCS run export is split into laps and lands as a session in the Garage.
@@ -18,7 +21,15 @@ from PySide6.QtGui import (
     QDropEvent,
     QKeySequence,
 )
-from PySide6.QtWidgets import QFileDialog, QMainWindow, QMessageBox, QStackedWidget
+from PySide6.QtWidgets import (
+    QFileDialog,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QSizePolicy,
+    QStackedWidget,
+    QWidget,
+)
 
 from apex.analysis_view import AnalysisView
 from apex.capture_view import CaptureGuideView, _saved_summary
@@ -26,9 +37,7 @@ from apex.coaching_queue import GarageCoachingQueue
 from apex.compare_view import CompareView
 from apex.debrief_view import SessionDebriefView
 from apex.garage_view import GarageView
-from apex.live_view import LivePitWallView
 from apex.study_view import StudyView
-from apex.synthetic_capture_view import SyntheticCaptureView
 from f1coach_core import (
     Lap,
     Session,
@@ -46,8 +55,8 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Apex")
-        self.setMinimumSize(960, 540)
-        self.resize(1280, 720)
+        self.setMinimumSize(1080, 640)
+        self.resize(1440, 850)
         self.setAcceptDrops(True)
         self._opened_capture_runs: set[Path] = set()
 
@@ -64,7 +73,6 @@ class MainWindow(QMainWindow):
 
         self._garage = GarageView(self)
         self._capture = CaptureGuideView(self)
-        self._synthetic = SyntheticCaptureView(self) if _research_mode_enabled() else None
         self._analysis = AnalysisView(
             self,
             coach_pool=self._coaching_pool,
@@ -77,24 +85,16 @@ class MainWindow(QMainWindow):
         self._debrief = SessionDebriefView(
             self, pool=self._coaching_pool, server=self._coaching_server
         )
-        # Live coaching is a different intervention from the post-drive coaching
-        # the study is testing. A participant who used it is no longer a subject
-        # who only received a debrief, so it stays out of their reach.
         research = _research_mode_enabled()
-        self._live = LivePitWallView(self) if research else None
         self._study = StudyView(self) if research else None
         self._stacked = QStackedWidget(self)
         self._stacked.addWidget(self._garage)
         self._stacked.addWidget(self._capture)
-        if self._synthetic is not None:
-            self._stacked.addWidget(self._synthetic)
         self._stacked.addWidget(self._debrief)
         self._stacked.addWidget(self._analysis)
         self._stacked.addWidget(self._compare)
         if self._study is not None:
             self._stacked.addWidget(self._study)
-        if self._live is not None:
-            self._stacked.addWidget(self._live)
         self.setCentralWidget(self._stacked)
 
         self._garage.lapOpened.connect(self.show_analysis)
@@ -106,10 +106,6 @@ class MainWindow(QMainWindow):
         self._garage.status.connect(lambda text: self.statusBar().showMessage(text))
         self._capture.resultsRequested.connect(self._open_captured_runs)
         self._capture.sessionFinished.connect(self._capture_completed)
-        if self._synthetic is not None:
-            self._synthetic.resultsRequested.connect(self._open_captured_runs)
-            self._synthetic.batchFinished.connect(self._synthetic_completed)
-
         self._build_menu_and_toolbar()
         self._garage.refresh_sessions()
 
@@ -171,12 +167,6 @@ class MainWindow(QMainWindow):
         # Navigation is left alone so the hand-over instructions stay on screen.
         self._open_captured_runs(run_dirs, navigate=False)
         self.statusBar().showMessage(f"Driving data saved — {_saved_summary(run_dirs)}")
-
-    def _synthetic_completed(self, _batch_dir: str, run_dirs: list[str]) -> None:
-        self.statusBar().showMessage(
-            f"Synthetic reference batch saved — {len(run_dirs)} validated run"
-            f"{'s' if len(run_dirs) != 1 else ''} ready for analysis"
-        )
 
     def _open_captured_runs(self, run_dirs: list[str], navigate: bool = True) -> None:
         summaries = []
@@ -263,8 +253,7 @@ class MainWindow(QMainWindow):
         self._research_action = QAction("Research tools", self, checkable=True)
         self._research_action.setChecked(_research_mode_enabled())
         self._research_action.setToolTip(
-            "Study Results, Robot Pilot and Live Pit Wall. Off for participants: "
-            "live coaching is a different intervention from the one being tested."
+            "Show the researcher-only Study Results screen. Off for participants."
         )
         self._research_action.toggled.connect(self._set_research_mode)
         view_menu.addAction(self._research_action)
@@ -290,6 +279,10 @@ class MainWindow(QMainWindow):
 
         toolbar = self.addToolBar("Views")
         toolbar.setMovable(False)
+        brand = QLabel("APEX")
+        brand.setObjectName("brand")
+        toolbar.addWidget(brand)
+        toolbar.addSeparator()
         group = QActionGroup(self)
         self._garage_action = QAction("Garage", self, checkable=True, checked=True)
         self._garage_action.triggered.connect(
@@ -299,15 +292,6 @@ class MainWindow(QMainWindow):
         self._capture_action.triggered.connect(
             lambda: self._stacked.setCurrentWidget(self._capture)
         )
-        self._synthetic_action = None
-        if self._synthetic is not None:
-            self._synthetic_action = QAction("Robot Pilot", self, checkable=True)
-            self._synthetic_action.setToolTip(
-                "Facilitator-only synthetic reference collection"
-            )
-            self._synthetic_action.triggered.connect(
-                lambda: self._stacked.setCurrentWidget(self._synthetic)
-            )
         self._debrief_action = QAction("Session Debrief", self, checkable=True)
         self._debrief_action.setEnabled(False)  # until a session is opened into it
         self._debrief_action.setToolTip(
@@ -335,26 +319,25 @@ class MainWindow(QMainWindow):
             )
             self._study_action.triggered.connect(self._show_study)
             self._study.status.connect(lambda text: self.statusBar().showMessage(text))
-        self._live_action = None
-        if self._live is not None:
-            self._live_action = QAction("Live Pit Wall", self, checkable=True)
-            self._live_action.triggered.connect(
-                lambda: self._stacked.setCurrentWidget(self._live)
-            )
         for action in (
             self._garage_action,
             self._capture_action,
-            self._synthetic_action,
             self._debrief_action,
             self._analysis_action,
             self._compare_action,
             self._study_action,
-            self._live_action,
         ):
             if action is None:
                 continue
             group.addAction(action)
             toolbar.addAction(action)
+        spacer = QWidget(toolbar)
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        spacer.setStyleSheet("background: transparent;")
+        toolbar.addWidget(spacer)
+        mode = QLabel("POST-SESSION REVIEW")
+        mode.setObjectName("modeBadge")
+        toolbar.addWidget(mode)
         self._stacked.currentChanged.connect(self._sync_view_actions)
 
     def _sync_view_actions(self, index: int) -> None:
@@ -363,11 +346,10 @@ class MainWindow(QMainWindow):
         for view, action in (
             (self._garage, self._garage_action),
             (self._capture, self._capture_action),
-            (self._synthetic, self._synthetic_action),
             (self._debrief, self._debrief_action),
             (self._analysis, self._analysis_action),
             (self._compare, self._compare_action),
-            (self._live, self._live_action),
+            (self._study, self._study_action),
         ):
             if action is not None and widget is view:
                 action.setChecked(True)
@@ -375,10 +357,6 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:
         """Bound shutdown time while asking an active capture to brake and stop."""
         self._capture.shutdown(timeout_s=2.0)
-        if self._synthetic is not None:
-            self._synthetic.shutdown(timeout_s=2.0)
-        if self._live is not None:
-            self._live.shutdown(timeout_s=2.0)
         # The model server is a child process holding 2.1 GB; leaving it behind
         # would keep that resident after the window is gone.
         self._coaching_queue.shutdown()

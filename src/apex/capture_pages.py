@@ -133,6 +133,7 @@ class CaptureSetupPage(QWidget):
         buttons = QHBoxLayout()
         buttons.addStretch(1)
         self.start_button = QPushButton("Open TORCS and start recording")
+        self.start_button.setObjectName("primary")
         self.start_button.setMinimumHeight(44)
         buttons.addWidget(self.start_button)
 
@@ -238,6 +239,7 @@ class CaptureDrivePage(QWidget):
         self.status.setWordWrap(True)
         self.status.setStyleSheet(f"color: {theme.YELLOW};")
         self.stop_button = QPushButton("Stop this collection")
+        self.stop_button.setObjectName("danger")
         self.stop_button.setMinimumHeight(44)
         layout.addWidget(self.heading)
         layout.addWidget(detail)
@@ -277,13 +279,16 @@ class CaptureCompletePage(QWidget):
         # First and widest: for the study, handing the data over is the point of
         # the session, and it is the one step nothing else in Apex can do for them.
         self.package_button = QPushButton("Save a file to send")
+        self.package_button.setObjectName("primary")
         self.package_button.setMinimumHeight(44)
         self.package_button.setToolTip(
             "One file containing this session, checksummed so damage in transit shows up"
         )
         self.new_session_button = QPushButton("Collect another session")
+        self.new_session_button.setObjectName("quiet")
         self.new_session_button.setMinimumHeight(44)
         self.open_results_button = QPushButton("View my laps")
+        self.open_results_button.setObjectName("primary")
         self.open_results_button.setMinimumHeight(44)
         buttons.addWidget(self.package_button)
         buttons.addWidget(self.new_session_button)

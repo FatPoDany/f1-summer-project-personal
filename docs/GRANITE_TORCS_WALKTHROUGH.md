@@ -14,7 +14,7 @@ TORCS physics (500 Hz)
   -> one-slot asynchronous snapshot queue
   -> llama-server -> IBM Granite 4.1 3B Q4_K_M
   -> strict JSON Schema + exact telemetry evidence validation
-  -> Apex Live Pit Wall + TORCS Driver Board + append-only JSONL audit
+  -> TORCS Driver Board + append-only JSONL audit
 ```
 
 The language model is outside the control loop. At the observed CPU speed a
@@ -123,38 +123,12 @@ Board is hidden. Before the Python process connects it reads
 If the race contains other cars, use **Page Up/Page Down** to follow Granite
 Bridge—the board shows messages for the currently viewed car only.
 
-## Step 7: open the Live Pit Wall (recommended)
+## Step 7: run the historical live bridge from the CLI
 
-Export the same credentials in the terminal that launches Apex, then open the
-fourth toolbar page:
-
-```bash
-source .venv/bin/activate
-export GRANITE_API_KEY="the same model API key"
-export GRANITE_BRIDGE_TOKEN="the same TORCS bridge token"
-apex
-```
-
-Select **Live Pit Wall**, keep **Granite 4.1 (local)** selected, and press
-**Start live session** after the Granite Bridge car has entered the race. The
-page displays:
-
-- the independently reported bridge and model states (the model is not marked
-  Online until its first response passes schema and evidence validation);
-- lap, simulator time and speed at a bounded 10 Hz UI refresh rate;
-- FR/FL/RR/RL tyre wear, temperature, pressure and graining;
-- advice urgency/focus, exact evidence, source lap/time and inference latency.
-
-Advice older than two configured coaching intervals is visibly marked
-`STALE` in Apex and is removed from the TORCS HUD. **Stop safely** requests a
-clean capture cancellation and sends a full-brake action. The explicit
-**Mock contract — TEST** choice is only a deterministic UI/protocol check and
-is always labelled TEST; it is not the Granite model.
-
-Do not run the CLI capture below at the same time as Live Pit Wall: one process
-must own the single Granite Bridge car and its UDP peer.
-
-## Step 8: CLI capture alternative
+The focused Apex desktop app is a post-session review tool and no longer
+contains a Live Pit Wall screen. The underlying bridge experiment remains
+reproducible from the CLI for technical evidence; only one process may own the
+single Granite Bridge car and its UDP peer.
 
 ```bash
 source .venv/bin/activate
@@ -202,19 +176,9 @@ integrations/torcs-1.3.9/verify-robot-study-preset.sh
 integrations/torcs-1.3.9/build.sh install
 ```
 
-For the visible workflow, launch Apex in explicit research mode:
-
-```bash
-APEX_RESEARCH_MODE=1 apex
-```
-
-Open **Robot Pilot** and start the default batch. Apex runs three sequential
-sessions of pinned `berniw` index 9; each session uses `g-track-1`,
-`car7-trb1`, and three laps. Progress, cancellation, per-session outcomes, and
-completed Garage runs are shown without asking for participant identity. The
-page is absent in the normal participant-facing application.
-
-The equivalent recovery command is:
+The focused desktop app does not expose this facilitator experiment. Run the
+reproducible CLI path directly; it keeps the research utility without adding an
+unrelated screen to the participant review application:
 
 ```bash
 racecoach capture-synthetic --count 3
@@ -233,7 +197,7 @@ controller and can support known-difference experiments. They are not users,
 do not represent baseline/coached conditions, and cannot establish a human
 coaching benefit.
 
-## Step 9: Granite post-lap coaching
+## Step 8: Granite post-lap coaching
 
 After importing a run into an Apex session, open it in **Garage**. Apex checks
 every lap automatically and shows **AI QUEUED**, **AI GENERATING**, **AI READY**,

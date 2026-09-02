@@ -3,9 +3,7 @@
 Real IBM Granite 4.1 is used for the coaching screens when the local server
 answers; the deterministic mock is never substituted silently.
 """
-import json
 import sys
-import time
 from pathlib import Path
 
 from PySide6.QtWidgets import QSplitter
@@ -87,29 +85,7 @@ def main() -> int:
     shot(window, "04-collect-saved", crop_h=292)
     capture._pages.setCurrentWidget(capture._setup_page)
 
-    # --- 5. Robot Pilot (facilitator, research mode) --------------------
-    synth = window._synthetic
-    if synth is not None:
-        window._stacked.setCurrentWidget(synth)
-        synth._progress.setRange(0, 3)
-        synth._progress.setValue(3)
-        synth._status.setText("Batch complete. All synthetic runs were validated.")
-        rows = [
-            ("SIM-BERNIW9-001", "complete", "synthetic-1-...-1-20260817-2210"),
-            ("SIM-BERNIW9-002", "complete", "synthetic-1-...-1-20260817-2216"),
-            ("SIM-BERNIW9-003", "complete", "synthetic-1-...-1-20260817-2222"),
-        ]
-        from PySide6.QtWidgets import QTableWidgetItem
-
-        synth._result_table.setRowCount(len(rows))
-        for r, row in enumerate(rows):
-            for c, text in enumerate(row):
-                synth._result_table.setItem(r, c, QTableWidgetItem(text))
-        synth._open_results_button.setEnabled(True)
-        resize_window(700)
-        shot(window, "05-robot-pilot")
-
-    # --- 6. Lap Analysis, single lap, real Granite ----------------------
+    # --- 5. Lap Analysis, single lap, real Granite ----------------------
     session = load_sample_session()
     best = session.best_lap
     ragged = session.laps[2]
@@ -131,7 +107,7 @@ def main() -> int:
         view._stack.highlight_span(*report.findings[0].evidence[0].span)
     shot(window, "06-analysis-granite")
 
-    # --- 7. Debrief + evidence zoom (reference lap selected) ------------
+    # --- 6. Debrief + evidence zoom (reference lap selected) ------------
     idx = view._ref_combo.findData(best)
     if idx >= 0:
         view._ref_combo.setCurrentIndex(idx)
@@ -144,7 +120,7 @@ def main() -> int:
         view._zoom_debrief_item(view._debrief.item(0))
     shot(window, "07-analysis-debrief")
 
-    # --- 8. Replay window ------------------------------------------------
+    # --- 7. Replay window ------------------------------------------------
     # The bundled demo fixture carries no world position; a real capture does,
     # so the track map is drawn from genuinely recorded x/y.
     from apex.widgets.replay_window import ReplayWindow
@@ -181,49 +157,12 @@ def main() -> int:
     shot(replay, "08-replay")
     replay.close()
 
-    # --- 9. Compare -----------------------------------------------------
+    # --- 8. Compare -----------------------------------------------------
     window._compare.set_session(session, lap_a=ragged)
     window._stacked.setCurrentWidget(window._compare)
     shot(window, "09-compare")
 
-    # --- 10. Live Pit Wall, real Granite advice -------------------------
-    live = window._live
-    window._stacked.setCurrentWidget(live)
-    if LIVE_JSONL.exists():
-        from racecoach.granite.client import GraniteClient, TelemetrySnapshot
-
-        record = None
-        for line in LIVE_JSONL.read_text().splitlines():
-            item = json.loads(line)
-            if item.get("snapshot", {}).get("speed_kmh", 0) > 120:
-                record = item
-                break
-        if record is not None:
-            fields = {
-                k: (tuple(v) if isinstance(v, list) else v)
-                for k, v in record["snapshot"].items()
-            }
-            snap = TelemetrySnapshot(**fields)
-            live._model_combo.setCurrentIndex(0)
-            live._set_status(live._bridge_status, "Online — Granite Bridge, SCR 3001", "online")
-            live._render_telemetry(snap)
-            try:
-                t0 = time.perf_counter()
-                result = GraniteClient().generate(snap)
-                latency = time.perf_counter() - t0
-                print(
-                    f"  live granite: {result.model} {latency:.2f}s"
-                    f" — {result.advice.message[:50]}"
-                )
-                live._render_advice(snap, result, latency)
-            except Exception as exc:  # server down: leave the honest idle state
-                print("  live granite unavailable:", exc)
-            live._run_path.setText(
-                "Recording to ~/Apex/runs/live-20260815-215402/telemetry.csv"
-            )
-    shot(window, "10-live-pit-wall")
-
-    # --- 11. Audit record ------------------------------------------------
+    # --- 9. Audit record -------------------------------------------------
     audit_path = write_coaching_audit(
         lap_source=ragged.source,
         provider=PROVIDER,
@@ -246,7 +185,5 @@ def main() -> int:
 
 PROVIDER = "granite"
 REAL_RUN = Path.home() / "Apex/runs/human-1-1786964116-1566559-1-20260817-115752"
-LIVE_JSONL = Path.home() / "Apex/live-20260815-215402/coaching/granite-4.1-live.jsonl"
-
 if __name__ == "__main__":
     raise SystemExit(main())

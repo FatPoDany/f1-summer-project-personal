@@ -45,17 +45,11 @@ QT_QPA_PLATFORM=offscreen pytest -q
 
 ## Granite 4.1 + TORCS
 
-The current vertical slice connects TORCS 1.3.9 to a deterministic Python
-driver over a native non-blocking robot bridge. IBM Granite 4.1 runs as an
-asynchronous race engineer: it reads compact telemetry and returns strict,
-evidence-grounded JSON advice, but never controls the car.
-
-Open `apex` and select **Live Pit Wall** for the visible live experience. It
-shows bridge/model health, lap/time/speed, four-wheel tyre wear, temperature,
-pressure and graining, plus the latest validated Granite advice, evidence and
-latency. TORCS' own Driver Board also shows the sidecar state and a bounded
-summary of fresh advice; press the number key **1** during the race if that
-board is hidden.
+The current application follows the same post-session direction as the team
+IBMF1 repository: capture telemetry and replay evidence, detect review points
+deterministically, then let IBM Granite 4.1 explain a compact, validated evidence
+packet. The model never controls the car. The earlier Live Pit Wall screen was a
+separate intervention and is not part of the focused Apex application.
 
 For post-lap coaching, import a CSV into a session or open a captured session in
 **Garage**. A participant's handover `.zip` can be imported from Garage or from
@@ -119,11 +113,12 @@ or lap count. See the
 acceptance procedure.
 
 Facilitators can validate the same software pipeline before recruitment with a
-fixed TORCS built-in robot. Launch `APEX_RESEARCH_MODE=1 apex` and open
-**Robot Pilot**, or run `racecoach capture-synthetic --count 3`. The default is
-three sequential sessions of three laps using pinned `berniw` index 9,
-`g-track-1`, and `car7-trb1`. Synthetic evidence is stored separately and is
-never presented as participant data or proof that coaching improves lap time.
+fixed TORCS built-in robot by running `racecoach capture-synthetic --count 3`.
+The default is three sequential sessions of three laps using pinned `berniw`
+index 9, `g-track-1`, and `car7-trb1`. This reproducibility path remains a CLI
+tool rather than a participant-facing Apex screen. Synthetic evidence is stored
+separately and is never presented as participant data or proof that coaching
+improves lap time.
 
 Start with the
 [Granite/TORCS walkthrough](docs/GRANITE_TORCS_WALKTHROUGH.md) and the

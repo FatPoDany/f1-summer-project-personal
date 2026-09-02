@@ -26,6 +26,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -91,26 +92,39 @@ class StudyView(QWidget):
         self._laps: list[Lap] = []
 
         title = QLabel("Study results")
-        title.setStyleSheet("font-weight: 600;")
+        title.setObjectName("pageTitle")
         self._headline = QLabel("")
         self._headline.setWordWrap(True)
-        self._headline.setStyleSheet(f"color: {theme.TEXT_DIM};")
+        self._headline.setObjectName("pageDescription")
 
         refresh = QPushButton("Reload")
+        refresh.setObjectName("quiet")
         # clicked emits `checked`, which would arrive as `roots` and be iterated.
         refresh.clicked.connect(self._reload_button_clicked)
         self._export = QPushButton("Export CSV…")
+        self._export.setObjectName("primary")
         self._export.setToolTip(
             "One row per participant per phase, for a paired test in R, SPSS or Python"
         )
         self._export.clicked.connect(self._export_csv)
         self._export.setEnabled(False)
 
+        title_stack = QVBoxLayout()
+        title_stack.setSpacing(3)
+        eyebrow = QLabel("EVALUATION")
+        eyebrow.setObjectName("pageEyebrow")
+        title_stack.addWidget(eyebrow)
+        title_stack.addWidget(title)
+        title_stack.addWidget(self._headline)
         header = QHBoxLayout()
-        header.addWidget(title)
+        header.setContentsMargins(18, 13, 18, 13)
+        header.addLayout(title_stack)
         header.addStretch(1)
         header.addWidget(refresh)
         header.addWidget(self._export)
+        header_frame = QFrame()
+        header_frame.setObjectName("pageHeader")
+        header_frame.setLayout(header)
 
         self._left_phase = QComboBox()
         self._left_phase.setAccessibleName("Compare this phase")
@@ -131,39 +145,63 @@ class StudyView(QWidget):
         pickers.addWidget(against)
         pickers.addWidget(self._right_phase)
         pickers.addStretch(1)
+        picker_frame = QFrame()
+        picker_frame.setObjectName("panel")
+        picker_frame.setLayout(pickers)
+        pickers.setContentsMargins(14, 10, 14, 10)
 
         self._table = QTableWidget(0, len(HEADERS))
         self._table.setHorizontalHeaderLabels(HEADERS)
         self._table.verticalHeader().setVisible(False)
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._table.setAlternatingRowColors(True)
+        self._table.setShowGrid(False)
+        self._table.verticalHeader().setDefaultSectionSize(36)
+        self._table.horizontalHeader().setMinimumHeight(38)
         self._table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.ResizeToContents
         )
         self._table.currentCellChanged.connect(lambda *_: self._draw_selected())
 
         self._plot = pg.PlotWidget()
-        self._plot.setBackground(theme.BG)
+        self._plot.setBackground(theme.SURFACE_1)
         self._plot.showGrid(x=True, y=True, alpha=theme.GRID_ALPHA)
         self._plot.setLabel("bottom", "Lap")
         self._plot.setLabel("left", "Lap time", units="s")
         self._plot.addLegend()
+        for name in ("left", "bottom"):
+            axis = self._plot.getAxis(name)
+            axis.setPen(pg.mkPen(theme.BORDER))
+            axis.setTextPen(pg.mkPen(theme.TEXT_MUTED))
 
         split = QSplitter(Qt.Orientation.Vertical)
-        top = QWidget()
+        top = QFrame()
+        top.setObjectName("panel")
         top_layout = QVBoxLayout(top)
-        top_layout.setContentsMargins(0, 0, 0, 0)
+        top_layout.setContentsMargins(12, 10, 12, 12)
+        table_title = QLabel("Participant pairs")
+        table_title.setObjectName("sectionTitle")
+        top_layout.addWidget(table_title)
         top_layout.addWidget(self._table)
         split.addWidget(top)
-        split.addWidget(self._plot)
+        plot_frame = QFrame()
+        plot_frame.setObjectName("panel")
+        plot_layout = QVBoxLayout(plot_frame)
+        plot_layout.setContentsMargins(12, 10, 12, 12)
+        plot_title = QLabel("Lap progression")
+        plot_title.setObjectName("sectionTitle")
+        plot_layout.addWidget(plot_title)
+        plot_layout.addWidget(self._plot)
+        split.addWidget(plot_frame)
         split.setStretchFactor(0, 1)
         split.setStretchFactor(1, 1)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 6, 8, 6)
-        layout.addLayout(header)
-        layout.addLayout(pickers)
-        layout.addWidget(self._headline)
+        layout.setContentsMargins(16, 14, 16, 12)
+        layout.setSpacing(12)
+        layout.addWidget(header_frame)
+        layout.addWidget(picker_frame)
         layout.addWidget(split, stretch=1)
 
     # -- data ---------------------------------------------------------------

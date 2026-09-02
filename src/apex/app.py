@@ -19,24 +19,23 @@ from f1coach_core import ensure_sample_session
 
 
 def _dark_palette() -> QPalette:
-    """Explicit Carbon-gray palette: platforms without a dark theme (offscreen,
-    bare Linux) would otherwise ignore the colour-scheme hint."""
-    text = QColor("#f4f4f4")
-    surface = QColor("#262626")
+    """Explicit warm-graphite palette for platforms without a dark theme."""
+    text = QColor(theme.TEXT)
+    surface = QColor(theme.SURFACE_2)
     palette = QPalette()
     palette.setColor(QPalette.ColorRole.Window, QColor(theme.BG))
     palette.setColor(QPalette.ColorRole.WindowText, text)
-    palette.setColor(QPalette.ColorRole.Base, QColor("#1f1f1f"))
+    palette.setColor(QPalette.ColorRole.Base, QColor(theme.SURFACE_1))
     palette.setColor(QPalette.ColorRole.AlternateBase, surface)
     palette.setColor(QPalette.ColorRole.Text, text)
     palette.setColor(QPalette.ColorRole.Button, surface)
     palette.setColor(QPalette.ColorRole.ButtonText, text)
     palette.setColor(QPalette.ColorRole.ToolTipBase, surface)
     palette.setColor(QPalette.ColorRole.ToolTipText, text)
-    palette.setColor(QPalette.ColorRole.Highlight, QColor("#0f62fe"))  # Carbon blue-60
-    palette.setColor(QPalette.ColorRole.HighlightedText, text)
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(theme.SURFACE_3))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(theme.TEXT))
     palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(theme.TEXT_DIM))
-    disabled = QColor("#6f6f6f")
+    disabled = QColor(theme.TEXT_MUTED)
     for role in (
         QPalette.ColorRole.WindowText,
         QPalette.ColorRole.Text,
@@ -47,7 +46,7 @@ def _dark_palette() -> QPalette:
 
 
 def create_app(argv: list[str] | None = None) -> QApplication:
-    """QApplication with the Apex look: Fusion + dark-first (pit-wall convention)."""
+    """QApplication with the Apex warm-graphite post-session review look."""
     app = QApplication(sys.argv if argv is None else argv)
     app.setApplicationName("Apex")
     app.setOrganizationName("BristolIBMF1")
@@ -56,6 +55,7 @@ def create_app(argv: list[str] | None = None) -> QApplication:
     if hasattr(hints, "setColorScheme"):  # Qt >= 6.8
         hints.setColorScheme(Qt.ColorScheme.Dark)
     app.setPalette(_dark_palette())
+    app.setStyleSheet(theme.STYLESHEET)
     return app
 
 

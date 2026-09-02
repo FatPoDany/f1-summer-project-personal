@@ -175,9 +175,8 @@ PYTHONPATH=src python3.11 -m racecoach.cli run \
 
 Use `--live-coach granite` after starting the Granite server described in
 [`docs/GRANITE_TORCS_WALKTHROUGH.md`](../../docs/GRANITE_TORCS_WALKTHROUGH.md).
-For the visible workflow, start `apex`, open **Live Pit Wall**, and press
-**Start live session** instead of running the CLI command. Do not run both
-clients simultaneously; this bridge intentionally locks one active peer.
+The focused Apex desktop app does not expose this historical live experiment;
+run it from the CLI. This bridge intentionally locks one active peer.
 
 ## Human-driver telemetry capture
 
@@ -257,18 +256,6 @@ under `<workspace>/captures/synthetic/`; registered run metadata uses
 state, and a final `race_finished` marker. Registration requires exactly three
 complete distance-aligned laps and rejects all outputs before importing any if
 one file has conflicting provenance.
-
-Facilitators can opt into the same path in Apex:
-
-```bash
-APEX_RESEARCH_MODE=1 apex
-```
-
-Open **Robot Pilot**, choose 1–20 sessions (default 3), and use the visible
-Start/Stop controls. The page is absent when research mode is not explicitly
-enabled. It is labelled synthetic throughout and never asks for participant
-identity or a human study phase. Granite is not called during collection;
-completed runs enter the existing Garage/Analysis workflow afterward.
 
 These sessions verify plumbing and provide a fixed-controller reference. They
 are not simulated participants and cannot demonstrate that coaching improves

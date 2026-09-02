@@ -6,7 +6,7 @@ and the post-coaching lap as B and the delta trace is the improvement.
 
 import pyqtgraph as pg
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from apex import theme
 from apex.captions import reference_caption
@@ -27,19 +27,28 @@ class CompareView(QWidget):
             combo.setMinimumWidth(200)
             combo.currentIndexChanged.connect(self._refresh)
         self._verdict = QLabel("")
-        self._verdict.setStyleSheet(f"color: {theme.TEXT_DIM};")
+        self._verdict.setObjectName("secondary")
 
-        header = QHBoxLayout()
-        header.addWidget(QLabel("Lap"))
-        header.addWidget(self._combo_a)
-        header.addSpacing(8)
-        header.addWidget(QLabel("vs"))
-        header.addWidget(self._combo_b)
-        header.addStretch(1)
-        header.addWidget(self._verdict)
+        controls = QHBoxLayout()
+        controls.setContentsMargins(14, 10, 14, 10)
+        label_a = QLabel("LAP A")
+        label_a.setObjectName("tertiary")
+        controls.addWidget(label_a)
+        controls.addWidget(self._combo_a)
+        controls.addSpacing(8)
+        label_b = QLabel("REFERENCE LAP")
+        label_b.setObjectName("tertiary")
+        controls.addWidget(label_b)
+        controls.addWidget(self._combo_b)
+        controls.addStretch(1)
+        controls.addWidget(self._verdict)
+
+        controls_frame = QFrame()
+        controls_frame.setObjectName("panel")
+        controls_frame.setLayout(controls)
 
         glw = pg.GraphicsLayoutWidget()
-        glw.setBackground(theme.BG)
+        glw.setBackground(theme.SURFACE_1)
         self._speed_plot = glw.addPlot(row=0, col=0)
         self._speed_plot.setLabel("left", "speed (km/h)")
         self._speed_plot.hideAxis("bottom")
@@ -50,15 +59,19 @@ class CompareView(QWidget):
             plot.getAxis("left").enableAutoSIPrefix(False)
             plot.getAxis("left").setWidth(AXIS_WIDTH)
             plot.showGrid(x=True, y=True, alpha=theme.GRID_ALPHA)
+            for name in ("left", "bottom"):
+                axis = plot.getAxis(name)
+                axis.setPen(pg.mkPen(theme.BORDER))
+                axis.setTextPen(pg.mkPen(theme.TEXT_MUTED))
         self._delta_plot.setXLink(self._speed_plot)
         glw.ci.layout.setRowStretchFactor(0, 3)
         glw.ci.layout.setRowStretchFactor(1, 2)
 
-        self._speed_a = self._speed_plot.plot(pen=pg.mkPen(theme.BLUE, width=1.6))
-        self._speed_b = self._speed_plot.plot(pen=pg.mkPen(theme.PURPLE, width=1.2))
-        zero_pen = pg.mkPen("#6f6f6f", width=1, style=Qt.PenStyle.DashLine)
+        self._speed_a = self._speed_plot.plot(pen=pg.mkPen(theme.BLUE, width=2.0))
+        self._speed_b = self._speed_plot.plot(pen=pg.mkPen(theme.PURPLE, width=1.6))
+        zero_pen = pg.mkPen(theme.BORDER_STRONG, width=1, style=Qt.PenStyle.DashLine)
         self._delta_plot.addItem(pg.InfiniteLine(pos=0, angle=0, pen=zero_pen))
-        self._delta_curve = self._delta_plot.plot(pen=pg.mkPen(theme.YELLOW, width=1.6))
+        self._delta_curve = self._delta_plot.plot(pen=pg.mkPen(theme.YELLOW, width=2.0))
         for curve in (self._speed_a, self._speed_b, self._delta_curve):
             curve.setDownsampling(auto=True, method="peak")
             # no clip-to-view here: it defers data until a paint happens, and
@@ -68,14 +81,63 @@ class CompareView(QWidget):
         self._remaining = QLabel("")
         for label in (self._changed, self._remaining):
             label.setWordWrap(True)
-            label.setStyleSheet(f"color: {theme.TEXT_DIM};")
+            label.setObjectName("secondary")
+
+        chart_header = QHBoxLayout()
+        chart_title = QLabel("Distance-aligned telemetry")
+        chart_title.setObjectName("sectionTitle")
+        self._legend = QLabel("")
+        self._legend.setObjectName("tertiary")
+        chart_header.addWidget(chart_title)
+        chart_header.addStretch(1)
+        chart_header.addWidget(self._legend)
+        chart_frame = QFrame()
+        chart_frame.setObjectName("panel")
+        chart_layout = QVBoxLayout(chart_frame)
+        chart_layout.setContentsMargins(12, 10, 12, 10)
+        chart_layout.setSpacing(6)
+        chart_layout.addLayout(chart_header)
+        chart_layout.addWidget(glw, stretch=1)
+
+        changed_card = QFrame()
+        changed_card.setObjectName("summaryCard")
+        changed_layout = QVBoxLayout(changed_card)
+        changed_layout.setContentsMargins(14, 10, 14, 10)
+        changed_layout.addWidget(self._changed)
+        remaining_card = QFrame()
+        remaining_card.setObjectName("summaryCard")
+        remaining_layout = QVBoxLayout(remaining_card)
+        remaining_layout.setContentsMargins(14, 10, 14, 10)
+        remaining_layout.addWidget(self._remaining)
+        summaries = QHBoxLayout()
+        summaries.setSpacing(10)
+        summaries.addWidget(changed_card, stretch=1)
+        summaries.addWidget(remaining_card, stretch=1)
+
+        page_header = QFrame()
+        page_header.setObjectName("pageHeader")
+        page_header_layout = QVBoxLayout(page_header)
+        page_header_layout.setContentsMargins(18, 13, 18, 13)
+        page_header_layout.setSpacing(3)
+        eyebrow = QLabel("BEFORE / AFTER")
+        eyebrow.setObjectName("pageEyebrow")
+        title = QLabel("Lap comparison")
+        title.setObjectName("pageTitle")
+        description = QLabel(
+            "Compare two laps on the same distance grid to see where time was gained or lost."
+        )
+        description.setObjectName("pageDescription")
+        page_header_layout.addWidget(eyebrow)
+        page_header_layout.addWidget(title)
+        page_header_layout.addWidget(description)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 6, 8, 4)
-        layout.addLayout(header)
-        layout.addWidget(glw, stretch=1)
-        layout.addWidget(self._changed)
-        layout.addWidget(self._remaining)
+        layout.setContentsMargins(16, 14, 16, 12)
+        layout.setSpacing(12)
+        layout.addWidget(page_header)
+        layout.addWidget(controls_frame)
+        layout.addWidget(chart_frame, stretch=1)
+        layout.addLayout(summaries)
 
     def set_session(self, session: Session, lap_a: Lap | None = None) -> None:
         """Populate the pickers: A is the given lap (default: first non-best),
@@ -116,6 +178,7 @@ class CompareView(QWidget):
         self._verdict.clear()
         self._changed.clear()
         self._remaining.clear()
+        self._legend.clear()
 
     def _refresh(self) -> None:
         lap_a: Lap | None = self._combo_a.currentData()
@@ -133,6 +196,11 @@ class CompareView(QWidget):
             self._remaining.clear()
             return
         self._delta_curve.setData(grid, delta)
+        self._legend.setText(
+            f"<span style='color:{theme.BLUE};'>●</span> {lap_a.source.stem}&nbsp;&nbsp; "
+            f"<span style='color:{theme.PURPLE};'>●</span> {lap_b.source.stem}&nbsp;&nbsp; "
+            f"<span style='color:{theme.YELLOW};'>●</span> cumulative delta"
+        )
         behind = float(delta[-1])
         verdict = "behind" if behind >= 0 else "ahead of"
         self._verdict.setText(
