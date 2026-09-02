@@ -75,25 +75,45 @@ study id, never a participant's name or email:
 racecoach capture-human --participant-id P001 --phase baseline
 ```
 
-To use another installed binary or pass TORCS arguments in an operator-led
-recovery session:
+That launches the assigned setup -- the same one the desktop app launches --
+`apex-study-v1` unless `--preset` names another. The command requires a
+participant id and a phase, so every use of it is a study session, and the
+assignment is not something a facilitator should have to remember to apply.
+
+To drive the circuit the other half of the project is frozen on:
+
+```bash
+racecoach capture-human --participant-id P001 --phase baseline \
+  --preset apex-study-speedway-v1
+```
+
+An operator-led recovery session that supplies its own race configuration has
+to say that it is unassigned. A preset and `-r`/`-R` are a contradiction --
+both choose the race -- and the command refuses the combination rather than
+letting one of them win silently:
 
 ```bash
 racecoach capture-human \
   --participant-id P001 \
   --phase coached \
   --torcs /path/to/torcs \
+  --no-preset \
   -- -r /path/to/practice.xml
 ```
 
-The fallback command intentionally leaves race selection to the facilitator;
-the Apex desktop workflow does not. For a fallback session:
+`--no-preset` leaves race selection to the facilitator, and the laps it
+produces export with a blank `setup` column so they are never read as an
+assigned run. For such a session:
 
 1. Choose a fixed Practice or Quick Race configuration.
 2. Select the normal **Human** driver, not Granite Bridge.
 3. Complete the familiarisation or measured laps defined by the protocol.
 4. Exit TORCS after the session. The command then validates and registers the
    captured CSVs and prints their run ids.
+
+Note what `--no-preset` gives up. TORCS ships a 640x480 window and the presets
+raise it to 1280x720; unassigned, the session runs at whatever size and on
+whatever track the install was last left on, and nothing records which.
 
 ## Controlled graphical preset
 
