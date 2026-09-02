@@ -8,8 +8,8 @@ numbers arrive, and arrive first.
 import pytest
 from PySide6.QtWidgets import QLabel
 
+from apex.coach_ready import DOWNLOAD_ELSEWHERE
 from apex.debrief_view import (
-    DOWNLOAD_ELSEWHERE,
     SessionDebriefView,
     _LapCard,
     lap_title,
@@ -17,6 +17,7 @@ from apex.debrief_view import (
 from apex.main_window import MainWindow
 from f1coach_core import load_session
 from racecoach.granite import report as gr
+from racecoach.granite.debrief_store import latest_debrief
 from racecoach.granite.host import Capability
 from racecoach.granite.narrate import NarratedDebrief, NarratedPoint
 from racecoach.granite.server import ServerError
@@ -33,6 +34,9 @@ class InlinePool:
     def start(self, task, priority: int = 0) -> None:
         task.run()
 
+    def tryTake(self, task) -> bool:  # noqa: N802 - QThreadPool's own spelling
+        return False
+
 
 class QueuedPool:
     """Takes the work and has not done it yet — the one state ``InlinePool`` hides.
@@ -44,9 +48,17 @@ class QueuedPool:
 
     def __init__(self) -> None:
         self.started: list = []
+        self.taken: list = []
 
     def start(self, task, priority: int = 0) -> None:
         self.started.append(task)
+
+    def tryTake(self, task) -> bool:  # noqa: N802 - QThreadPool's own spelling
+        if task in self.started:
+            self.started.remove(task)
+            self.taken.append(task)
+            return True
+        return False
 
 
 class FakeServer:
@@ -84,7 +96,7 @@ def session(tmp_path):
 
 def coach(monkeypatch, **capability):
     monkeypatch.setattr(
-        "apex.debrief_view.gh.capability", lambda: Capability(**capability)
+        "apex.coach_ready.gh.capability", lambda: Capability(**capability)
     )
 
 
@@ -314,8 +326,12 @@ def test_the_garage_opens_the_whole_session_rather_than_one_lap_of_it(
 
     window = MainWindow()
     qtbot.addWidget(window)
+    # Building the window already handed the session to the debrief, on the
+    # shared worker pool. Take that job back and do the same work here, so what
+    # follows is about the screen rather than about a thread.
     window._debrief._pool = InlinePool()
-    window._garage.refresh_sessions()
+    window._debrief.clear_session()
+    window._garage._load_selected()
 
     assert window._garage._debrief_button.isEnabled()
     window._garage._debrief_button.click()
@@ -325,6 +341,131 @@ def test_the_garage_opens_the_whole_session_rather_than_one_lap_of_it(
     assert window._debrief.session is not None
     assert window._debrief.report is not None
     assert window._debrief.report.findings > 0
+
+
+def test_the_debrief_that_was_shown_is_kept(qtbot, session, monkeypatch):
+    """It is the study's intervention, and it used to survive only on screen."""
+    ready(monkeypatch)
+    monkeypatch.setattr(gr, "narrate_debrief", _narrator)
+    view = SessionDebriefView(server=FakeServer())
+    qtbot.addWidget(view)
+    open_on(view, session)
+
+    stored = latest_debrief(session.path)
+    assert stored is not None
+    assert stored.narrated
+    assert "You braked before you needed to." in stored.markdown
+    assert stored.findings == view.report.findings
+
+
+def test_reopening_puts_the_same_prose_back_without_asking_again(
+    qtbot, session, monkeypatch
+):
+    """Minutes of a laptop CPU, and the second answer would not be the first."""
+    ready(monkeypatch)
+    monkeypatch.setattr(gr, "narrate_debrief", _narrator)
+    open_on(SessionDebriefView(server=FakeServer()), session)
+
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("the model was asked for prose that was already on file")
+
+    monkeypatch.setattr(gr, "narrate_debrief", refuse)
+    server = FakeServer()
+    later = SessionDebriefView(server=server)
+    qtbot.addWidget(later)
+    open_on(later, session)
+
+    assert server.starts == 0
+    assert "You braked before you needed to." in screen_text(later)
+    assert not later._coach_button.isEnabled()
+    # And no second record: nothing new was produced to record.
+    assert len(list((session.path / "debrief").glob("*.json"))) == 1
+
+
+def test_a_laptop_that_cannot_reach_the_model_files_one_record_not_one_per_open(
+    qtbot, session, monkeypatch
+):
+    """Otherwise five looks at the same screen become five identical records."""
+    unavailable(monkeypatch)
+    for _ in range(3):
+        view = SessionDebriefView()
+        qtbot.addWidget(view)
+        open_on(view, session)
+
+    records = list((session.path / "debrief").glob("*.json"))
+    assert len(records) == 1
+    assert latest_debrief(session.path).narrated is False
+
+
+def test_the_written_coaching_is_added_to_a_session_already_measured(
+    qtbot, session, monkeypatch
+):
+    """The measured record is not the last word once the model can be reached."""
+    unavailable(monkeypatch)
+    open_on(SessionDebriefView(), session)
+    assert latest_debrief(session.path).narrated is False
+
+    ready(monkeypatch)
+    monkeypatch.setattr(gr, "narrate_debrief", _narrator)
+    view = SessionDebriefView(server=FakeServer())
+    qtbot.addWidget(view)
+    open_on(view, session)
+
+    stored = latest_debrief(session.path)
+    assert stored.narrated
+    assert len(list((session.path / "debrief").glob("*.json"))) == 2
+
+
+def test_a_session_that_lands_starts_its_debrief_with_nobody_clicking(
+    qtbot, tmp_path, monkeypatch
+):
+    """The participant is sent away to read this; it must not start when they arrive."""
+    unavailable(monkeypatch)
+    monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "ws"))
+    from f1coach_core import workspace
+
+    sessions = workspace.sessions_root()
+    sessions.mkdir(parents=True, exist_ok=True)
+    write_lap(sessions / "P001-baseline", 1, speed_scale=0.88, brake_shift_m=-60.0)
+    write_lap(sessions / "P001-baseline", 2)
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._debrief._pool = InlinePool()
+    window._debrief.clear_session()
+    window._garage._load_selected()  # what selecting a session in the list does
+
+    # Nothing was navigated to, and the debrief is already there.
+    assert window._stacked.currentWidget() is window._garage
+    assert window._debrief.report is not None
+    assert latest_debrief(sessions / "P001-baseline") is not None
+
+
+def test_the_garage_says_whether_this_session_has_a_debrief_on_file(
+    qtbot, tmp_path, monkeypatch
+):
+    """A folder whose participant never opened theirs has to look different."""
+    unavailable(monkeypatch)
+    monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "ws"))
+    from f1coach_core import workspace
+
+    sessions = workspace.sessions_root()
+    sessions.mkdir(parents=True, exist_ok=True)
+    write_lap(sessions / "P001-baseline", 1, speed_scale=0.88, brake_shift_m=-60.0)
+    write_lap(sessions / "P001-baseline", 2)
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    assert "No debrief on file" in window._garage._debrief_status.text()
+
+    window._debrief._pool = InlinePool()
+    window._debrief.clear_session()
+    window._garage._load_selected()
+
+    # Said as soon as it is true, not the next time somebody selects the row.
+    text = window._garage._debrief_status.text()
+    assert "Debrief on file" in text
+    assert "measurements only" in text  # this laptop cannot reach the model
 
 
 def test_the_debrief_shares_the_one_model_server_and_the_one_worker(qtbot, monkeypatch):

@@ -99,8 +99,17 @@ class MainWindow(QMainWindow):
 
         self._garage.lapOpened.connect(self.show_analysis)
         self._garage.coachingRequested.connect(self._coaching_queue.queue_session)
+        # A session that has landed starts its own debrief, off screen. The
+        # debrief is what a coached participant is sent away to read, and it
+        # used to begin only when they clicked through to it -- so the minutes
+        # a 3B model needs on a laptop CPU were minutes they spent watching a
+        # screen think, and a session nobody clicked through left no debrief at
+        # all. Same signal as the per-lap coach, because the question is the
+        # same one: this session is loaded, do its automatic work.
+        self._garage.coachingRequested.connect(self._debrief.set_session)
         self._garage.debriefRequested.connect(self.show_debrief)
         self._debrief.status.connect(lambda text: self.statusBar().showMessage(text))
+        self._debrief.filed.connect(self._garage.note_debrief_filed)
         self._coaching_queue.progress.connect(self._garage.apply_coaching_progress)
         self._garage.sessionDeleted.connect(self._session_deleted)
         self._garage.status.connect(lambda text: self.statusBar().showMessage(text))

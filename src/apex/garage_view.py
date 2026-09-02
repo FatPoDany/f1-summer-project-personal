@@ -2,6 +2,7 @@
 watched folder. Double-click a lap to open it in Lap Analysis."""
 
 import shutil
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
@@ -43,6 +44,7 @@ from f1coach_core.participant import (
     load_background,
 )
 from f1coach_core.workspace import RECORDING_POINTER, session_recording
+from racecoach.granite.debrief_store import latest_debrief
 from racecoach.telemetry.handover import (
     HandoverError,
     adopt_background,
@@ -57,6 +59,20 @@ from racecoach.telemetry.handover import (
 # Driver sits beside Lap so a researcher collecting several participants can
 # tell whose laps these are without opening the files.
 TABLE_HEADERS = ("Lap", "Driver", "Time", "Δ best", "Status")
+
+
+def _written_on(written_at: str) -> str:
+    """When a stored debrief was produced, in local time, or a plain fallback.
+
+    The record keeps UTC, because it travels between machines and a naive local
+    timestamp cannot be compared across them. What a participant reads should
+    still be the clock they drove by.
+    """
+    try:
+        moment = datetime.fromisoformat(written_at).astimezone()
+    except ValueError:
+        return "earlier"
+    return moment.strftime("%d %b %H:%M").lstrip("0")
 
 
 def _findings(count: int) -> str:
@@ -189,6 +205,15 @@ class GarageView(QWidget):
         self._footage_status.setWordWrap(True)
         self._footage_status.setAccessibleName("Race-window footage status")
 
+        # Whether this session has a debrief on file. The debrief is what a
+        # coached participant is sent away to read, and it used to exist only
+        # while its screen was open -- so a folder could not be told apart from
+        # one whose participant never opened it. Read off the disk rather than
+        # from this run, because that is the question being asked.
+        self._debrief_status = QLabel()
+        self._debrief_status.setWordWrap(True)
+        self._debrief_status.setAccessibleName("Session debrief status")
+
         self._session_heading = QLabel("Select a session")
         self._session_heading.setObjectName("sectionTitle")
         section_copy = QVBoxLayout()
@@ -212,6 +237,7 @@ class GarageView(QWidget):
         metadata_layout.setSpacing(3)
         metadata_layout.addWidget(self._participant)
         metadata_layout.addWidget(self._footage_status)
+        metadata_layout.addWidget(self._debrief_status)
 
         right = QFrame()
         right.setObjectName("panel")
@@ -280,6 +306,7 @@ class GarageView(QWidget):
             self._table.setRowCount(0)
             self._participant.clear()
             self._footage_status.clear()
+            self._debrief_status.clear()
             self._update_open_state()
 
     def _load_selected(self) -> None:
@@ -300,10 +327,12 @@ class GarageView(QWidget):
         if session is None:
             self._session_heading.setText("Select a session")
             self._footage_status.clear()
+            self._debrief_status.clear()
             return
         self._session_heading.setText(session.name)
         self._update_participant(session)
         self._update_footage_status(session)
+        self._update_debrief_status(session)
         best = session.best_lap
         coached = latest_coaching_outcomes(session.path)
         rows = len(session.laps) + len(session.problems)
@@ -383,6 +412,33 @@ class GarageView(QWidget):
             colour = theme.TEXT_DIM
         self._footage_status.setText(text)
         self._footage_status.setStyleSheet(f"color: {colour};")
+
+    def note_debrief_filed(self, session_path: str) -> None:
+        """A debrief has just been produced; say so if it is this session's."""
+        session = self._session
+        if session is not None and Path(session_path) == session.path:
+            self._update_debrief_status(session)
+
+    def _update_debrief_status(self, session: Session) -> None:
+        stored = latest_debrief(session.path)
+        if stored is None:
+            text = "No debrief on file for this session yet — one is being prepared."
+            colour = theme.TEXT_DIM
+        elif stored.narrated:
+            text = (
+                f"Debrief on file: {stored.findings} stretch(es), with written "
+                f"coaching, {_written_on(stored.written_at)}."
+            )
+            colour = theme.GREEN
+        else:
+            text = (
+                f"Debrief on file: {stored.findings} stretch(es), measurements "
+                f"only, {_written_on(stored.written_at)}. Open it to add the "
+                "written coaching."
+            )
+            colour = theme.YELLOW
+        self._debrief_status.setText(text)
+        self._debrief_status.setStyleSheet(f"color: {colour};")
 
     def _lap_status(
         self, lap, is_best: bool, coached: dict[tuple[str, str | None], int], best

@@ -15,7 +15,6 @@ Nothing here computes telemetry truth. It renders what
 ``racecoach.granite.report`` returns, which is the report the CLI writes too.
 """
 
-import os
 from dataclasses import replace
 from pathlib import Path
 
@@ -33,9 +32,19 @@ from PySide6.QtWidgets import (
 )
 
 from apex import theme
+from apex.coach_ready import (
+    coach_blocked_reason,
+    coach_ready,
+    endpoint,
+    model_name,
+)
 from f1coach_core import Lap, Session
-from racecoach.granite import host as gh
-from racecoach.granite import model as gm
+from racecoach.granite.debrief_store import (
+    StoredDebrief,
+    latest_debrief,
+    restore_narration,
+    write_debrief,
+)
 from racecoach.granite.report import LapReport, SessionReport, build_report, render_markdown
 from racecoach.granite.server import GraniteServer, ServerError
 
@@ -45,16 +54,6 @@ CARD_STYLE = (
 )
 HEADING_STYLE = "font-size: 22px; font-weight: 650;"
 DIM = f"color: {theme.TEXT_DIM};"
-
-# Written coaching is offered from Lap Analysis, which owns the download and its
-# cancel button. Two screens asking for the same 2.1 GB would be two progress
-# bars for one transfer, so this one points at that one rather than growing a
-# second copy of it.
-DOWNLOAD_ELSEWHERE = (
-    "Written coaching needs a one-off download. Open a lap in Lap Analysis to "
-    "start it; the measured debrief below is complete without it."
-)
-
 
 def lap_title(lap: Lap) -> str:
     """What to call a lap in a heading a participant reads.
@@ -104,15 +103,18 @@ class _DebriefTask(QRunnable):
         resolve_endpoint=None,
         model: str = "",
         build=build_report,
+        restore: StoredDebrief | None = None,
     ) -> None:
         super().__init__()
         self.signals = _DebriefSignals()
         self.token = object()
         self.narrating = resolve_endpoint is not None
+        self.restored = False
         self._laps = list(laps)
         self._resolve_endpoint = resolve_endpoint
         self._model = model
         self._build = build
+        self._restore = restore
 
     def run(self) -> None:
         try:
@@ -145,6 +147,10 @@ class _DebriefTask(QRunnable):
             # A server that would not start is the same class of thing as one
             # that stopped answering: the report says why it is quiet.
             report = replace(report, narration_error=unavailable)
+        if self._restore is not None:
+            restored = restore_narration(report, self._restore)
+            self.restored = restored is not report
+            report = restored
         self.signals.finished.emit(report)
 
 
@@ -152,6 +158,11 @@ class SessionDebriefView(QWidget):
     """Every lap of one session against its best, worst stretches first."""
 
     status = Signal(str)
+    # A debrief has been filed for this session path. The Garage reads that
+    # state off the disk when a session is selected, which is before this
+    # screen has produced anything -- so without this it would go on saying a
+    # session had no debrief for as long as the app stayed open.
+    filed = Signal(str)
 
     def __init__(
         self,
@@ -170,6 +181,7 @@ class SessionDebriefView(QWidget):
         self._session: Session | None = None
         self._report: SessionReport | None = None
         self._task: _DebriefTask | None = None
+        self._stored: StoredDebrief | None = None
         self._build_ui()
         self._refresh_buttons()
 
@@ -261,9 +273,22 @@ class SessionDebriefView(QWidget):
             and (self._report is not None or self._task is not None)
         ):
             return
+        if self._task is not None:
+            # It may not have started yet, and a session nobody is looking at
+            # any more must not sit in front of the one they are: the pool runs
+            # one job at a time and the per-lap coach shares it.
+            try:
+                self._pool.tryTake(self._task)
+            except RuntimeError:
+                # It ran and the pool deleted it, and its `finished` is still
+                # crossing back from the worker thread -- so `_task` is a
+                # wrapper around nothing. There is nothing left to take, and
+                # `_is_current` already discards what that signal carries.
+                pass
         self._session = session
         self._report = None
         self._task = None
+        self._stored = None if session is None else latest_debrief(session.path)
         self._clear_cards()
         self._subject.setText(session.name if session is not None else "")
         if session is None or not session.laps:
@@ -271,42 +296,19 @@ class SessionDebriefView(QWidget):
             self._refresh_buttons()
             return
         # Never an implicit download: a participant who has not asked for 2.1 GB
-        # should not have it start because they opened a screen.
-        self._start(narrate=self._coach_ready())
+        # should not have it start because they opened a screen. Nor a second
+        # narration of a session already narrated -- that one was filed when it
+        # was produced, and is put back on the measurements below instead.
+        already_spoken = self._stored is not None and self._stored.narrated
+        self._start(narrate=coach_ready() and not already_spoken)
 
     def clear_session(self) -> None:
         self.set_session(None)
 
     # -- running -------------------------------------------------------------
 
-    def _coach_ready(self) -> bool:
-        """Whether written coaching can run right now without downloading first."""
-        if os.environ.get("GRANITE_BASE_URL"):
-            return True
-        capability = gh.capability()
-        return capability.can_run and not capability.needs_download
-
-    def _coach_blocked_reason(self) -> str:
-        """Why the model cannot be asked, in a sentence, or empty when it can."""
-        if os.environ.get("GRANITE_BASE_URL"):
-            return ""
-        capability = gh.capability()
-        if not capability.can_run:
-            return capability.reason
-        if capability.needs_download:
-            return DOWNLOAD_ELSEWHERE
-        return ""
-
     def _endpoint(self) -> str:
-        """The model endpoint to use, started if it is ours to start.
-
-        A researcher who pointed Apex at their own server keeps it: starting a
-        second one on top would be presumptuous and would fight for the port.
-        """
-        return os.environ.get("GRANITE_BASE_URL") or self._server.start()
-
-    def _model_name(self) -> str:
-        return os.environ.get("GRANITE_MODEL") or gm.MODEL_REPO.replace("-GGUF", "")
+        return endpoint(self._server)
 
     def _start(self, *, narrate: bool) -> None:
         session = self._session
@@ -315,7 +317,8 @@ class SessionDebriefView(QWidget):
         task = _DebriefTask(
             session.laps,
             resolve_endpoint=self._endpoint if narrate else None,
-            model=self._model_name(),
+            model=model_name(),
+            restore=self._stored,
         )
         self._task = task
         task.signals.measured.connect(
@@ -361,7 +364,10 @@ class SessionDebriefView(QWidget):
             return
         self._task = None
         self._render(report)
-        blocked = "" if task.narrating else self._coach_blocked_reason()
+        spoken = any(item.narrated is not None for item in report.laps)
+        # Nothing is blocked when the prose is already on screen, whether it was
+        # just produced or put back from the file it was produced into.
+        blocked = "" if task.narrating or spoken else coach_blocked_reason()
         if report.narration_error:
             # Say why the prose is missing rather than letting it look as though
             # there was nothing to say.
@@ -374,7 +380,35 @@ class SessionDebriefView(QWidget):
         else:
             self._state.setText("")
         self._refresh_buttons()
+        self._keep(report, narrated=spoken, restored=task.restored)
         self.status.emit(f"Debrief ready — {report.findings} stretch(es) to look at")
+
+    def _keep(self, report: SessionReport, *, narrated: bool, restored: bool) -> None:
+        """File this debrief beside the session it is about.
+
+        Filing it must never cost the participant the debrief itself: they have
+        already been shown it by the time this runs, so a workspace that cannot
+        be written to says so in the status bar and nothing else happens.
+
+        Written once per thing worth recording, not once per open. Prose that
+        came back out of the file it would be written to is not a new debrief,
+        and neither is a second measured-only run on a laptop that still cannot
+        reach the model -- otherwise a participant who opens the screen five
+        times leaves five identical records and the trail stops being readable.
+        """
+        session = self._session
+        if session is None or not report.laps or restored:
+            return
+        stored = self._stored
+        if stored is not None and (stored.narrated or not narrated):
+            return
+        try:
+            write_debrief(session.path, report, model=model_name())
+        except OSError as exc:
+            self.status.emit(f"Debrief shown but not filed: {exc}")
+            return
+        self._stored = latest_debrief(session.path)
+        self.filed.emit(str(session.path))
 
     def _failed(self, task: _DebriefTask, message: str) -> None:
         if not self._is_current(task):
@@ -393,7 +427,7 @@ class SessionDebriefView(QWidget):
             self._coach_button.setToolTip("")
             return
         self._coach_button.setText("Write the coaching")
-        blocked = self._coach_blocked_reason()
+        blocked = coach_blocked_reason()
         spoken = self._report is not None and any(
             item.narrated is not None for item in self._report.laps
         )
