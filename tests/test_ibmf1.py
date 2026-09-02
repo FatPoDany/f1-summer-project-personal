@@ -34,6 +34,8 @@ from racecoach.telemetry.ibmf1_upload import (
     IbmF1UploadError,
     deliver,
     endpoint_from_env,
+    endpoint_from_kit,
+    resolve_endpoint,
 )
 
 # The columns an Apex human capture actually writes that this translation reads.
@@ -827,3 +829,80 @@ def test_a_network_that_stays_down_says_the_race_may_still_be_stored(monkeypatch
 def test_an_unreachable_server_still_reads_as_an_upload_error(monkeypatch):
     """Callers that do not distinguish the two see no change."""
     assert issubclass(ibmf1_upload._Unreachable, IbmF1UploadError)
+
+
+# --- where the upload key comes from on a machine nobody will configure -------
+#
+# A participant's laptop has no environment variable and never will. The other
+# half ships an endpoint file inside every installer and says in their own
+# deployment notes that the key in it is not a secret, so reading their file is
+# what lets a race leave a machine that was set up by copying a folder onto it.
+
+
+def kit_file(directory: Path, **overrides) -> Path:
+    config = {
+        "coach_origin": "https://demo.lzqqq.org",
+        "upload_origin": "https://upload.lzqqq.org",
+        "import_path": "/api/import",
+        "job_path": "/api/import/jobs",
+        "review_path": "/",
+        "upload_token": "ibmf-not-a-real-key",
+        "ingest_source": "player-app",
+        "coaching_enabled": True,
+    }
+    config.update(overrides)
+    path = directory / "coach-endpoint.json"
+    path.write_text(json.dumps(config), encoding="utf-8")
+    return path
+
+
+def test_the_key_can_come_from_the_file_their_installer_ships(tmp_path):
+    endpoint = endpoint_from_kit(kit_file(tmp_path), {})
+
+    assert endpoint.token == "ibmf-not-a-real-key"
+    assert endpoint.origin == "https://upload.lzqqq.org"
+    assert endpoint.review_origin == "https://demo.lzqqq.org"
+
+
+def test_an_environment_key_wins_over_a_shipped_file(tmp_path):
+    """Setting one is a deliberate act; a file arrives by being copied."""
+    endpoint = resolve_endpoint(
+        {"IBMF1_UPLOAD_TOKEN": "chosen"}, candidates=(kit_file(tmp_path),)
+    )
+
+    assert endpoint.token == "chosen"
+
+
+def test_a_shipped_file_is_used_when_nothing_is_set(tmp_path):
+    endpoint = resolve_endpoint({}, candidates=(tmp_path / "absent.json", kit_file(tmp_path)))
+
+    assert endpoint.token == "ibmf-not-a-real-key"
+
+
+def test_a_named_endpoint_file_that_is_not_there_is_an_error(tmp_path):
+    """An explicit pointer that silently does nothing is worse than no pointer."""
+    with pytest.raises(IbmF1UploadError, match="Could not read"):
+        resolve_endpoint({"IBMF1_ENDPOINT_FILE": str(tmp_path / "absent.json")})
+
+
+def test_a_shipped_file_with_no_key_in_it_says_which_key_is_missing(tmp_path):
+    with pytest.raises(IbmF1UploadError, match="upload_token"):
+        endpoint_from_kit(kit_file(tmp_path, upload_token=""), {})
+
+
+def test_no_key_anywhere_names_both_ways_of_giving_one(tmp_path):
+    with pytest.raises(IbmF1UploadError) as raised:
+        resolve_endpoint({}, candidates=(tmp_path / "absent.json",))
+
+    assert "IBMF1_UPLOAD_TOKEN" in str(raised.value)
+    assert "coach-endpoint.json" in str(raised.value)
+
+
+def test_the_origins_can_still_be_overridden_around_a_shipped_file(tmp_path):
+    """A staging server is a real thing; editing their file to reach one is not."""
+    endpoint = endpoint_from_kit(
+        kit_file(tmp_path), {"IBMF1_UPLOAD_ORIGIN": "http://127.0.0.1:8080"}
+    )
+
+    assert endpoint.origin == "http://127.0.0.1:8080"
+    assert endpoint.review_origin == "https://demo.lzqqq.org"

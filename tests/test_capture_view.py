@@ -535,3 +535,116 @@ def test_a_circuit_this_build_cannot_open_is_reported_before_the_race_starts(
 
     assert view._start_button.isEnabled() is False
     assert "not available" in view._simulator_status.text()
+
+
+# --- the loop closes without the participant closing it -----------------------
+
+
+def _handoff_view(qtbot, tmp_path, torcs_binary, study_preset, finish_fn):
+    """A completed capture whose hand-over is driven by `finish_fn`."""
+    import json as _json
+
+    from racecoach.telemetry.human_capture import HumanCaptureResult
+
+    capture_dir = tmp_path / "P001-coached-20260902-101500"
+    capture_dir.mkdir(parents=True, exist_ok=True)
+    run_dir = tmp_path / "runs" / "human-1"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "meta.json").write_text(_json.dumps({"laps_seen": [1]}), "utf-8")
+
+    def fake_capture(config, *, runner, stop_requested):
+        del config, runner, stop_requested
+        return HumanCaptureResult(capture_dir=capture_dir, run_dirs=(run_dir,))
+
+    view = CaptureGuideView(
+        capture_fn=fake_capture,
+        torcs_binary=torcs_binary,
+        study_preset=study_preset,
+        finish_fn=finish_fn,
+    )
+    qtbot.addWidget(view)
+    make_ready(view)
+    with qtbot.waitSignal(view.sessionFinished, timeout=2000):
+        view._start_button.click()
+    return view, capture_dir
+
+
+def test_finishing_a_session_hands_it_over_without_being_asked(
+    qtbot, tmp_path, torcs_binary, study_preset
+):
+    """Every step of this used to be somebody remembering to do it.
+
+    The one most easily forgotten -- reading the laps into the study path -- was
+    also invisible when it did not happen, because the Garage showed the session
+    either way.
+    """
+    from racecoach.telemetry.handoff import Handoff, Step
+
+    seen = []
+
+    def finish_fn(capture_dir, *, progress=None, **_kwargs):
+        seen.append(Path(capture_dir))
+        progress("ok  laps read into the study: 3 lap(s)")
+        return Handoff(
+            capture_dir=Path(capture_dir),
+            archive=Path(capture_dir).with_suffix(".zip"),
+            review_url="https://demo.lzqqq.org/",
+            delivered=True,
+            steps=(Step("laps read into the study", True, "3 lap(s)"),),
+        )
+
+    view, capture_dir = _handoff_view(qtbot, tmp_path, torcs_binary, study_preset, finish_fn)
+
+    qtbot.waitUntil(lambda: "The file to send" in view._handoff_status.text(), timeout=3000)
+    assert seen == [capture_dir]
+    assert "laps read into the study" in view._handoff_status.text()
+    assert "https://demo.lzqqq.org/" in view._handoff_status.text()
+
+
+def test_a_hand_over_that_saved_nothing_says_so_and_names_the_way_out(
+    qtbot, tmp_path, torcs_binary, study_preset
+):
+    """Losing the file is the one outcome that costs data rather than time."""
+    from racecoach.telemetry.handoff import Handoff
+
+    def finish_fn(capture_dir, *, progress=None, **_kwargs):
+        del progress
+        return Handoff(capture_dir=Path(capture_dir))
+
+    view, _capture = _handoff_view(qtbot, tmp_path, torcs_binary, study_preset, finish_fn)
+
+    qtbot.waitUntil(lambda: "could not save" in view._handoff_status.text(), timeout=3000)
+    assert "Save another copy" in view._handoff_status.text()
+    assert view._package_button.isEnabled()
+
+
+def test_a_hand_over_that_raises_does_not_reach_the_participant(
+    qtbot, tmp_path, torcs_binary, study_preset
+):
+    def finish_fn(capture_dir, *, progress=None, **_kwargs):
+        del capture_dir, progress
+        raise RuntimeError("the network stack fell over")
+
+    view, _capture = _handoff_view(qtbot, tmp_path, torcs_binary, study_preset, finish_fn)
+
+    qtbot.waitUntil(lambda: "could not save" in view._handoff_status.text(), timeout=3000)
+    assert "the network stack fell over" in view._handoff_status.text()
+
+
+def test_starting_another_session_stops_showing_the_last_one(
+    qtbot, tmp_path, torcs_binary, study_preset
+):
+    """An upload for the last participant must not appear under the next one."""
+    from racecoach.telemetry.handoff import Handoff
+
+    def finish_fn(capture_dir, *, progress=None, **_kwargs):
+        del progress
+        return Handoff(capture_dir=Path(capture_dir), archive=Path(capture_dir))
+
+    view, _capture = _handoff_view(qtbot, tmp_path, torcs_binary, study_preset, finish_fn)
+    qtbot.waitUntil(lambda: view._handoff_status.text() != "", timeout=3000)
+
+    view.reset_guide()
+
+    assert view._handoff_status.text() == ""
+    assert view._handoff is None
