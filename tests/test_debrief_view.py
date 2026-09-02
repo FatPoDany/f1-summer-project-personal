@@ -468,6 +468,61 @@ def test_the_garage_says_whether_this_session_has_a_debrief_on_file(
     assert "measurements only" in text  # this laptop cannot reach the model
 
 
+def test_a_finished_debrief_is_not_regenerated_by_asking_for_it_again(
+    qtbot, tmp_path, monkeypatch
+):
+    """Every way back to a debrief that is already on screen, and none of them
+    may restart it.
+
+    It costs minutes of a participant's own CPU and the answer would be the
+    same, so a second run is time taken from somebody who is waiting to drive
+    again. The guard in ``set_session`` is the only thing standing between them
+    and that, and it holds by a conjunction of five clauses -- exactly the kind
+    of thing a later change breaks silently, because the symptom is a screen
+    that works and a laptop that is busy.
+    """
+    ready(monkeypatch)
+    monkeypatch.setattr(gr, "narrate_debrief", _narrator)
+    monkeypatch.setenv("APEX_WORKSPACE", str(tmp_path / "ws"))
+    from f1coach_core import workspace
+
+    sessions = workspace.sessions_root()
+    sessions.mkdir(parents=True, exist_ok=True)
+    write_lap(sessions / "P001-baseline", 1, speed_scale=0.88, brake_shift_m=-60.0)
+    write_lap(sessions / "P001-baseline", 2)
+
+    window = MainWindow()
+    window._debrief._server = FakeServer()
+    qtbot.addWidget(window)
+    window._debrief._pool = InlinePool()
+    window._debrief.clear_session()
+    window._garage._load_selected()
+    assert window._debrief.report is not None
+    finished = window._debrief.report
+    assert any(item.narrated is not None for item in finished.laps)
+
+    idle = QueuedPool()
+    window._debrief._pool = idle
+
+    # No lap row is selected here, which is how a participant who has just
+    # driven arrives at this screen.
+    assert window._garage._table.currentRow() < 0
+    window._garage._debrief_button.click()
+    window.show_garage()
+    window._garage._debrief_button.click()
+    window._debrief_action.trigger()
+    window._garage._table.selectRow(0)
+    window._garage._debrief_button.click()
+    window._garage._load_selected()  # the session reloaded into a new object
+    window._garage._debrief_button.click()
+    window._garage.refresh_sessions()
+    window._garage._debrief_button.click()
+
+    assert idle.started == []
+    assert window._debrief.report is finished
+    assert window._stacked.currentWidget() is window._debrief
+
+
 def test_the_debrief_shares_the_one_model_server_and_the_one_worker(qtbot, monkeypatch):
     """Two 3B models on one participant's CPU is the failure this prevents."""
     unavailable(monkeypatch)
