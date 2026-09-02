@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from apex.study_view import StudyView
+from apex.study_view import HEADERS, StudyView
 from f1coach_core.participant import Background, save_background
 from f1coach_core.study import summary_columns
 
@@ -89,24 +89,57 @@ def test_an_empty_workspace_explains_where_the_rows_come_from(qtbot, tmp_path):
     assert not view._export.isEnabled()
 
 
-def test_a_channel_the_recording_lacks_shows_as_missing_not_as_zero(qtbot, tmp_path):
-    """A measured zero and an unrecorded channel are different claims."""
-    directory = tmp_path / "B002-baseline"
+def _one_lap_session(directory, *, setup_header: str = "") -> None:
     directory.mkdir()
     (directory / "telemetry-lap01.csv").write_text(
         "# schema_version: 1\n# lap: 1\n# driver: B002\n# phase: baseline\n"
-        "t,dist,speed,throttle,brake,steer,gear,sector\n"
+        + setup_header
+        + "t,dist,speed,throttle,brake,steer,gear,sector\n"
         + "\n".join(f"{i * 0.1:.1f},{i * 5.0:.1f},40,1,0,0,4,1" for i in range(120))
         + "\n",
         encoding="utf-8",
     )
+
+
+def test_a_channel_the_recording_lacks_shows_as_missing_not_as_zero(qtbot, tmp_path):
+    """A measured zero and an unrecorded channel are different claims."""
+    directory = tmp_path / "B002-baseline"
+    _one_lap_session(directory)
     view = StudyView()
     qtbot.addWidget(view)
     view.reload([directory])
 
-    incidents = view._table.item(0, 8)
+    # By name: this index used to be written 8, and pointed at the wrong column
+    # the moment one was inserted to its left.
+    incidents = view._table.item(0, HEADERS.index("Incidents"))
     assert incidents.text() == "—"
     assert "Not recorded" in incidents.toolTip()
+
+
+def test_the_table_says_which_setup_a_row_was_driven_under(qtbot, tmp_path):
+    """Lap times on the two assignable circuits are not comparable, so the
+    screen has to name the one a row came from, the way the export does."""
+    directory = tmp_path / "B002-baseline"
+    _one_lap_session(directory, setup_header="# setup: apex-study-speedway-v1\n")
+    view = StudyView()
+    qtbot.addWidget(view)
+    view.reload([directory])
+
+    assert view._table.item(0, HEADERS.index("Setup")).text() == "apex-study-speedway-v1"
+
+
+def test_a_session_driven_outside_the_presets_is_marked_not_left_empty(qtbot, tmp_path):
+    """The CLI fallback can produce one deliberately. An empty cell would read
+    as an assignment nobody bothered to write down."""
+    directory = tmp_path / "B002-baseline"
+    _one_lap_session(directory)
+    view = StudyView()
+    qtbot.addWidget(view)
+    view.reload([directory])
+
+    cell = view._table.item(0, HEADERS.index("Setup"))
+    assert cell.text() == "—"
+    assert "No assigned setup" in cell.toolTip()
 
 
 def test_the_export_is_the_file_a_statistical_test_consumes(qtbot, paired, tmp_path, monkeypatch):
