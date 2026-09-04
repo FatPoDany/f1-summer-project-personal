@@ -312,7 +312,7 @@ Apex 写的是 `manifest.json`，不是 `session.json`。importer 允许没有�
    （最终 `runs: 1`，lap summary 里只有真实那条），所以不是阻断问题；但它会白白进服务端的
    `source_data.zip`，理论上还可能被 `focus_run_id` 的兜底逻辑选中。打包时应该滤掉零行 CSV。
 2. **没有 `*.frames.csv`，录像与遥测的对齐会退化。** IBMF1 用这个 sidecar 把视频帧对到 sim_time；
-   没有它，Viewer 只能按恒定 fps 假设推算。我们这边 `docs/✔REPLAY_SYNC_POSITION_VS_TIME.md`
+   没有它，Viewer 只能按恒定 fps 假设推算。我们这边 `docs/REPLAY_SYNC_POSITION_VS_TIME.md`
    正好研究过同一个问题，两边应该统一到同一种对齐方式。
 
 ## 6. 落地方案

@@ -167,6 +167,6 @@ $env:APEX_RESEARCH_MODE='0'
 开始本次工作时仓库已经存在以下未提交状态，本次没有修改或覆盖它们：
 
 - `docs/AI_FEEDBACK_IMPROVEMENTS.md`：原本已被删除。
-- `docs/✔AI_FEEDBACK_IMPROVEMENTS.md`：原本就是未跟踪文件。
+- `docs/AI_FEEDBACK_IMPROVEMENTS.md`：原本就是未跟踪文件。
 
 本次没有创建 commit，也没有丢弃用户已有改动。
