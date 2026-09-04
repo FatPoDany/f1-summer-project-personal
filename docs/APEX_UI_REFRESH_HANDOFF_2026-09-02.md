@@ -1,5 +1,25 @@
 # Apex UI 全面改进交接记录（2026-09-02）
 
+> **English summary — *The 2026-09-02 interface refresh.*** A working note in the
+> language it was thought in, written as a handover so the same work would not be
+> done twice.
+>
+> The change touched the visual layer, the page layout and the product scope only.
+> **Nothing was altered in the telemetry data contract, the deterministic
+> analysis, the Granite evidence checks, the capture protocol or the report
+> calculations.** Two pages were removed from the desktop — Live Pit Wall and Robot
+> Pilot — because neither belongs to the post-session review the project is
+> actually assessed on; the live and synthetic command-line paths underneath them
+> are kept, so those experiments remain reproducible.
+>
+> The visual work was aligned with the team's Review Web (read at IBMF1 commit
+> `bda5455`) at the level of design language rather than technology: warm graphite
+> surfaces, low-saturation borders, an instrument-amber accent, restrained corner
+> radii, no glow. The two stacks were not merged. The document ends with the
+> verification run of the day and the constraints that were then locked down as
+> regression tests, including that neither removed page may reappear in the
+> navigation even with research mode enabled.
+
 ## 本次目标与结果
 
 本次工作只调整 Apex 桌面端的视觉层、页面布局和产品范围，没有更改遥测数据契约、确定性分析、Granite 证据校验、采集协议或报告计算逻辑。
@@ -167,6 +187,6 @@ $env:APEX_RESEARCH_MODE='0'
 开始本次工作时仓库已经存在以下未提交状态，本次没有修改或覆盖它们：
 
 - `docs/AI_FEEDBACK_IMPROVEMENTS.md`：原本已被删除。
-- `docs/✔AI_FEEDBACK_IMPROVEMENTS.md`：原本就是未跟踪文件。
+- `docs/AI_FEEDBACK_IMPROVEMENTS.md`：原本就是未跟踪文件。
 
 本次没有创建 commit，也没有丢弃用户已有改动。

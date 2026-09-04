@@ -21,9 +21,6 @@ driver and TORCS bridge.
 ## Source-of-truth map
 
 - `src/`, `tests/`, and `configs/` are canonical. Develop and test these copies.
-- `apex/` is a legacy recovery snapshot retained for provenance. Do not edit it or
-  keep it in sync with the canonical tree unless the user explicitly requests a
-  recovery operation.
 - `src/f1coach_core/` owns telemetry loading, schemas, deterministic analysis,
   evidence contracts, coaching validation, audit records, and workspace behavior.
   Keep it independent of Qt.
@@ -36,9 +33,8 @@ driver and TORCS bridge.
 - `integrations/granite-4.1/` contains pinned local-model bootstrap scripts.
 - `docs/` contains reproducible technical evidence and walkthroughs. `prompt/`
   contains supervisor-grounded scope and claims guidance.
-- `Apex App Design (F1 Coach Desktop).md` records the desktop architecture and UI
-  intent. `keypoint.md` contains historical implementation notes; preserve explicit
-  authorship and provenance when updating it.
+- `docs/APEX_APP_DESIGN.md` records the desktop architecture and UI
+  intent.
 
 ## Stack and conventions
 
@@ -133,7 +129,7 @@ Load only the documents relevant to the task:
 
 - Project overview and canonical-directory rules: `README.md`
 - Build, dependencies, lint, and tests: `pyproject.toml`, `.github/workflows/ci.yml`
-- Desktop architecture or UX: `Apex App Design (F1 Coach Desktop).md`
+- Desktop architecture or UX: `docs/APEX_APP_DESIGN.md`
 - Supervisor scope, claims, and unresolved decisions:
   `prompt/racing_project_supervisor_guidance_prompt.md`
 - Verified telemetry fields and units: `docs/DATA_AVAILABILITY.md`

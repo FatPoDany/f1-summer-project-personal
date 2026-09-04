@@ -1,5 +1,30 @@
 # Apex ↔ IBMF1 数据统一方案
 
+> **English summary — *Apex and IBMF1: one dataset out of two halves.*** A
+> working note in the language it was thought in. Claims carry their evidence
+> class throughout: **[实测]** measured on this machine with the numbers shown,
+> **[读码]** a contract read out of the source, **[推断]** inferred and not yet
+> verified.
+>
+> The finding is that Apex's raw capture **already passes through the team's
+> entire server pipeline** — no rewrite of the collector was needed. An
+> unmodified 71.1 MB participant archive was fed to their `import_torcs_bundle.py`
+> → `build_torcs_coaching_pipeline.py` → `build_torcs_review_package.py` and came
+> out as a complete 40-event review package, clearing the importer's final gate.
+> Four things were missing: fourteen column-name and unit adaptations, a
+> `session.json`, a frame index, and one upload call. All four were built, and on
+> 2026-08-31 a session was really uploaded and imported — *Custom session stored
+> — 40 checkpoints*.
+>
+> Section 3 is the upload contract read out of the teammates' source (two
+> credentials in two different headers; the review link is not the upload
+> address). Section 5 is the difference list. Section 6 is the delivery plan, each
+> item marked done with its date, and includes cutting the paused stretches out of
+> what is sent and aligning the recording with their viewer. Section 7 records
+> three decisions taken, one of them a risk that would have broken the study
+> design. Section 8 is how to reproduce every measurement here, and section 9 the
+> pull requests offered to the team's repository.
+
 *2026-08-29 · 本文档记录 Apex（个人成果）与 IBMF1（队友成果，`github.com/UOBGraduate/IBMF1`，线上 <https://demo.lzqqq.org/>）的数据打通路径。*
 
 *状态标注规则：**[实测]** = 本机跑过并给出数字；**[读码]** = 从源码读出的契约；**[推断]** = 尚未验证的判断。*
@@ -312,7 +337,7 @@ Apex 写的是 `manifest.json`，不是 `session.json`。importer 允许没有�
    （最终 `runs: 1`，lap summary 里只有真实那条），所以不是阻断问题；但它会白白进服务端的
    `source_data.zip`，理论上还可能被 `focus_run_id` 的兜底逻辑选中。打包时应该滤掉零行 CSV。
 2. **没有 `*.frames.csv`，录像与遥测的对齐会退化。** IBMF1 用这个 sidecar 把视频帧对到 sim_time；
-   没有它，Viewer 只能按恒定 fps 假设推算。我们这边 `docs/✔REPLAY_SYNC_POSITION_VS_TIME.md`
+   没有它，Viewer 只能按恒定 fps 假设推算。我们这边 `docs/REPLAY_SYNC_POSITION_VS_TIME.md`
    正好研究过同一个问题，两边应该统一到同一种对齐方式。
 
 ## 6. 落地方案

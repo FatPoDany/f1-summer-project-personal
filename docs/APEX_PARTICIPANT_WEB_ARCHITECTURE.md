@@ -1,5 +1,20 @@
 # Apex 与参与者网站架构方案
 
+> **English summary — *Apex and the participant website: where the boundary
+> goes.*** A working note in the language it was thought in, proposing how the
+> desktop application and the team's participant-facing website should divide the
+> work.
+>
+> The position argued is that **Apex is the whole application and the website is a
+> light entry point for participants**, with both sides sharing one set of data,
+> analysis and feedback rather than each implementing its own. Apex should be a
+> superset of the website, so a participant who opens Apex can complete the entire
+> procedure without it. The document carries a capability table showing which side
+> owns what, the recommended architecture, two modes Apex should grow (a
+> participant mode and a researcher mode), an audit of what Apex already had
+> against what it lacked, a suggested build order, and the architectural decisions
+> still to be confirmed with the team.
+
 最终架构应当是：
 
 > Apex 是完整的主应用；网站是面向参与者的轻量入口。  

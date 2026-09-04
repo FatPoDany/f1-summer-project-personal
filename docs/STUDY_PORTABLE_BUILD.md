@@ -1,5 +1,24 @@
 # 便携研究版打包记录（2026-08-26 首次；2026-08-27 因辅导曝光量重打，见第 3 节）
 
+> **English summary — *The portable study build that was handed to
+> participants.*** A working note in the language it was thought in, recording the
+> first package on 2026-08-26 and the rebuild on 2026-08-27 once coaching exposure
+> was being measured.
+>
+> The build is install-free and needs no administrator: copy it to another Windows
+> machine, unzip, double-click `Apex.exe` and collect data. Sessions are written to
+> `C:\Users\<user>\Apex\` on that machine and come back through the
+> application's own *Save a file to send*, as a zip with a checksum. Section 2
+> pins down exactly which source the executable contains, because packaging must
+> not mean copying something that merely looks current. Section 4 explains why a
+> portable folder rather than an installer, section 5 what to do on the other
+> machine, section 6 the four study phases and the discipline that keeps the arms
+> apart, and section 7 how the data comes back.
+>
+> Section 8 is why the 2.1 GB model weights are not inside the package and how the
+> machine gets them; section 9 is what was deliberately left out; section 11 is a
+> packaging trap worth remembering; and section 12 records the 2026-08-28 rebuild.
+
 ## 1. 一句话
 
 把当前 HEAD 打成了一个**免安装、免管理员**的便携包：拷到另一台 Windows 机器、解压、双击
