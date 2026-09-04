@@ -254,10 +254,18 @@ source-of-truth map, the stack, and the rules the code is held to.
 
 ### How the work was specified
 
-Each specification ends in a list of tasks, and beside every task the command that
-decides whether it is finished — not "implement corner detection" but "implement
-corner detection; `pytest tests/test_features.py -k corners` passes". Writing the
-check first is what stops a task being declared done because it looks done.
+Nothing was begun until it could be written down and its finishing condition
+named. Three kinds of document carry that, and they do different jobs.
+
+**Seven `SPEC-*.md` files**, one per stream of work. Each states the objective,
+the commands that exercise it, the files it may touch, its boundaries as
+*always* / *ask first* / *never*, the decisions taken and why, numbered success
+criteria, and the questions left open. `SPEC-torcs-reference-recorder.md` is the
+one to read if you read only one: its **Decisions** section records that the
+first schema version read three per-wheel force fields that TORCS 1.3.9 declares
+but never writes, so every capture had carried three constant-zero columns per
+wheel, and why sourcing them properly had to bump the schema version rather than
+be fixed in place.
 
 | Spec | Subject |
 |---|---|
@@ -268,6 +276,60 @@ check first is what stops a task being declared done because it looks done.
 | `SPEC-synthetic-pilot-runner.md` | running reference robot sessions |
 | `SPEC-robot-study-preset.md` | the pinned robot/track/car preset |
 | `SPEC-research-pilot-ui.md` | the participant-facing screens |
+
+**`tasks/plan.md`** turns those into fifteen phases with a checkpoint between
+each, alongside the architecture decisions, the dependency graph, the risks and
+the sequencing.
+
+**`tasks/todo.md`** is the working record the phases were executed against: forty
+numbered tasks over five streams, 182 boxes ticked and 19 still open. Early tasks
+name the command that decides them —
+
+```text
+## Task 3: Native recorder
+
+- [x] Add the documented CSV header and buffered row writer.
+- [x] Escape text and close independent recorder instances safely.
+- Verify: `integrations/torcs-1.3.9/verify-human-capture.sh`.
+```
+
+— and once the work turned from building to diagnosing, later tasks carry the
+finding instead: Task 35 is the root cause of the `0xC0000005` exit TORCS
+produced after a *normal* quit on Windows, Task 38 a race-configuration path that
+stripped only forward slashes. Writing the check before the work is what stops a
+task being called done because it looks done; keeping the file afterwards is why
+the verification section above could be written from a record rather than from
+memory.
+
+### The documents, and which language each is in
+
+The specifications, the walkthroughs and the integration READMEs are in English.
+The seven decision records below were written in Chinese, as working notes, while
+the decision was being taken. Each now **opens with an English summary** of the
+question it asks, the answer it reached and the evidence behind it; their bodies
+are unchanged, and the code paths, commands, tables and numbers in them read the
+same in either language.
+
+| Document | What it settles |
+|---|---|
+| [`docs/STUDY_CAN_WE_SHOW_IMPROVEMENT.md`](docs/STUDY_CAN_WE_SHOW_IMPROVEMENT.md) | whether this instrument can demonstrate that coaching helped — and why, without a control group, it cannot |
+| [`docs/TEAM_INTEGRATION_IBMF1.md`](docs/TEAM_INTEGRATION_IBMF1.md) | how an Apex session reaches the team's platform, verified end to end |
+| [`docs/AI_FEEDBACK_IMPROVEMENTS.md`](docs/AI_FEEDBACK_IMPROVEMENTS.md) | what was wrong with the feedback a participant reads, and each fix as it landed |
+| [`docs/REPLAY_SYNC_POSITION_VS_TIME.md`](docs/REPLAY_SYNC_POSITION_VS_TIME.md) | whether two laps should be replayed aligned by track position or by elapsed time |
+| [`docs/STUDY_PORTABLE_BUILD.md`](docs/STUDY_PORTABLE_BUILD.md) | what was actually in the build handed to each participant |
+| [`docs/APEX_PARTICIPANT_WEB_ARCHITECTURE.md`](docs/APEX_PARTICIPANT_WEB_ARCHITECTURE.md) | where the boundary between the desktop application and the team's website belongs |
+| [`docs/APEX_UI_REFRESH_HANDOFF_2026-09-02.md`](docs/APEX_UI_REFRESH_HANDOFF_2026-09-02.md) | what the final interface pass changed, and what it deliberately did not touch |
+
+In English throughout: [`docs/GRANITE_TORCS_WALKTHROUGH.md`](docs/GRANITE_TORCS_WALKTHROUGH.md)
+(build and run the whole thing from nothing),
+[`docs/HUMAN_TELEMETRY_CAPTURE.md`](docs/HUMAN_TELEMETRY_CAPTURE.md) (the capture
+protocol), [`docs/DATA_AVAILABILITY.md`](docs/DATA_AVAILABILITY.md) (every
+telemetry field, its unit, and whether the simulator really writes it),
+[`docs/APEX_APP_DESIGN.md`](docs/APEX_APP_DESIGN.md) (the 6 July stack decision
+and what it was chosen against),
+[`docs/bob/README.md`](docs/bob/README.md),
+[`docs/slides/README.md`](docs/slides/README.md) and
+[`integrations/torcs-1.3.9/README.md`](integrations/torcs-1.3.9/README.md).
 
 ---
 
@@ -341,9 +403,10 @@ handed to participants.
   their evidence sat in the packet the model had already been given. Splitting the
   two constants (PR #16) fixed it.
 
-The project ran to **131 commits** between 6 July and 2 September 2026 — 12 in
-July, 83 in August, 36 in September. Every change reached `main` through a pull
-request.
+The project ran to **133 commits** between 6 July and 4 September 2026 — 12 in
+July, 83 in August, 38 in September — of which 124 are on `main`. Every change
+reached `main` through a pull request; the rest are the tips of branches whose
+work is still open.
 
 ---
 

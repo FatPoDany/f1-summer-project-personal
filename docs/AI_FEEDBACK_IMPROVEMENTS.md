@@ -1,5 +1,26 @@
 # AI 赛后反馈这条链路还能怎么提升
 
+> **English summary — *How the AI post-session feedback could be made better.***
+> A working note in the language it was thought in, started from the question
+> asked on 2026-08-25. Every item points at a specific place in the code.
+>
+> Section 1 is the finding that governs everything after it: at that date the
+> model's words **never reached the participant at all** — the pipeline ran, the
+> audit record was written, and the screen showed deterministic text. Section 2 is
+> the improvement list ordered by value for effort. Section 3 judges two further
+> IBM models that had been suggested — Granite TSPulse R1 for telemetry anomaly
+> detection, imputation and similar-segment retrieval, and Granite Embedding 97M
+> Multilingual R2 for cross-session retrieval — and gives the reasons neither was
+> adopted. Section 4 is the order they should be done in.
+>
+> Sections 5 to 15 are the dated record of each one landing, and section 15 is a
+> negative result kept deliberately: an attempt over 2026-08-31 to 09-01 to raise
+> the ceiling on what the model was allowed to say, which did not work and was
+> reverted. The sister document is
+> [STUDY_CAN_WE_SHOW_IMPROVEMENT.md](STUDY_CAN_WE_SHOW_IMPROVEMENT.md), which asks
+> whether an improvement can be demonstrated; this one asks whether the feedback a
+> participant reads is any good.
+
 > 起点是 2026-08-25 的问题：**目前这套软件的 AI 赛后反馈功能还能有什么提升？**
 > 附带一个待评估的想法：引入 IBM Granite TSPulse R1（遥测异常检测 / 缺失值处理 /
 > 相似片段检索）和 Granite Embedding 97M Multilingual R2（跨场次检索与中英文建议）。

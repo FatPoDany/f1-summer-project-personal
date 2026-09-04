@@ -1,5 +1,25 @@
 # Review 界面的双圈回放：按位置对齐，还是按时间对齐？
 
+> **English summary — *Two laps side by side: align them by track position, or by
+> elapsed time?*** A working note in the language it was thought in, started from
+> the question asked on 2026-08-24 about the review window, where two clips play
+> with a track map between them.
+>
+> The answer is **by distance along the track, not by time since the start.**
+> Aligning by time puts the two cars at different places on the circuit within a
+> few seconds, which is exactly the comparison a driver cannot learn from;
+> aligning by position keeps both cars at the same corner and shows the time
+> difference as a number instead. Sections 2 and 3 take the three layers apart —
+> the track map, the two videos, and why the points are frame-accurate while the
+> video is corrected — and set out what position alignment costs.
+>
+> Section 4 records the four changes that came out of answering it: a cumulative
+> delta-t readout, low-frequency re-anchoring during playback, clamping that no
+> longer fails silently, and the regression tests added. Section 5 indexes the
+> code, section 6 the risks that remain, section 7 how the changes reached the
+> participant build, and section 8 a loop-playback bug that one of the fixes
+> introduced, with its repair.
+
 > 起点是 2026-08-24 的问题：review 窗口里两个视频左侧的轨迹图，是按**相同赛道位置**播放两圈的车，还是按**发车后相同时间**播放两车？以及哪一种更有效。
 >
 > 第 1–3 节回答这个问题。第 4 节记录据此做出的四处改动（4.5 是你报告的抖动的根因），第 5 节是代码索引，第 6 节是我对这次工作的反馈和仍然存在的风险，第 7 节记录这些改动怎么进的参与者安装包 `C:\Users\hh25303\repos\Apex`，第 8 节是 4.5 自己带进来的循环播放 bug 及其修复。

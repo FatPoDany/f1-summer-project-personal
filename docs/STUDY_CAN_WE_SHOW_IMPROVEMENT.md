@@ -1,5 +1,32 @@
 # 我们的软件能否证明"接受了 AI 赛后辅导的人开得更好了"？
 
+> **English summary — *Can this software show that AI post-session coaching made
+> people drive better?*** A working note in the language it was thought in; the
+> code paths, commands and numbers below read the same either way.
+>
+> The answer is in three parts. **Collection and measurement: yes.** Conditions
+> are frozen so two sets of laps differ only in the coaching, participant
+> identity travels inside the file rather than in a spreadsheet beside it, the
+> out-lap cannot pollute an average, the measures go beyond lap time on purpose,
+> and a channel the simulator never wrote is reported blank rather than as zero.
+> **Significance testing: deliberately not done here.** That is a position
+> written into a docstring and held by a test, not an omission — the last step
+> belongs in R, SPSS or Python where the assumptions can be argued.
+> **The causal claim, that any improvement came from the coaching: not supported
+> by the design as it stood.** What was missing was not code but a control: with
+> baseline then coached, the same person drives the same circuit twice, and
+> "they got faster" has at least three tangled explanations — the coaching
+> worked, they simply had more practice, they got better at handling TORCS. The
+> software will still produce a clean p-value, but it answers "was the second set
+> of laps quicker" rather than "did the coaching help".
+>
+> Section 4 lists the six obstacles in front of a defensible result, two of which
+> were real defects and are marked fixed in place: the GUI export silently
+> dropped the background-questionnaire columns (fixed 2026-08-26, §10.4), and how
+> much coaching a participant actually took in was not recorded at all (fixed
+> 2026-08-27, §11). Sections 8 to 10 are the dated record of each change landing,
+> including three problems that only the first real participant data exposed.
+
 > 起点是 2026-08-25 的问题：**目前这套软件能不能拿来对比"接受了 AI 赛后反馈辅导的玩家"和"他最开始跑的那几圈"，判断是否有显著提升？**
 >
 > 下面每一条结论都指向具体代码位置，不凭印象。第 1 节是结论，第 2 节列已经具备的能力，第 3 节讲软件刻意不做的那一件事，第 4 节是真正挡在"显著"前面的六个问题（其中 4.4 是一个实打实的 bug），第 5 节给一条现在就能走的路径，第 6 节是按性价比排序的改动建议。第 8–10 节是逐次的进展记录：§8 = 6.2，§9 = 6.3，**§10 = 6.1 + 6.4，以及第一批真实数据暴露出来的三处问题**。
@@ -273,7 +300,7 @@ racecoach study-exposure --out exposure.csv         # 一行一次 view，查 do
 ### 8.4 顺带更新的文档
 
 - `docs/HUMAN_TELEMETRY_CAPTURE.md` 新增 **Study phases** 一节：四项的表，以及为什么对照组是把"辅导"和"练习"分开的唯一办法，还有一句操作纪律 —— **分组要在参与者到场之前定好，phase 不是事后再决定的东西**。
-- `CAPABILITY-MAP-synthetic-robot-pilots.md` 的保留 phase 列表加上 `control`（合成机器人的 phase 仍然是 `reference-pilot`，两边不会撞）。
+- `CAPABILITY_MAP_synthetic_robot_pilots.md` 的保留 phase 列表加上 `control`（合成机器人的 phase 仍然是 `reference-pilot`，两边不会撞）。
 
 ### 8.5 现在卡在哪
 
