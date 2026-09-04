@@ -403,10 +403,11 @@ handed to participants.
   their evidence sat in the packet the model had already been given. Splitting the
   two constants (PR #16) fixed it.
 
-The project ran to **133 commits** between 6 July and 4 September 2026 — 12 in
-July, 83 in August, 38 in September — of which 124 are on `main`. Every change
-reached `main` through a pull request; the rest are the tips of branches whose
-work is still open.
+The work ran from 6 July to 4 September 2026 in a little over 130 commits — 12 in
+July, 83 in August and the rest in September. That shape is a four-week gap in
+the middle, not steady progress, and it is the thing I would undo first: it
+pushed everything downstream of collection, including the study runs, into the
+end. Every change reached `main` through a pull request.
 
 ---
 
